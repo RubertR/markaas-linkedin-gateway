@@ -16,7 +16,7 @@ vastleggen hoe Unipile zich gedraagt. Er wordt nog geen gateway gebouwd.
 
 - [x] Koppel je eigen LinkedIn-account, methode **Credentials** (eigen sessie, los van je
       browser). *(30 sep 2026)*
-- [ ] Controleer in het dashboard dat de status `OK` is en of Sales Navigator herkend wordt.
+- [x] Status `OK`, Sales Navigator herkend (`premiumFeatures: ["sales_navigator"]`). *(30 sep 2026)*
 - [ ] Koppel **niet** tegelijk een ander systeem dat voor dit account verstuurt (HeyReach).
       Phantombuster voor data ophalen mag blijven; houd de volumes in fase 1 minimaal.
 
@@ -26,7 +26,7 @@ De Unipile-MCP vraagt de API-sleutel als HTTP-header. De custom connectors van c
 ondersteunen dat niet, dus de koppeling loopt via de configuratie van Claude Desktop, met
 `mcp-remote` als brug (vereist Node.js op je computer).
 
-- [ ] Open in Claude Desktop: Instellingen → Developer → Edit Config
+- [x] Open in Claude Desktop: Instellingen → Developer → Edit Config
       (`claude_desktop_config.json`) en voeg toe:
 
       ```json
@@ -47,7 +47,7 @@ ondersteunen dat niet, dus de koppeling loopt via de configuratie van Claude Des
 
       Gebruik `branch=v1.0`: het dashboard op dashboard.unipile.com met een DSN
       (`apiNN.unipile.com:PORT`) is de v1-omgeving; een v1-sleutel geeft 401 op de v2-API.
-- [ ] Herstart Claude Desktop en controleer dat de tools `search-endpoints`,
+- [x] Herstart Claude Desktop en controleer dat de tools `search-endpoints`,
       `list-endpoints`, `get-endpoint` en `execute-request` verschijnen.
 - [ ] Gebruik hem alleen in deze fase en alleen met de ontwikkel-sleutel; verwijder hem als de
       gateway-MCP klaar is. `execute-request` kan elke API-aanroep doen: voer niets uit zonder
