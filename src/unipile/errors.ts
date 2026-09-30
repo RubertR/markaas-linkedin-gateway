@@ -1,7 +1,8 @@
 export type UnipileFoutSoort =
   | 'tijdelijk'
   | 'timeout'
-  | 'credentials'
+  | 'api_sleutel'
+  | 'account_credentials'
   | 'validatie'
   | 'onverwacht';
 
@@ -53,16 +54,78 @@ export class UnipileTimeoutFout extends UnipileFout {
   }
 }
 
-export class UnipileAuthFout extends UnipileFout {
+/**
+ * 401 of 403 van Unipile: onze API-sleutel is ongeldig of verlopen.
+ * Dit is een gateway-breed probleem — de gateway stopt en meldt bij Rubert.
+ * LinkedIn-accounts worden NIET op basis van deze fout gepauzeerd.
+ */
+export class UnipileGatewayAuthFout extends UnipileFout {
   constructor(endpoint: string, status: number) {
     super(
-      'credentials',
-      `Unipile weigerde de aanvraag (HTTP ${status} op ${endpoint}): sessie verlopen of API-sleutel ongeldig — account opnieuw koppelen.`,
+      'api_sleutel',
+      `Unipile weigerde de aanvraag (HTTP ${status} op ${endpoint}): onze API-sleutel is ongeldig of verlopen — gateway stopt, meld bij Rubert. LinkedIn-accounts NIET pauzeren op basis van deze fout.`,
       endpoint,
       status,
     );
-    this.name = 'UnipileAuthFout';
+    this.name = 'UnipileGatewayAuthFout';
   }
+}
+
+/**
+ * Expliciete melding in het antwoord dat de LinkedIn-sessie van dit
+ * ene account niet meer werkt. Alleen dit account op pauze zetten;
+ * andere accounts blijven doorlopen.
+ * De account_status-webhook (`credentials`) is het andere signaal
+ * voor hetzelfde probleem — daar wordt in src/webhooks/ op gereageerd.
+ */
+export class UnipileAccountCredentialsFout extends UnipileFout {
+  readonly code: string;
+  readonly accountId: string | undefined;
+
+  constructor(code: string, endpoint: string, accountId?: string) {
+    const wie = accountId ? `account ${accountId}` : 'dit account';
+    super(
+      'account_credentials',
+      `LinkedIn-sessie voor ${wie} is verlopen of ongeldig (code ${code} op ${endpoint}). Alleen dit account pauzeren en een reconnect-link sturen.`,
+      endpoint,
+    );
+    this.name = 'UnipileAccountCredentialsFout';
+    this.code = code;
+    this.accountId = accountId;
+  }
+}
+
+const BEKENDE_ACCOUNT_CREDS_CODES = [
+  'account_credentials',
+  'credentials_expired',
+  'session_expired',
+  'account_disconnected',
+  'disconnected_account',
+  'credentials',
+] as const;
+
+export type AccountCredentialsCode = (typeof BEKENDE_ACCOUNT_CREDS_CODES)[number];
+
+export function accountCredentialsCodeUitBody(raw: string): AccountCredentialsCode | undefined {
+  let obj: unknown;
+  try {
+    obj = JSON.parse(raw);
+  } catch {
+    for (const code of BEKENDE_ACCOUNT_CREDS_CODES) if (raw.includes(code)) return code;
+    return undefined;
+  }
+  const gevonden: string[] = [];
+  const bekijk = (waarde: unknown): void => {
+    if (waarde == null) return;
+    if (typeof waarde === 'string') gevonden.push(waarde);
+    else if (Array.isArray(waarde)) waarde.forEach(bekijk);
+    else if (typeof waarde === 'object') Object.values(waarde as object).forEach(bekijk);
+  };
+  bekijk(obj);
+  for (const code of BEKENDE_ACCOUNT_CREDS_CODES) {
+    if (gevonden.some((tekst) => tekst === code || tekst.endsWith(`/${code}`))) return code;
+  }
+  return undefined;
 }
 
 export type Unipile422Code =

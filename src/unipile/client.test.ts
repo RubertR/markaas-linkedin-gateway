@@ -6,7 +6,8 @@ import { startFakeUnipile, type FakeUnipile } from '../../test/fake-unipile/serv
 import { maakUnipileClient } from './client.ts';
 import {
   Unipile422Fout,
-  UnipileAuthFout,
+  UnipileAccountCredentialsFout,
+  UnipileGatewayAuthFout,
   UnipileTijdelijkeFout,
   UnipileTimeoutFout,
 } from './errors.ts';
@@ -87,22 +88,79 @@ describe('UnipileClient — algemeen', () => {
     await assert.rejects(client.haalAccounts(), UnipileTimeoutFout);
   });
 
-  it('vertaalt 401 naar UnipileAuthFout (CREDENTIALS-signaal)', async () => {
+  it('vertaalt 401 naar UnipileGatewayAuthFout (API-sleutel, gateway-breed)', async () => {
     fake.antwoord('GET', '/api/v1/accounts', {
       status: 401,
       body: { error: 'unauthorized' },
     });
     const client = maakClient();
-    await assert.rejects(client.haalAccounts(), UnipileAuthFout);
+    await assert.rejects(client.haalAccounts(), (err: Error) => {
+      assert.ok(err instanceof UnipileGatewayAuthFout);
+      assert.equal(err.soort, 'api_sleutel');
+      assert.match(err.message, /API-sleutel/i);
+      assert.match(err.message, /gateway stopt/i);
+      assert.match(err.message, /accounts NIET pauzeren/i);
+      return true;
+    });
   });
 
-  it('vertaalt 403 ook naar UnipileAuthFout', async () => {
+  it('vertaalt 403 ook naar UnipileGatewayAuthFout', async () => {
     fake.antwoord('GET', '/api/v1/accounts', {
       status: 403,
       body: { error: 'forbidden' },
     });
     const client = maakClient();
-    await assert.rejects(client.haalAccounts(), UnipileAuthFout);
+    await assert.rejects(client.haalAccounts(), UnipileGatewayAuthFout);
+  });
+
+  it('herkent een expliciete account-credentials code in het antwoord en geeft accountId mee', async () => {
+    fake.antwoord('POST', '/api/v1/users/invite', {
+      status: 422,
+      body: { type: 'errors/account_credentials', detail: 'account_credentials' },
+    });
+    const client = maakClient();
+    await assert.rejects(
+      client.stuurInvite({ accountId: 'acc-42', providerId: 'ACo1' }),
+      (err: Error) => {
+        assert.ok(err instanceof UnipileAccountCredentialsFout);
+        assert.equal((err as UnipileAccountCredentialsFout).accountId, 'acc-42');
+        assert.equal((err as UnipileAccountCredentialsFout).code, 'account_credentials');
+        assert.equal(err.soort, 'account_credentials');
+        assert.match(err.message, /account acc-42/);
+        assert.match(err.message, /Alleen dit account pauzeren/i);
+        return true;
+      },
+    );
+  });
+
+  it('herkent disconnected_account als account-credentials signaal', async () => {
+    fake.antwoord('POST', '/api/v1/users/invite', {
+      status: 400,
+      body: { error: 'disconnected_account' },
+    });
+    const client = maakClient();
+    await assert.rejects(
+      client.stuurInvite({ accountId: 'acc-7', providerId: 'ACo1' }),
+      (err: Error) => {
+        assert.ok(err instanceof UnipileAccountCredentialsFout);
+        assert.equal((err as UnipileAccountCredentialsFout).code, 'disconnected_account');
+        return true;
+      },
+    );
+  });
+
+  it('geeft géén accountId mee als de aanroep geen account-context heeft (bijv. haalAccounts)', async () => {
+    fake.antwoord('GET', '/api/v1/accounts', {
+      status: 422,
+      body: { detail: 'session_expired' },
+    });
+    const client = maakClient();
+    await assert.rejects(client.haalAccounts(), (err: Error) => {
+      assert.ok(err instanceof UnipileAccountCredentialsFout);
+      assert.equal((err as UnipileAccountCredentialsFout).accountId, undefined);
+      assert.match(err.message, /dit account/i);
+      return true;
+    });
   });
 });
 

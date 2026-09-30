@@ -1,9 +1,11 @@
 import {
   Unipile422Fout,
-  UnipileAuthFout,
+  UnipileAccountCredentialsFout,
   UnipileFout,
+  UnipileGatewayAuthFout,
   UnipileTijdelijkeFout,
   UnipileTimeoutFout,
+  accountCredentialsCodeUitBody,
   codeUit422Body,
   maak422Fout,
 } from './errors.ts';
@@ -141,41 +143,47 @@ export function maakUnipileClient(opties: UnipileOpties): UnipileClient {
     }
   }
 
-  async function ontleed<T = unknown>(res: Response, pad: string): Promise<T> {
+  async function ontleed<T = unknown>(
+    res: Response,
+    pad: string,
+    ctx: { accountId?: string } = {},
+  ): Promise<T> {
     const endpoint = endpointVan(pad);
 
     if (res.status === 429) {
       const retryAfterHeader = res.headers.get('retry-after');
       const retryAfter = retryAfterHeader ? Number(retryAfterHeader) : NaN;
-      const opties = { ...(Number.isFinite(retryAfter) ? { retry: retryAfter } : {}) };
       throw new UnipileTijdelijkeFout(
         `Unipile of LinkedIn vroeg om te vertragen (HTTP 429) op ${endpoint}.`,
         endpoint,
         429,
-        opties.retry,
+        Number.isFinite(retryAfter) ? retryAfter : undefined,
       );
     }
     if (res.status === 401 || res.status === 403) {
-      throw new UnipileAuthFout(endpoint, res.status);
+      throw new UnipileGatewayAuthFout(endpoint, res.status);
     }
-    if (res.status === 422) {
+    if (res.status >= 400 && res.status < 500) {
       const raw = await res.text();
-      const code = codeUit422Body(raw) ?? 'onbekend';
-      throw maak422Fout(code, endpoint);
-    }
-    if (res.status >= 500) {
-      throw new UnipileTijdelijkeFout(
-        `Unipile-serverfout (HTTP ${res.status}) op ${endpoint}.`,
-        endpoint,
-        res.status,
-      );
-    }
-    if (!res.ok) {
-      const raw = await res.text().catch(() => '');
+      const accountCode = accountCredentialsCodeUitBody(raw);
+      if (accountCode) {
+        throw new UnipileAccountCredentialsFout(accountCode, endpoint, ctx.accountId);
+      }
+      if (res.status === 422) {
+        const code = codeUit422Body(raw) ?? 'onbekend';
+        throw maak422Fout(code, endpoint);
+      }
       const kort = raw ? `: ${raw.slice(0, 200)}` : '';
       throw new UnipileFout(
         'onverwacht',
         `Onverwacht antwoord van Unipile (HTTP ${res.status}) op ${endpoint}${kort}`,
+        endpoint,
+        res.status,
+      );
+    }
+    if (res.status >= 500) {
+      throw new UnipileTijdelijkeFout(
+        `Unipile-serverfout (HTTP ${res.status}) op ${endpoint}.`,
         endpoint,
         res.status,
       );
@@ -204,6 +212,7 @@ export function maakUnipileClient(opties: UnipileOpties): UnipileClient {
         name: aanvraag.naam,
         notify_url: aanvraag.notifyUrl,
       };
+      const ctx: { accountId?: string } = {};
       if (aanvraag.type === 'create') {
         body['providers'] = ['LINKEDIN'];
         body['single_use'] = aanvraag.singleUse !== false;
@@ -214,9 +223,10 @@ export function maakUnipileClient(opties: UnipileOpties): UnipileClient {
           );
         }
         body['reconnect_account'] = aanvraag.reconnectAccountId;
+        ctx.accountId = aanvraag.reconnectAccountId;
       }
       const res = await verzoek('POST', endpoint, { json: body });
-      const parsed = await ontleed<{ url: string }>(res, endpoint);
+      const parsed = await ontleed<{ url: string }>(res, endpoint, ctx);
       return { url: parsed.url };
     },
 
@@ -229,7 +239,9 @@ export function maakUnipileClient(opties: UnipileOpties): UnipileClient {
       });
       const pad = `/api/v1/users/${encodeURIComponent(aanvraag.identifier)}?${query.toString()}`;
       const res = await verzoek('GET', pad);
-      const profiel = await ontleed<Record<string, unknown>>(res, pad);
+      const profiel = await ontleed<Record<string, unknown>>(res, pad, {
+        accountId: aanvraag.accountId,
+      });
       if (aanvraag.filterAvg !== false) {
         delete profiel['contact_info'];
         delete profiel['birthdate'];
@@ -246,7 +258,9 @@ export function maakUnipileClient(opties: UnipileOpties): UnipileClient {
       if (aanvraag.message !== undefined) body['message'] = aanvraag.message;
       if (aanvraag.userEmail !== undefined) body['user_email'] = aanvraag.userEmail;
       const res = await verzoek('POST', endpoint, { json: body });
-      const parsed = await ontleed<{ invitation_id: string; usage?: unknown }>(res, endpoint);
+      const parsed = await ontleed<{ invitation_id: string; usage?: unknown }>(res, endpoint, {
+        accountId: aanvraag.accountId,
+      });
       const usage = leesUsage(parsed.usage);
       return {
         invitationId: parsed.invitation_id,
@@ -261,7 +275,9 @@ export function maakUnipileClient(opties: UnipileOpties): UnipileClient {
       fd.append('text', aanvraag.tekst);
       if (aanvraag.quoteId) fd.append('quote_id', aanvraag.quoteId);
       const res = await verzoek('POST', endpoint, { formData: fd });
-      const parsed = await ontleed<{ message_id: string }>(res, endpoint);
+      const parsed = await ontleed<{ message_id: string }>(res, endpoint, {
+        accountId: aanvraag.accountId,
+      });
       return { messageId: parsed.message_id };
     },
 
@@ -275,7 +291,9 @@ export function maakUnipileClient(opties: UnipileOpties): UnipileClient {
       if (aanvraag.linkedinApi) fd.append('linkedin[api]', aanvraag.linkedinApi);
       if (aanvraag.isInmail) fd.append('linkedin[inmail]', 'true');
       const res = await verzoek('POST', endpoint, { formData: fd });
-      const parsed = await ontleed<{ chat_id: string; message_id: string }>(res, endpoint);
+      const parsed = await ontleed<{ chat_id: string; message_id: string }>(res, endpoint, {
+        accountId: aanvraag.accountId,
+      });
       return { chatId: parsed.chat_id, messageId: parsed.message_id };
     },
   };

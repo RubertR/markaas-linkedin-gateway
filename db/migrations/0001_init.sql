@@ -15,7 +15,9 @@ create type account_status as enum (
   'CREDENTIALS',
   'ERROR',
   'STOPPED',
-  'RECONNECTED'
+  'RECONNECTED',
+  'PERMISSIONS',
+  'UNKNOWN'
 );
 
 create type action_type as enum (
@@ -66,6 +68,8 @@ create table accounts (
                       check (opbouw_factor >= 0.50 and opbouw_factor <= 1.00),
   afkoeling_tot      timestamptz,
   tijdzone           text not null default 'Europe/Amsterdam',
+  openstaande_verzoeken integer not null default 0
+                      check (openstaande_verzoeken >= 0),
   aangemaakt_op      timestamptz not null default now()
 );
 
@@ -117,6 +121,7 @@ create table events (
   id           uuid primary key default gen_random_uuid(),
   bron         event_source not null,
   type         text not null,
+  extern_id    text,
   account_id   uuid references accounts(id) on delete set null,
   payload      jsonb not null,
   ontvangen_op timestamptz not null default now()
@@ -124,3 +129,5 @@ create table events (
 
 create index events_account_idx on events(account_id, ontvangen_op desc);
 create index events_type_idx on events(type, ontvangen_op desc);
+create unique index events_bron_extern_idx on events(bron, extern_id)
+  where extern_id is not null;

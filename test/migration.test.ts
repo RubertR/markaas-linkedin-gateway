@@ -104,6 +104,89 @@ describe('0001_init.sql', () => {
     }
   });
 
+  it('accepteert de nieuwe account_status-waarden PERMISSIONS en UNKNOWN', async () => {
+    const { db, close } = await verseDatabaseMetMigraties();
+    try {
+      const [client] = await db.query<{ id: string }>(
+        "insert into clients(naam, slug) values ('Test-klant', 'test-klant') returning id",
+      );
+      assert.ok(client);
+      for (const nieuweStatus of ['PERMISSIONS', 'UNKNOWN']) {
+        const rijen: Array<{ status: string }> = await db.query<{ status: string }>(
+          `insert into accounts(client_id, eigenaar_naam, abonnement, status)
+           values ($1, 'Rubert', 'salesnav_core', $2::account_status) returning status`,
+          [client.id, nieuweStatus],
+        );
+        assert.equal(rijen[0]?.status, nieuweStatus);
+      }
+    } finally {
+      await close();
+    }
+  });
+
+  it('start openstaande_verzoeken op 0 en weigert negatieve waarden', async () => {
+    const { db, close } = await verseDatabaseMetMigraties();
+    try {
+      const [client] = await db.query<{ id: string }>(
+        "insert into clients(naam, slug) values ('Test-klant', 'test-klant') returning id",
+      );
+      assert.ok(client);
+      const [account] = await db.query<{ openstaande_verzoeken: number }>(
+        `insert into accounts(client_id, eigenaar_naam, abonnement)
+         values ($1, 'Rubert', 'salesnav_core') returning openstaande_verzoeken`,
+        [client.id],
+      );
+      assert.equal(account?.openstaande_verzoeken, 0);
+
+      await assert.rejects(
+        db.query(
+          `insert into accounts(client_id, eigenaar_naam, abonnement, openstaande_verzoeken)
+           values ($1, 'Rubert', 'salesnav_core', -1)`,
+          [client.id],
+        ),
+        /openstaande_verzoeken/,
+      );
+    } finally {
+      await close();
+    }
+  });
+
+  it('afdwingt uniciteit van (bron, extern_id) in events maar staat meerdere null-waarden toe', async () => {
+    const { db, close } = await verseDatabaseMetMigraties();
+    try {
+      await db.query(
+        `insert into events(bron, type, extern_id, payload)
+         values ('unipile', 'account_status', 'evt-abc', '{}'::jsonb)`,
+      );
+      await assert.rejects(
+        db.query(
+          `insert into events(bron, type, extern_id, payload)
+           values ('unipile', 'account_status', 'evt-abc', '{}'::jsonb)`,
+        ),
+        /duplicate|unique/i,
+      );
+
+      await db.query(
+        `insert into events(bron, type, extern_id, payload)
+         values ('unipile', 'account_status', 'evt-def', '{}'::jsonb)`,
+      );
+
+      await db.query(
+        `insert into events(bron, type, payload)
+         values ('gateway', 'notitie', '{}'::jsonb)`,
+      );
+      await db.query(
+        `insert into events(bron, type, payload)
+         values ('gateway', 'notitie', '{}'::jsonb)`,
+      );
+
+      const [rij] = await db.query<{ aantal: string }>('select count(*)::text as aantal from events');
+      assert.equal(rij?.aantal, '4');
+    } finally {
+      await close();
+    }
+  });
+
   it('afdwingt uniciteit van sequences per account en lead-url', async () => {
     const { db, close } = await verseDatabaseMetMigraties();
     try {
