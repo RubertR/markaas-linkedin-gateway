@@ -68,6 +68,25 @@ ID's zijn stabiel: cache ze in de gateway in plaats van ze elke keer op te vrage
 
 ## Connectieverzoek
 
+*Getest 30 sep 2026, v1, 1 verzoek met notitie aan een bekende (2e graad), na akkoord.*
+
+**Ontvanger vinden:** classic-zoekopdracht op naam + context
+(`POST /api/v1/linkedin/search`, `api: classic`, `category: people`, `keywords`).
+Let op: classic geeft een pagina van 10 resultaten, ook als `limit` lager is. In de resultaten
+is `public_identifier` vaak `null`; gebruik `id` (provider-id) als sleutel.
+
+**Versturen:** `POST /api/v1/users/invite`, JSON-body:
+`account_id`, `provider_id` (verplicht), `message` (optioneel, max. 300 tekens), `user_email`
+(alleen als LinkedIn dat eist).
+
+- Antwoord: `{"object":"UserInvitationSent","invitation_id":"…"}`.
+- Optioneel veld `usage`: percentage van LinkedIns limiet, alleen meegegeven bij het passeren
+  van 50/75/90/95%. **De budgetmotor moet dit veld uitlezen**: bij ≥75% direct afremmen.
+- Relevante 422-fouten: `already_invited_recently`, `already_connected`,
+  `cannot_resend_yet`, `connection_limit_reached`, `limit_exceeded`. Bij `limit_exceeded` of
+  `connection_limit_reached`: account in afkoeling (SPEC §5).
+- **Budget:** 1 verzoek (werknorm 20/dag, 100/week Sales Navigator).
+
 ## Bericht aan connectie
 
 ## InMail
