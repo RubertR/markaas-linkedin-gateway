@@ -9,15 +9,16 @@ vastleggen hoe Unipile zich gedraagt. Er wordt nog geen gateway gebouwd.
 ## Stap 1 — Unipile-account (Rubert, ca. 15 minuten)
 
 - [x] Maak een account op https://dashboard.unipile.com (7 dagen proef, geen creditcard). *(30 sep 2026)*
-- [ ] Maak een app `markaas-dev`. Noteer de **DSN** en maak een **scoped API-sleutel**.
-- [ ] Zet beide in een lokaal `.env` (zie `.env.example`), nooit in de repo.
+- [x] ~~Maak een app `markaas-dev`~~ — het v1-dashboard kent geen aparte apps; de trial-omgeving
+      is de ontwikkelomgeving. DSN `api68.unipile.com:19841`; scoped token aangemaakt (30 dagen). *(30 sep 2026)*
+- [ ] (Fase 2) Zet DSN en token in een lokaal `.env` (zie `.env.example`), nooit in de repo.
 
 ## Stap 2 — Eigen LinkedIn-account koppelen (Rubert)
 
 - [x] Koppel je eigen LinkedIn-account, methode **Credentials** (eigen sessie, los van je
       browser). *(30 sep 2026)*
 - [x] Status `OK`, Sales Navigator herkend (`premiumFeatures: ["sales_navigator"]`). *(30 sep 2026)*
-- [ ] Koppel **niet** tegelijk een ander systeem dat voor dit account verstuurt (HeyReach).
+- [x] *(doorlopende regel)* Koppel **niet** tegelijk een ander systeem dat voor dit account verstuurt (HeyReach).
       Phantombuster voor data ophalen mag blijven; houd de volumes in fase 1 minimaal.
 
 ## Stap 3 — Unipile-MCP in Claude Desktop (voor verkennen)
@@ -49,7 +50,7 @@ ondersteunen dat niet, dus de koppeling loopt via de configuratie van Claude Des
       (`apiNN.unipile.com:PORT`) is de v1-omgeving; een v1-sleutel geeft 401 op de v2-API.
 - [x] Herstart Claude Desktop en controleer dat de tools `search-endpoints`,
       `list-endpoints`, `get-endpoint` en `execute-request` verschijnen.
-- [ ] Gebruik hem alleen in deze fase en alleen met de ontwikkel-sleutel; verwijder hem als de
+- [x] *(doorlopende regel)* Gebruik hem alleen in deze fase en alleen met de ontwikkel-sleutel; verwijder hem als de
       gateway-MCP klaar is. `execute-request` kan elke API-aanroep doen: voer niets uit zonder
       dat Claude eerst het verzoek toont en jij akkoord geeft.
 
@@ -75,6 +76,7 @@ Plus, zonder actie op LinkedIn:
 
 ## Stap 5 — Vastleggen
 
-- [ ] Per actie in `docs/unipile-notities.md`: endpoint, verplichte velden, voorbeeldantwoord
+- [x] Per actie in `docs/unipile-notities.md`: endpoint, verplichte velden, voorbeeldantwoord
       (geanonimiseerd), foutcodes die je zag, en of het meetelt voor welk LinkedIn-budget.
-- [ ] Beslis welke API-versie (v1 of v2) we gebruiken en werk SPEC §11 bij.
+- [x] API-versie: **v1** voor fase 2 (de omgeving is v1; alle tests zijn op v1 gedaan). Migratie
+      naar v2 is een open punt in SPEC §11.
