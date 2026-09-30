@@ -19,6 +19,33 @@ Wat we in de praktijk leren over Unipile. Per actie: endpoint, verplichte velden
 
 ## Zoeken
 
+*Getest 30 sep 2026, v1, Sales Navigator people, 25 resultaten.*
+
+**Stap 1 — ID's opzoeken** (elk telt als lichte LinkedIn-aanroep):
+`GET /api/v1/linkedin/search/parameters?account_id=…&type=…&keywords=…&limit=5`
+
+| Filter | `type` | Voorbeeld-ID |
+| --- | --- | --- |
+| Regio / hoofdkantoor | `REGION` | Netherlands = `102890719` |
+| Branche (Sales Nav) | `SALES_INDUSTRY` | Transportation, Logistics, Supply Chain and Storage = `116` |
+| Afdeling | `DEPARTMENT` | Information Technology = `13` |
+
+ID's zijn stabiel: cache ze in de gateway in plaats van ze elke keer op te vragen.
+
+**Stap 2 — zoeken:** `POST /api/v1/linkedin/search?account_id=…&limit=25`, body met
+`api: sales_navigator`, `category: people` en filters (`company_location`, `industry`,
+`function`, `seniority`, `company_headcount` met vaste klassen 201–500, 501–1000).
+
+- Antwoord: `paging.total_count` (hier 86), `cursor` voor de volgende pagina.
+- Per persoon o.a.: `id` (provider-id, nodig voor profiel/verzoek/bericht), `public_identifier`,
+  `network_distance` (`DISTANCE_2`/`DISTANCE_3`), `current_positions[]` (`role`, `company`,
+  `company_id`, `tenure_at_role`), `recently_hired`, `recent_posts_count`,
+  `shared_connections_count`, `pending_invitation`, `premium`.
+- **Kwaliteit:** filter `industry` + `company_location` matcht soms op een ándere of eerdere
+  functie of een buitenlandse vestiging. Na het ophalen per resultaat controleren of het
+  huidige bedrijf echt in scope is (hier ca. 5 van 25 twijfelgevallen).
+- **Budget:** telt als 25 zoekresultaten (werknorm 2.500/dag Sales Navigator).
+
 ## Profiel ophalen
 
 ## Connectieverzoek

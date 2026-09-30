@@ -59,8 +59,8 @@ Laat Claude per actie het endpoint opzoeken, het verzoek tonen en pas na jouw ak
 
 | # | Actie | Wat je test | Maximaal volume |
 | --- | --- | --- | --- |
-| 1 | Accounts ophalen | Account-id, status, abonnement | — |
-| 2 | Zoeken (LinkedIn én Sales Navigator) | Filters, paginering, velden | 1 zoekopdracht, 25 resultaten |
+| 1 ✅ | Accounts ophalen | Account-id, status, abonnement | — |
+| 2 ✅ | Zoeken (Sales Navigator gedaan 30 sep; LinkedIn classic nog) | Filters, paginering, velden | 1 zoekopdracht, 25 resultaten |
 | 3 | Profiel ophalen | Welke velden, provider-id vs. publieke URL | 3 profielen |
 | 4 | Connectieverzoek | Met notitie, foutmelding bij te lange notitie | 2 verzoeken, aan bekenden |
 | 5 | Bericht aan connectie | Nieuw gesprek vs. bestaand gesprek | 1 bericht, aan een collega |
