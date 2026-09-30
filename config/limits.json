@@ -1,0 +1,128 @@
+{
+  "$beschrijving": "Werknormen per LinkedIn-account voor de budgetmotor. Afgeleid van docs/limieten.md; wijzig eerst de bron, dan dit bestand.",
+  "$bron": "docs/limieten.md",
+  "$versie": "2026-09-30",
+
+  "opbouw": {
+    "start_factor": 0.5,
+    "stap_per_week": 0.2,
+    "maximum": 1.0,
+    "acceptatie_drempel": 0.30,
+    "acceptatie_venster_dagen": 7
+  },
+
+  "afkoeling": {
+    "duur_uren": 48,
+    "opbouw_factor_na": 0.5,
+    "opbouw_periode_dagen": 7,
+    "triggers": ["http_429", "captcha", "warning"]
+  },
+
+  "tijdvenster": {
+    "werkdagen": [1, 2, 3, 4, 5],
+    "start_lokaal": "08:30",
+    "einde_lokaal": "17:30",
+    "pauze_tussen_acties_minuten": { "min": 2, "max": 8 },
+    "tijdzone_standaard": "Europe/Amsterdam"
+  },
+
+  "unipile_usage_signaal": {
+    "$toelichting": "Unipile geeft in het invite-antwoord soms een usage-percentage terug bij 50/75/90/95%. Bij deze drempel of hoger direct opbouw_factor omlaag.",
+    "afremmen_bij_percentage": 75,
+    "nieuwe_factor_bij_afremmen": 0.5
+  },
+
+  "abonnementen": {
+    "free": {
+      "invite": {
+        "dag": 15,
+        "week": 70,
+        "openstaand_maximum": 500,
+        "notitie": {
+          "toegestaan": false,
+          "$toelichting": "Gratis accounts sturen verzoeken zonder notitie (docs/limieten.md)."
+        }
+      },
+      "message": { "dag": 15, "week": 80 },
+      "inmail": { "maand": 0 },
+      "search": { "resultaten_per_dag": 1000, "runs_per_dag": 1 },
+      "profile": { "dag": 80, "week": 400 }
+    },
+
+    "premium_career": {
+      "invite": {
+        "dag": 15,
+        "week": 70,
+        "openstaand_maximum": 500,
+        "notitie": { "toegestaan": true, "tekens_max": 200, "per_maand": 5 }
+      },
+      "message": { "dag": 15, "week": 80 },
+      "inmail": {
+        "maand": 5,
+        "credit_terug_bij_antwoord_binnen_dagen": 90
+      },
+      "search": { "resultaten_per_dag": 1000, "runs_per_dag": 1 },
+      "profile": { "dag": 80, "week": 400 }
+    },
+
+    "premium_business": {
+      "invite": {
+        "dag": 15,
+        "week": 70,
+        "openstaand_maximum": 500,
+        "notitie": { "toegestaan": true, "tekens_max": 200, "per_maand": 5 }
+      },
+      "message": { "dag": 15, "week": 80 },
+      "inmail": {
+        "maand": 15,
+        "credit_terug_bij_antwoord_binnen_dagen": 90
+      },
+      "search": { "resultaten_per_dag": 1000, "runs_per_dag": 1 },
+      "profile": { "dag": 80, "week": 400 }
+    },
+
+    "salesnav_core": {
+      "invite": {
+        "dag": 20,
+        "week": 100,
+        "openstaand_maximum": 500,
+        "notitie": { "toegestaan": true, "tekens_max": 300 },
+        "bonus_na_opbouw": {
+          "$toelichting": "Na 4+ weken met acceptatie >= 30% mag de weeknorm omhoog naar 150.",
+          "min_weken_opbouw": 4,
+          "acceptatie_drempel": 0.30,
+          "week_maximum": 150
+        }
+      },
+      "message": { "dag": 25, "week": 150 },
+      "inmail": {
+        "maand": 50,
+        "credit_terug_bij_antwoord_binnen_dagen": 90
+      },
+      "search": { "resultaten_per_dag": 2500, "runs_per_dag": 1 },
+      "profile": { "dag": 150, "week": 750 }
+    },
+
+    "salesnav_advanced": {
+      "$toelichting": "docs/limieten.md geeft geen aparte getallen voor Advanced; behandeld als salesnav_core totdat aparte werknormen zijn vastgesteld.",
+      "invite": {
+        "dag": 20,
+        "week": 100,
+        "openstaand_maximum": 500,
+        "notitie": { "toegestaan": true, "tekens_max": 300 },
+        "bonus_na_opbouw": {
+          "min_weken_opbouw": 4,
+          "acceptatie_drempel": 0.30,
+          "week_maximum": 150
+        }
+      },
+      "message": { "dag": 25, "week": 150 },
+      "inmail": {
+        "maand": 50,
+        "credit_terug_bij_antwoord_binnen_dagen": 90
+      },
+      "search": { "resultaten_per_dag": 2500, "runs_per_dag": 1 },
+      "profile": { "dag": 150, "week": 750 }
+    }
+  }
+}
