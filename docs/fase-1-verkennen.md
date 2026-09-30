@@ -8,23 +8,48 @@ vastleggen hoe Unipile zich gedraagt. Er wordt nog geen gateway gebouwd.
 
 ## Stap 1 — Unipile-account (Rubert, ca. 15 minuten)
 
-- [ ] Maak een account op https://dashboard.unipile.com (7 dagen proef, geen creditcard).
-- [ ] Maak een app `markaas-dev`. Noteer de **DSN** en maak een **API-sleutel**.
+- [x] Maak een account op https://dashboard.unipile.com (7 dagen proef, geen creditcard). *(30 sep 2026)*
+- [ ] Maak een app `markaas-dev`. Noteer de **DSN** en maak een **scoped API-sleutel**.
 - [ ] Zet beide in een lokaal `.env` (zie `.env.example`), nooit in de repo.
 
 ## Stap 2 — Eigen LinkedIn-account koppelen (Rubert)
 
-- [ ] Koppel in het Unipile-dashboard je eigen LinkedIn-account (hosted auth).
+- [x] Koppel je eigen LinkedIn-account, methode **Credentials** (eigen sessie, los van je
+      browser). *(30 sep 2026)*
 - [ ] Controleer in het dashboard dat de status `OK` is en of Sales Navigator herkend wordt.
 - [ ] Koppel **niet** tegelijk een ander systeem dat voor dit account verstuurt (HeyReach).
       Phantombuster voor data ophalen mag blijven; houd de volumes in fase 1 minimaal.
 
-## Stap 3 — Unipile-MCP in Claude (voor verkennen)
+## Stap 3 — Unipile-MCP in Claude Desktop (voor verkennen)
 
-- [ ] Voeg in Claude een connector toe: `https://developer.unipile.com/mcp`, header
-      `X-API-KEY` = de sleutel van `markaas-dev`.
+De Unipile-MCP vraagt de API-sleutel als HTTP-header. De custom connectors van claude.ai
+ondersteunen dat niet, dus de koppeling loopt via de configuratie van Claude Desktop, met
+`mcp-remote` als brug (vereist Node.js op je computer).
+
+- [ ] Open in Claude Desktop: Instellingen → Developer → Edit Config
+      (`claude_desktop_config.json`) en voeg toe:
+
+      ```json
+      {
+        "mcpServers": {
+          "unipile": {
+            "command": "npx",
+            "args": [
+              "-y", "mcp-remote",
+              "https://developer.unipile.com/mcp?branch=v2.0",
+              "--header", "X-API-KEY:${UNIPILE_API_KEY}"
+            ],
+            "env": { "UNIPILE_API_KEY": "<scoped sleutel van markaas-dev>" }
+          }
+        }
+      }
+      ```
+
+- [ ] Herstart Claude Desktop en controleer dat de tools `search-endpoints`,
+      `list-endpoints`, `get-endpoint` en `execute-request` verschijnen.
 - [ ] Gebruik hem alleen in deze fase en alleen met de ontwikkel-sleutel; verwijder hem als de
-      gateway-MCP klaar is.
+      gateway-MCP klaar is. `execute-request` kan elke API-aanroep doen: voer niets uit zonder
+      dat Claude eerst het verzoek toont en jij akkoord geeft.
 
 ## Stap 4 — Acties uitproberen (met Claude, op je eigen account)
 
