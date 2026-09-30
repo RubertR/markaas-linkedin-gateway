@@ -115,6 +115,8 @@ momenten.
 - Geen LinkedIn-cookies opslaan; Unipile beheert sessies.
 - Geheimen alleen in omgevingsvariabelen, nooit in de repo.
 - Database in de EU; alleen zakelijke profieldata; bewaartermijn configureerbaar.
+  Velden `contact_info` en `birthdate` uit profielen worden standaard weggefilterd vóór opslag;
+  alleen opslaan als de klant daar een grondslag voor heeft en het expliciet aanzet.
 - Foutmeldingen richting skills in het Nederlands, met oorzaak en vervolgstap.
 - Elke module heeft tests; Unipile wordt in tests nagebootst (`test/fake-unipile/`).
 

@@ -48,6 +48,24 @@ ID's zijn stabiel: cache ze in de gateway in plaats van ze elke keer op te vrage
 
 ## Profiel ophalen
 
+*Getest 30 sep 2026, v1, 3 profielen van 1e-graads connecties.*
+
+`GET /api/v1/users/{identifier}?account_id=…&linkedin_sections=*_preview&notify=false`
+
+- `identifier`: publieke id (`public_identifier`) werkt voor classic; voor
+  `linkedin_api=sales_navigator` is de interne provider-id nodig. Een verouderde publieke id
+  wordt doorgestuurd naar de actuele (antwoord bevat de nieuwe `public_identifier`).
+- `notify=false` is de standaard: het bezoek wordt niet gemeld aan de ander.
+- `linkedin_sections`: `*_preview` geeft van elke sectie de eerste items (ervaring, opleiding,
+  skills, aanbevelingen). `*` (alles volledig) kan LinkedIn laten afknijpen; lege secties staan
+  dan in `throttled_sections`. Vraag alleen wat nodig is.
+- Nuttige velden: `provider_id` (nodig voor verzoek/bericht), `network_distance`
+  (`FIRST_DEGREE` …), `connected_at`, `is_open_profile`, `is_premium`, `can_send_inmail`,
+  `is_open_to_work`, `shared_connections_count`, `work_experience[]` met `start`/`end`/`current`.
+- **AVG — let op:** bij 1e-graads connecties bevat het antwoord `contact_info` (ook privé-e-mail
+  en mobiel) en soms `birthdate`. De gateway slaat deze velden standaard **niet** op (zie SPEC §9).
+- **Budget:** telt als 1 profielbezoek per aanroep (werknorm 150/dag Sales Navigator).
+
 ## Connectieverzoek
 
 ## Bericht aan connectie
