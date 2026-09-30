@@ -93,4 +93,25 @@ is `public_identifier` vaak `null`; gebruik `id` (provider-id) als sleutel.
 
 ## Webhooks
 
+*Aangemaakt 30 sep 2026, v1, alleen voor Ruberts account, doel: tijdelijke test-URL.*
+
+`POST /api/v1/webhooks` met `request_url`, `source`, `events`, `account_ids`, `enabled`,
+optioneel `name`, `format: json`, `headers` (voor een eigen geheim) en `data`.
+
+| `source` | Events | Gebruik in de gateway |
+| --- | --- | --- |
+| `users` | `new_relation` | Verzoek geaccepteerd → sequentie een stap verder |
+| `messaging` | `message_received` (ook read, reaction, edited, deleted, delivered) | Reactie → sequentie stoppen, notitie in Pipedrive |
+| `account_status` | `credentials`, `error`, `stopped`, `reconnected`, `ok`, `permissions`, … | Sessie verlopen → account pauzeren en koppellink sturen |
+
+- `account_ids` weglaten = webhook geldt voor **alle huidige én toekomstige** accounts. In
+  productie per klant of bewust globaal instellen.
+- `data` bepaalt welke velden meekomen. Voor de testwebhook op webhook.site is de
+  berichttekst (`message`) bewust **weggelaten**: een externe test-URL is openbaar leesbaar.
+- In productie: eigen endpoint, geheim in `headers` meesturen en controleren.
+- Testwebhooks na fase 1 verwijderen: `DELETE /api/v1/webhooks/{id}`.
+
+*Waarnemingen (in te vullen):* payload `new_relation` na acceptatie, vertraging tussen
+acceptatie en webhook, payload `message_received`.
+
 ## Hosted auth (koppelen en opnieuw koppelen)
