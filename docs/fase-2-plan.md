@@ -6,7 +6,7 @@ Doel van fase 2 (SPEC §10): register, koppelflow, webhooks, budgetmotor en wach
 staan; alle tests (inclusief 429 en `CREDENTIALS`) draaien groen tegen `test/fake-unipile/`.
 Nog geen MCP-server, geen sequenties, geen echte Unipile-aanroepen buiten fase 1.
 
-Poort naar fase 3: `pnpm test` (of `npm test`) groen op een schone checkout, migratie
+Poort naar fase 3: `npm test` (of `npm test`) groen op een schone checkout, migratie
 `0001_init.sql` schoon uitvoerbaar tegen een lege Postgres, en de fake-Unipile dekt de
 foutpaden 429, `CREDENTIALS` en time-out per actietype.
 
@@ -17,8 +17,8 @@ foutpaden 429, `CREDENTIALS` en time-out per actietype.
   `"module": "NodeNext"` en `"moduleResolution": "NodeNext"` in `tsconfig.json`).
 - `tsconfig.json`: `strict: true`, `noUncheckedIndexedAccess: true`,
   `exactOptionalPropertyTypes: true`, `noImplicitOverride: true`, `target: "ES2022"`.
-- Packagemanager: **pnpm** (snel, lock deterministisch). Fallback naar `npm` mag; scripts
-  blijven identiek.
+- Packagemanager: **npm** (standaard aanwezig; lokale Node is v24). Scripts blijven
+  identiek als we later naar pnpm gaan.
 
 **Structuur**
 
@@ -78,7 +78,7 @@ config/
 
 **Overige gereedschappen**
 - Formatter: `prettier` (config in repo). Linter: `eslint` met `@typescript-eslint`.
-- `pnpm test`, `pnpm typecheck`, `pnpm lint` als scripts.
+- `npm test`, `npm run typecheck`, `npm run lint` als scripts.
 - CI: nog niet in scope; lokaal groen is de poort.
 
 ## 2. Databaseschema — migratie `0001_init.sql`
@@ -366,7 +366,7 @@ tests injecteren de fake, dev/prod injecteren `UNIPILE_DSN` via env.
 
 ## 5. Volgorde van werk en poorten
 
-1. Projectopzet + `0001_init.sql` — poort: `pnpm test` draait (leeg), migratie schoon op
+1. Projectopzet + `0001_init.sql` — poort: `npm test` draait (leeg), migratie schoon op
    een verse PGlite-instantie in een test.
 2. `src/config` + `src/db` + `src/unipile` (skeleton met fake) — poort: unit tests voor
    env-lezing en Unipile-client-retry groen.

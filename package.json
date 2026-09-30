@@ -1,0 +1,26 @@
+{
+  "name": "markaas-linkedin-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MARKaaS LinkedIn-gateway: dienst tussen Claude-skills en de Unipile-API met budgetmotor, wachtrij en goedkeuring per actie.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --import tsx --test 'src/**/*.test.ts' 'test/**/*.test.ts'",
+    "test:watch": "node --import tsx --test --watch 'src/**/*.test.ts' 'test/**/*.test.ts'",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.2.14",
+    "@hono/node-server": "^1.13.7",
+    "hono": "^4.6.14",
+    "postgres": "^3.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
