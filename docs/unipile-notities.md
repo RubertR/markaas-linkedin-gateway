@@ -89,6 +89,20 @@ is `public_identifier` vaak `null`; gebruik `id` (provider-id) als sleutel.
 
 ## Bericht aan connectie
 
+*Getest 30 sep 2026, v1, 1 bericht in een bestaand gesprek (na acceptatie), na akkoord.*
+
+**In een bestaand gesprek:** `POST /api/v1/chats/{chat_id}/messages`, **multipart/form-data**
+(niet JSON) met `text` en `account_id`. Met `account_id` weigert Unipile het bericht als het
+gesprek niet bij dat account hoort: altijd meesturen.
+
+- Antwoord: `{"object":"MessageSent","message_id":"…"}`.
+- `chat_id` komt uit de webhook `message_received` (of `GET /api/v1/chats`).
+- Optioneel: `quote_id` (reageren op een specifiek bericht), bijlagen, spraak/video.
+- Nieuw gesprek starten (nog te testen): `POST /api/v1/chats` met `attendees_ids` = provider-id.
+- Webhook-payload bevat bij `sender.attendee_specifics` ook `network_distance`
+  (`DISTANCE_1` na acceptatie): bruikbaar als bevestiging van de relatie.
+- **Budget:** 1 bericht (werknorm 25/dag, 150/week Sales Navigator).
+
 ## InMail
 
 ## Webhooks
