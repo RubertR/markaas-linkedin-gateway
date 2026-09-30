@@ -135,9 +135,21 @@ export interface KoppelCallbackUitkomst {
   reden?: string;
 }
 
+export interface VerwerkOpties {
+  nu?: Date;
+  dedupVensterMinuten?: number;
+}
+
+const STANDAARD_DEDUP_VENSTER_MINUTEN = 10;
+
+function tijdvenster(nu: Date, minuten: number): number {
+  return Math.floor(nu.getTime() / (minuten * 60 * 1000));
+}
+
 export async function verwerkKoppelCallback(
   db: Backend,
   payload: KoppelCallbackPayload,
+  opties: VerwerkOpties = {},
 ): Promise<KoppelCallbackUitkomst> {
   if (!payload.status?.trim()) {
     throw new KoppelflowFout('invoer', 'Callback zonder status ontvangen.');
@@ -146,10 +158,19 @@ export async function verwerkKoppelCallback(
     throw new KoppelflowFout('invoer', 'Callback zonder account_id ontvangen.');
   }
 
-  const externId = `hosted:${payload.status}:${payload.account_id}${payload.name ? `:${payload.name}` : ''}`;
+  const nu = opties.nu ?? new Date();
+  const venster = opties.dedupVensterMinuten ?? STANDAARD_DEDUP_VENSTER_MINUTEN;
+  const bucket = tijdvenster(nu, venster);
+  const externId = `hosted:${payload.status}:${payload.account_id}${
+    payload.name ? `:${payload.name}` : ''
+  }:v${bucket}`;
+
   const opgeslagen = await bewaarEventEenmaal(db, externId, payload);
   if (!opgeslagen) {
-    return { verwerkt: false, reden: 'Callback is al verwerkt (dubbele levering).' };
+    return {
+      verwerkt: false,
+      reden: `Callback is al verwerkt binnen dit dedup-venster van ${venster} minuten (dubbele levering).`,
+    };
   }
 
   if (payload.status === 'CREATION_SUCCESS') {
@@ -178,7 +199,9 @@ export async function verwerkKoppelCallback(
         reden: `Onbekend unipile_account_id "${payload.account_id}" bij RECONNECTED; event opgeslagen voor onderzoek.`,
       };
     }
-    await werkAccountStatusBij(db, account.id, 'OK', { afkoelingTotWissen: true });
+    // Alleen status naar OK. afkoeling_tot komt van een LinkedIn-waarschuwing/429
+    // en heeft niets met de sessie te maken — die blijft dus staan.
+    await werkAccountStatusBij(db, account.id, 'OK');
     return { verwerkt: true };
   }
 

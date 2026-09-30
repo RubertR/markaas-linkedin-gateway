@@ -167,17 +167,18 @@ describe('koppelflow — verwerkKoppelCallback', () => {
     assert.equal(account?.opbouwFactor, 0.5);
   });
 
-  it('is idempotent: dezelfde CREATION_SUCCESS-callback tweemaal doet niets extra', async () => {
-    await verwerkKoppelCallback(db, {
-      status: 'CREATION_SUCCESS',
-      account_id: 'unipile-nieuw',
-      name: accountId,
-    });
-    const tweede = await verwerkKoppelCallback(db, {
-      status: 'CREATION_SUCCESS',
-      account_id: 'unipile-nieuw',
-      name: accountId,
-    });
+  it('dedup binnen 10 minuten: dezelfde CREATION_SUCCESS-callback wordt maar één keer verwerkt', async () => {
+    const nu = new Date('2026-10-01T10:00:00Z');
+    await verwerkKoppelCallback(
+      db,
+      { status: 'CREATION_SUCCESS', account_id: 'unipile-nieuw', name: accountId },
+      { nu },
+    );
+    const tweede = await verwerkKoppelCallback(
+      db,
+      { status: 'CREATION_SUCCESS', account_id: 'unipile-nieuw', name: accountId },
+      { nu: new Date(nu.getTime() + 5 * 60 * 1000) },
+    );
     assert.equal(tweede.verwerkt, false);
     assert.match(tweede.reden ?? '', /al verwerkt|dubbel/i);
 
@@ -187,13 +188,41 @@ describe('koppelflow — verwerkKoppelCallback', () => {
     assert.equal(rijen[0]?.aantal, '1');
   });
 
-  it('RECONNECTED: zet status weer op OK en wist afkoeling_tot', async () => {
+  it('een tweede RECONNECTED na meer dan 10 minuten wordt wél verwerkt', async () => {
+    await db.query(
+      "update accounts set unipile_account_id='unipile-x', status='CREDENTIALS' where id=$1",
+      [accountId],
+    );
+    const eerste = await verwerkKoppelCallback(
+      db,
+      { status: 'RECONNECTED', account_id: 'unipile-x' },
+      { nu: new Date('2026-10-01T10:00:00Z') },
+    );
+    assert.equal(eerste.verwerkt, true);
+
+    // Sessie loopt later opnieuw af, wordt hersteld — moet niet worden geblokkeerd door dedup.
+    await db.query("update accounts set status='CREDENTIALS' where id=$1", [accountId]);
+
+    const eenWeekLater = new Date('2026-10-08T10:00:00Z');
+    const tweede = await verwerkKoppelCallback(
+      db,
+      { status: 'RECONNECTED', account_id: 'unipile-x' },
+      { nu: eenWeekLater },
+    );
+    assert.equal(tweede.verwerkt, true);
+
+    const account = await vindAccount(db, accountId);
+    assert.equal(account?.status, 'OK');
+  });
+
+  it('RECONNECTED: zet status op OK maar wist afkoeling_tot NIET (afkoeling komt van 429/waarschuwing, niet van de sessie)', async () => {
+    const afkoelingTot = new Date('2026-10-03T12:00:00Z');
     await db.query(
       `update accounts
        set unipile_account_id='unipile-oud', status='CREDENTIALS',
-           afkoeling_tot = now() + interval '48 hours'
+           afkoeling_tot = $2
        where id = $1`,
-      [accountId],
+      [accountId, afkoelingTot.toISOString()],
     );
 
     const uitkomst = await verwerkKoppelCallback(db, {
@@ -204,7 +233,8 @@ describe('koppelflow — verwerkKoppelCallback', () => {
 
     const account = await vindAccount(db, accountId);
     assert.equal(account?.status, 'OK');
-    assert.equal(account?.afkoelingTot, null);
+    assert.ok(account?.afkoelingTot instanceof Date);
+    assert.equal(account.afkoelingTot.getTime(), afkoelingTot.getTime());
   });
 
   it('slaat onbekende status op in events en crasht niet', async () => {
