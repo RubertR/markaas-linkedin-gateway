@@ -105,6 +105,23 @@ gesprek niet bij dat account hoort: altijd meesturen.
 
 ## InMail
 
+*Getest 30 sep 2026, v1, 1 InMail via Sales Navigator aan een bekende (2e graad), na akkoord.*
+
+`POST /api/v1/chats`, **multipart/form-data**:
+`account_id`, `attendees_ids` (provider-id), `subject`, `text`, `linkedin[api]=sales_navigator`.
+
+- **ID-soort bepaalt de API:** `ACo…` = classic, `ACw…` = Sales Navigator, `AE…` = Recruiter.
+  Voor Sales Navigator-InMail eerst het `ACw`-id ophalen: Sales Navigator-zoekopdracht met
+  `first_name` + `last_name` (1 lichte aanroep). Classic-zoeken geeft alleen `ACo`.
+- Classic-InMail kan ook: `linkedin[api]=classic` + `linkedin[inmail]=true` met `ACo`-id
+  (niet getest; verbruikt Premium- i.p.v. Sales Navigator-credits).
+- Antwoord: `{"object":"ChatStarted","chat_id":"…","message_id":"…"}`.
+- Verwachte fouten (422): `insufficient_credits`, `not_allowed_inmail`, `user_unreachable`.
+- Credits: Sales Navigator Core 50/maand; terug bij antwoord binnen 90 dagen. Het antwoord
+  geeft **geen** resterend tegoed terug: de budgetmotor moet zelf tellen.
+- Nieuw gesprek starten met een 1e-graads connectie gaat via hetzelfde endpoint zonder
+  InMail-opties.
+
 ## Webhooks
 
 *Aangemaakt 30 sep 2026, v1, alleen voor Ruberts account, doel: tijdelijke test-URL.*
