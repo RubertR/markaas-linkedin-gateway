@@ -68,9 +68,9 @@ Laat Claude per actie het endpoint opzoeken, het verzoek tonen en pas na jouw ak
 
 Plus, zonder actie op LinkedIn:
 
-- [ ] Webhooks: registreer een tijdelijke test-URL (bijv. webhook.site) voor accountstatus,
+- [x] Webhooks: registreer een tijdelijke test-URL (bijv. webhook.site) voor accountstatus,
       nieuwe relatie en nieuw bericht; kijk welke gebeurtenissen binnenkomen bij stap 4 en 5.
-- [ ] Hosted auth: maak een koppellink via de API (`type: create` en `type: reconnect`) en
+- [x] Hosted auth: maak een koppellink via de API (`type: create` en `type: reconnect`) en
       noteer de callback-payload.
 
 ## Stap 5 — Vastleggen

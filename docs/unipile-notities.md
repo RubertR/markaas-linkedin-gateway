@@ -159,3 +159,32 @@ optioneel `name`, `format: json`, `headers` (voor een eigen geheim) en `data`.
 - Reactie van de ontvanger kwam 2,5 minuut na acceptatie → sequentie moet direct stoppen.
 
 ## Hosted auth (koppelen en opnieuw koppelen)
+
+*Getest 30 sep 2026, v1: twee links aangemaakt, niet gebruikt.*
+
+`POST /api/v1/hosted/accounts/link`, JSON.
+
+| Veld | Nieuw account (`type: create`) | Opnieuw koppelen (`type: reconnect`) |
+| --- | --- | --- |
+| Verplicht | `expiresOn`, `api_url`, `providers` | `expiresOn`, `api_url`, `reconnect_account` |
+| `providers` | `["LINKEDIN"]` | n.v.t. |
+| Nuttig | `name` (eigen account-id), `notify_url`, `single_use: true` | `name`, `notify_url` |
+
+- `api_url` = `https://{DSN}` (hier `https://api68.unipile.com:19841`).
+- `expiresOn` in UTC met milliseconden (`2026-09-30T15:15:00.000Z`). **Alle links verlopen
+  bij de dagelijkse herstart**, ongeacht de datum: per klik een nieuwe link maken.
+- `disabled_options: ["cookie_auth"]` dwingt de Credentials-methode af (eigen sessie, los van
+  de browser van de klant). Andere opties: `proxy`, `autoproxy`, `credentials_auth`, `sync_limit`.
+- `disabled_features` kan `linkedin_sales_navigator` of `linkedin_organizations_mailboxes`
+  uitzetten — handig als een klant alleen classic mag gebruiken.
+- `sync_limit.MESSAGING` beperkt hoeveel berichtgeschiedenis Unipile synchroniseert (AVG: liever
+  laag houden).
+- Antwoord: `{"object":"HostedAuthUrl","url":"https://account.unipile.com/…"}`.
+- Callback op `notify_url` na succes: `status: CREATION_SUCCESS` / `RECONNECTED`, `account_id`,
+  `name` (nog niet waargenomen; links zijn niet gebruikt).
+- Links niet in een iframe tonen (captcha/OAuth). Niet in chat of logs laten slingeren.
+
+## Opruimen na fase 1
+
+- 30 sep 2026: de drie testwebhooks naar webhook.site verwijderd (`DELETE /api/v1/webhooks/{id}`,
+  antwoord `WebhookDeleted`); `GET /api/v1/webhooks` is leeg.

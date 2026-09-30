@@ -4,7 +4,8 @@ Een dienst tussen de Claude-skills van MARKaaS en de Unipile-API. Hij bewaakt pe
 LinkedIn-account een budget, laat niets versturen zonder goedkeuring en houdt per klant bij
 welke accounts werken.
 
-**Status:** fase 1 — verkennen. Er is nog geen code.
+**Status:** fase 1 (verkennen) afgerond op 30 sep 2026; klaar voor fase 2 (kern bouwen).
+Alle geteste Unipile-endpoints staan in `docs/unipile-notities.md`.
 
 | Document | Waarvoor |
 | --- | --- |
