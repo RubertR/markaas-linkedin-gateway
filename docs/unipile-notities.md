@@ -111,7 +111,20 @@ optioneel `name`, `format: json`, `headers` (voor een eigen geheim) en `data`.
 - In productie: eigen endpoint, geheim in `headers` meesturen en controleren.
 - Testwebhooks na fase 1 verwijderen: `DELETE /api/v1/webhooks/{id}`.
 
-*Waarnemingen (in te vullen):* payload `new_relation` na acceptatie, vertraging tussen
-acceptatie en webhook, payload `message_received`.
+**Waarnemingen 30 sep 2026 (acceptatie van het testverzoek):**
+
+- Bij acceptatie zet LinkedIn de uitnodigingsnotitie als eerste bericht in een nieuw gesprek.
+  Dat komt binnen als `message_received` met `is_sender: true` (≈ moment van acceptatie).
+  → **Snelste acceptatiesignaal = eerste bericht met `is_sender: true` in een nieuw gesprek met
+  de ontvanger**, niet `new_relation`.
+- `new_relation` was 3+ minuten na acceptatie nog niet binnen (Unipile detecteert dit
+  periodiek; kan uren duren). Gateway moet beide signalen accepteren en ontdubbelen.
+- `message_received` komt ook voor **eigen** berichten (`is_sender: true`): filteren, anders
+  telt een eigen bericht als reactie.
+- Payload (zonder berichttekst): `event`, `account_id`, `timestamp`, `chat_id`, `message_id`,
+  `sender{attendee_id, attendee_name, attendee_provider_id}`, `is_sender`, `message_type`,
+  `webhook_name`. `event_type` was `null`.
+- Koppeling lead ↔ gesprek: `sender.attendee_provider_id` = de `provider_id` uit zoeken/profiel.
+- Reactie van de ontvanger kwam 2,5 minuut na acceptatie → sequentie moet direct stoppen.
 
 ## Hosted auth (koppelen en opnieuw koppelen)
