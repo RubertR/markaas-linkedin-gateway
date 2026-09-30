@@ -131,4 +131,4 @@ momenten.
 
 - Hosting: Railway of Fly.io (EU)? Keuze in fase 2.
 - Supabase als database, of een beheerde Postgres bij de host?
-- Welke Unipile-API-versie (v1 of v2) is stabiel voor LinkedIn? Vaststellen in fase 1.
+- Unipile-API-versie: de proefomgeving (30 sep 2026) is **v1** (DSN `api68.unipile.com:19841`, account-ID's zonder `acc_`). Vaststellen of v1 de basis blijft of dat we naar v2 migreren.

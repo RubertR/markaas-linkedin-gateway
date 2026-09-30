@@ -36,7 +36,7 @@ ondersteunen dat niet, dus de koppeling loopt via de configuratie van Claude Des
             "command": "npx",
             "args": [
               "-y", "mcp-remote",
-              "https://developer.unipile.com/mcp?branch=v2.0",
+              "https://developer.unipile.com/mcp?branch=v1.0",
               "--header", "X-API-KEY:${UNIPILE_API_KEY}"
             ],
             "env": { "UNIPILE_API_KEY": "<scoped sleutel van markaas-dev>" }
@@ -45,6 +45,8 @@ ondersteunen dat niet, dus de koppeling loopt via de configuratie van Claude Des
       }
       ```
 
+      Gebruik `branch=v1.0`: het dashboard op dashboard.unipile.com met een DSN
+      (`apiNN.unipile.com:PORT`) is de v1-omgeving; een v1-sleutel geeft 401 op de v2-API.
 - [ ] Herstart Claude Desktop en controleer dat de tools `search-endpoints`,
       `list-endpoints`, `get-endpoint` en `execute-request` verschijnen.
 - [ ] Gebruik hem alleen in deze fase en alleen met de ontwikkel-sleutel; verwijder hem als de
