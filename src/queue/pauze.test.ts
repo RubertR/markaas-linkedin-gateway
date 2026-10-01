@@ -34,4 +34,33 @@ describe('vastePauze', () => {
     assert.equal(pauze.kies(grens), 300);
     assert.equal(pauze.kies(grens), 300);
   });
+
+  it('geeft dezelfde pauze terug via kiesSeconden', () => {
+    const pauze = vastePauze(45);
+    assert.equal(pauze.kiesSeconden({ min: 30, max: 90 }), 45);
+  });
+});
+
+describe('kiesSeconden', () => {
+  it('kiest pauze binnen de seconden-grenzen uit limits.json (profile)', async () => {
+    const l = await laadLimieten();
+    const kiezer = zaadRandom(7);
+    const grens = l.tijdvenster.pauze_mcp_sync_seconden.profile;
+    for (let i = 0; i < 100; i++) {
+      const sec = kiezer.kiesSeconden(grens);
+      assert.ok(sec >= grens.min, `onder min: ${sec} < ${grens.min}`);
+      assert.ok(sec <= grens.max, `boven max: ${sec} > ${grens.max}`);
+    }
+  });
+
+  it('kiest pauze binnen de seconden-grenzen uit limits.json (search)', async () => {
+    const l = await laadLimieten();
+    const kiezer = zaadRandom(99);
+    const grens = l.tijdvenster.pauze_mcp_sync_seconden.search;
+    for (let i = 0; i < 100; i++) {
+      const sec = kiezer.kiesSeconden(grens);
+      assert.ok(sec >= grens.min, `onder min: ${sec} < ${grens.min}`);
+      assert.ok(sec <= grens.max, `boven max: ${sec} > ${grens.max}`);
+    }
+  });
 });

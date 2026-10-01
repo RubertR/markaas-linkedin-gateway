@@ -8,6 +8,7 @@ const volledig = {
   UNIPILE_API_KEY: 'geheime-sleutel-abc',
   WEBHOOK_SECRET: 'webhook-geheim-xyz',
   MCP_TOKEN: 'mcp-geheim-123',
+  ADMIN_PASSWORD_HASH: 'scrypt$16384$8$1$c2FsdA==$aGFzaA==',
   DATABASE_URL: 'postgres://user:pass@host:5432/db',
 };
 
@@ -18,6 +19,7 @@ describe('leesEnv', () => {
     assert.equal(env.unipileApiKey, 'geheime-sleutel-abc');
     assert.equal(env.webhookSecret, 'webhook-geheim-xyz');
     assert.equal(env.mcpToken, 'mcp-geheim-123');
+    assert.equal(env.adminPasswordHash, 'scrypt$16384$8$1$c2FsdA==$aGFzaA==');
     assert.equal(env.databaseUrl, 'postgres://user:pass@host:5432/db');
   });
 

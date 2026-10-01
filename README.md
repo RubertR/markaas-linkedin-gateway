@@ -4,13 +4,17 @@ Een dienst tussen de Claude-skills van MARKaaS en de Unipile-API. Hij bewaakt pe
 LinkedIn-account een budget, laat niets versturen zonder goedkeuring en houdt per klant bij
 welke accounts werken.
 
-**Status:** fase 3 (eigen proef) ronde 1 afgerond op 1 okt 2026 — de
-MCP-server draait op `/mcp` met de zeven tools uit SPEC §7 (geen tool
-goedkeurt of verstuurt). 291 tests groen op `node --test` tegen PGlite;
-migratie `0001_init.sql` eerder toegepast op Supabase (Frankfurt,
-`eu-central-1`, project-ref `uujvmoqsalpgshptiljy`). Volgende rondes:
-goedkeuringspagina → sequenties → uitrol op Railway (zie
-[docs/fase-3-plan.md](docs/fase-3-plan.md)).
+**Status:** fase 3 (eigen proef) ronde 2 afgerond op 1 okt 2026 — de
+goedkeuringspagina staat op `/admin/*` naast MCP (`/mcp`) en webhooks
+(`/webhooks/*`); alleen Rubert kan daar invite-, message- en inmail-
+acties goedkeuren, afwijzen of opnieuw plannen (SPEC §12). De MCP uit
+ronde 1 kreeg een correctie: `search_people` en `get_profile` houden
+zich nu aan een per-type pauze (profile 30–90 s, zoek 2–8 min) op basis
+van de laatst uitgevoerde actie van dat type. 350 tests groen op
+`node --test` tegen PGlite; migratie `0001_init.sql` eerder toegepast
+op Supabase (Frankfurt, `eu-central-1`, project-ref
+`uujvmoqsalpgshptiljy`). Volgende rondes: sequenties → uitrol op Railway
+(zie [docs/fase-3-plan.md](docs/fase-3-plan.md)).
 
 Geteste Unipile-endpoints staan in `docs/unipile-notities.md`.
 
@@ -30,5 +34,7 @@ Geteste Unipile-endpoints staan in `docs/unipile-notities.md`.
 - `npm run db:check` — alleen-lezen verbindingstest tegen Supabase.
 - `npm run migrate -- --dry-run` — toont openstaande migraties, wijzigt niets.
 - `npm run migrate` — voert openstaande migraties uit (alleen na akkoord van Rubert).
+- `npm run admin:hash` — vraagt tweemaal een wachtwoord (verborgen invoer) en
+  toont de regel voor `ADMIN_PASSWORD_HASH` in `.env`.
 
 Eigenaar: Rubert Rietkerk, MARKaaS.

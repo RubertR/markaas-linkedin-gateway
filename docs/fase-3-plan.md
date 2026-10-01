@@ -66,46 +66,70 @@ Poort naar ronde 2: alle tests groen, inclusief de 401-paden en de drie
 budget-foutpaden. Handmatige rooktest op Ruberts account **buiten de code**: één
 `get_profile` op Rubert zelf via de MCP, met akkoord vooraf.
 
-### Ronde 2 — Goedkeuringspagina (`src/approval/`)
+### Ronde 2 — Goedkeuringspagina (`src/admin/`) — afgerond 1 okt 2026
 
 Doel: een kleine webpagina binnen dezelfde hono-server waarmee Rubert `draft`-
 en `onzeker`-acties kan inzien, goedkeuren, afwijzen of opnieuw plannen. Geen
 MCP-tool, geen publieke API.
 
-**Harde grenzen:**
+**Harde grenzen (ingevuld):**
 
-- Login verplicht; alleen Rubert komt binnen. Simpelste vorm: één
-  gebruiker, wachtwoord-hash in env (`APPROVAL_PASSWORD_HASH`), sessie-cookie
-  met HttpOnly + Secure + SameSite=Strict. Geen tweede gebruiker in v1.
-- De pagina schrijft via `keurActieGoed`, `zetActieStatus` uit
-  `src/queue/acties.ts`. Geen directe UPDATE's op `actions`.
-- Alleen actiegegevens die bij de accounts van Rubert horen zijn zichtbaar; de
-  pagina sluit uit dat per ongeluk klantdata buiten de scope getoond wordt
-  (relevant zodra fase 4 start).
+- Login verplicht; alleen Rubert. Wachtwoord-hash in env
+  (`ADMIN_PASSWORD_HASH`, scrypt uit de standaard-library), sessie-cookie
+  met HttpOnly + Secure + SameSite=Strict en 12 uur geldigheid.
+- CSRF-token op elk formulier (per sessie, in constante tijd vergeleken).
+- Brute-force-blokkade: 5 foute pogingen → 15 min blokkade per IP.
+- `admin/dienst.ts` is de ENIGE plek in de code die
+  `goedgekeurd_door = 'rubert'` zet; een invariant-test scant `src/` en
+  slaat alarm bij elke andere plek die `keurActieGoed` aanroept of direct
+  UPDATE's op `goedgekeurd_door` uitvoert.
+- Correctie op ronde 1: `search_people`/`get_profile` kiezen hun pauze uit
+  `config/limits.json` (`tijdvenster.pauze_mcp_sync_seconden`, profile
+  30–90 s, search 2–8 min) op basis van de laatst uitgevoerde actie van dat
+  type op dat account. Nog niet verstreken → NL-melding "probeer opnieuw
+  over N seconden", géén Unipile-aanroep.
 
-**Tests-first:**
+**Tests-first (groen):**
 
-- Niet-ingelogde GET → redirect naar `/login`.
-- Verkeerd wachtwoord → geen sessie, melding "Onjuist wachtwoord", geen leak
-  wie wél bestaat.
-- Goedkeuren van een `draft`-actie zet `status='approved'`,
-  `goedgekeurd_door='rubert'`, `goedgekeurd_op=now()`.
-- Afwijzen zet `status='rejected'` met reden uit het formulier.
-- Opnieuw plannen van een `onzeker`-actie zet `status='approved'` en
-  `gepland_op`-waarde uit het formulier.
-- CSRF-token verplicht op mutaties; ontbreken → 403.
+- Niet-ingelogde GET → redirect naar `/admin/login`.
+- Verkeerd wachtwoord → 401 met "Onjuist wachtwoord", geen informatielek.
+- CSRF-token ontbreekt → 403 op elke mutatie, inclusief login.
+- Goedkeuren zet `status='approved'`, `goedgekeurd_door='rubert'`,
+  `goedgekeurd_op=now()`; tekst-aanpassing vóór goedkeuren wordt
+  gepersisteerd in `payload`.
+- Batch-goedkeuren verwerkt een lijst actie-id's; foutieve id's komen in
+  `overgeslagen` zonder de rest te blokkeren.
+- Afwijzen zet `status='rejected'` met reden uit het formulier (verplicht,
+  niet-leeg).
+- Onzeker-acties: knoppen "was verstuurd → done" en "opnieuw goedkeuren".
+- Brute-force: na 5 foute pogingen → 429 voor 15 min, ook met het juiste
+  wachtwoord geweigerd tot de blokkade voorbij is.
+- Invariant-scan over `src/` dwingt af dat alleen `admin/dienst.ts`
+  `keurActieGoed` aanroept en dat alleen `queue/acties.ts` het veld
+  `goedgekeurd_door` schrijft via SQL.
 
-**Omvang:**
+**Omvang (gerealiseerd):**
 
-- `src/approval/server.ts` — hono-routes `/approval/*`.
-- `src/approval/views/` — kleine server-rendered HTML (geen SPA), met
-  minimale CSS. Geen frameworks; blijft binnen "geen frameworks die we niet
-  nodig hebben" (CLAUDE.md).
-- `.env.example` krijgt `APPROVAL_PASSWORD_HASH=` en
-  `APPROVAL_SESSION_SECRET=`.
+- `src/admin/server.ts` — hono-sub-app met `/admin/login`,
+  `/admin/logout`, `/admin/` (overzicht) en de vijf POST-routes voor
+  goedkeuren, batch-goedkeuren, afwijzen, onzeker-done en
+  onzeker-opnieuw.
+- `src/admin/views.ts` — server-rendered HTML, mobielvriendelijk via
+  `viewport`-meta en responsieve CSS; geen client-side JavaScript.
+- `src/admin/dienst.ts` — leest drafts/onzeker, past tekst aan, roept
+  `keurActieGoed`/`zetActieStatus` aan.
+- `src/admin/sessie.ts`, `src/admin/pogingen.ts`,
+  `src/admin/wachtwoord.ts` — bouwstenen (in-memory sessies, brute-force-
+  tracker, scrypt-hash + verify).
+- `scripts/admin-hash.ts` — leest tweemaal een wachtwoord zonder echo en
+  print de `ADMIN_PASSWORD_HASH`-regel. Aangeroepen via
+  `npm run admin:hash`.
+- `.env.example` krijgt `ADMIN_PASSWORD_HASH=`; `src/config/env.ts`
+  valideert hem als verplicht.
 
-Poort naar ronde 3: alle tests groen, Rubert kan handmatig één
-`draft`-actie goedkeuren via de pagina (op lokale draai, nog niet in productie).
+Poort naar ronde 3: alle tests groen (350), typecheck schoon. Handmatige
+rooktest door Rubert op een lokale draai met `npm run admin:hash` +
+`.env` voordat ronde 3 begint.
 
 ### Ronde 3 — Sequenties (`src/sequences/`)
 

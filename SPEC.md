@@ -107,6 +107,15 @@ De MCP-server luistert via Streamable HTTP op `/mcp` binnen de bestaande HTTP-se
 beveiligd met een bearer-token (`MCP_TOKEN` uit `.env`, in constante tijd vergeleken,
 nooit gelogd). Verzoeken zonder of met een fout token krijgen HTTP 401.
 
+**Pauze per actietype voor synchrone MCP-tools.** `search_people` en `get_profile`
+worden direct door de MCP afgehandeld; om LinkedIn niet te overbelasten geldt een
+willekeurige pauze op basis van de laatst **uitgevoerde** actie van hetzelfde type
+op hetzelfde account. Grenzen staan in `config/limits.json`
+(`tijdvenster.pauze_mcp_sync_seconden`): `profile` 30–90 s, `search` 2–8 min.
+Is de pauze nog niet verstreken, dan antwoordt de tool met een NL-melding
+"probeer opnieuw over N seconden" en wordt géén actie aangemaakt en géén
+Unipile-aanroep gedaan.
+
 ## 12. Goedkeuring en bediening
 
 Goedkeuren, afwijzen en opnieuw plannen van `invite`-, `message`- en `inmail`-acties

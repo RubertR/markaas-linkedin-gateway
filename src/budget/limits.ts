@@ -69,11 +69,20 @@ export interface Afkoeling {
   triggers: readonly string[];
 }
 
+export interface PauzeGrensSeconden {
+  min: number;
+  max: number;
+}
+
 export interface Tijdvenster {
   werkdagen: readonly number[];
   start_lokaal: string;
   einde_lokaal: string;
   pauze_tussen_acties_minuten: { min: number; max: number };
+  pauze_mcp_sync_seconden: {
+    profile: PauzeGrensSeconden;
+    search: PauzeGrensSeconden;
+  };
   tijdzone_standaard: string;
 }
 
@@ -169,6 +178,17 @@ function parseTijdvenster(raw: unknown): Tijdvenster {
   if (!isRecord(pauze)) {
     throw new Error('Veld "pauze_tussen_acties_minuten" ontbreekt in tijdvenster.');
   }
+  const sync = raw['pauze_mcp_sync_seconden'];
+  if (!isRecord(sync)) {
+    throw new Error('Veld "pauze_mcp_sync_seconden" ontbreekt in tijdvenster.');
+  }
+  const syncProfile = sync['profile'];
+  const syncSearch = sync['search'];
+  if (!isRecord(syncProfile) || !isRecord(syncSearch)) {
+    throw new Error(
+      'Veld "pauze_mcp_sync_seconden" vereist "profile" en "search" (elk met min en max).',
+    );
+  }
   return {
     werkdagen,
     start_lokaal: tekst(raw, 'start_lokaal'),
@@ -176,6 +196,16 @@ function parseTijdvenster(raw: unknown): Tijdvenster {
     pauze_tussen_acties_minuten: {
       min: positiefGetal(pauze, 'min'),
       max: positiefGetal(pauze, 'max'),
+    },
+    pauze_mcp_sync_seconden: {
+      profile: {
+        min: positiefGetal(syncProfile, 'min'),
+        max: positiefGetal(syncProfile, 'max'),
+      },
+      search: {
+        min: positiefGetal(syncSearch, 'min'),
+        max: positiefGetal(syncSearch, 'max'),
+      },
     },
     tijdzone_standaard: tekst(raw, 'tijdzone_standaard'),
   };

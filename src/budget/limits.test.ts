@@ -14,6 +14,10 @@ describe('laadLimieten', () => {
     assert.deepEqual(limieten.tijdvenster.werkdagen, [1, 2, 3, 4, 5]);
     assert.equal(limieten.tijdvenster.start_lokaal, '08:30');
     assert.equal(limieten.tijdvenster.einde_lokaal, '17:30');
+    assert.equal(limieten.tijdvenster.pauze_mcp_sync_seconden.profile.min, 30);
+    assert.equal(limieten.tijdvenster.pauze_mcp_sync_seconden.profile.max, 90);
+    assert.equal(limieten.tijdvenster.pauze_mcp_sync_seconden.search.min, 120);
+    assert.equal(limieten.tijdvenster.pauze_mcp_sync_seconden.search.max, 480);
     assert.equal(limieten.unipile_usage_signaal.afremmen_bij_percentage, 75);
 
     for (const abonnement of [
@@ -44,6 +48,10 @@ describe('limietenUitObject', () => {
         start_lokaal: '08:30',
         einde_lokaal: '17:30',
         pauze_tussen_acties_minuten: { min: 2, max: 8 },
+        pauze_mcp_sync_seconden: {
+          profile: { min: 30, max: 90 },
+          search: { min: 120, max: 480 },
+        },
         tijdzone_standaard: 'Europe/Amsterdam',
       },
       unipile_usage_signaal: { afremmen_bij_percentage: 75, nieuwe_factor_bij_afremmen: 0.5 },
@@ -102,6 +110,10 @@ function basisConfig(): Record<string, Record<string, unknown>> & {
       start_lokaal: '08:30',
       einde_lokaal: '17:30',
       pauze_tussen_acties_minuten: { min: 2, max: 8 },
+      pauze_mcp_sync_seconden: {
+        profile: { min: 30, max: 90 },
+        search: { min: 120, max: 480 },
+      },
       tijdzone_standaard: 'Europe/Amsterdam',
     },
     unipile_usage_signaal: {

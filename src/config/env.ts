@@ -6,6 +6,7 @@ export interface Env {
   unipileApiKey: string;
   webhookSecret: string;
   mcpToken: string;
+  adminPasswordHash: string;
   databaseUrl: string;
   port: number;
   logLevel: LogLevel;
@@ -31,6 +32,7 @@ export function leesEnv(bron: Bron = process.env): Env {
     unipileApiKey: verplicht(bron, 'UNIPILE_API_KEY'),
     webhookSecret: verplicht(bron, 'WEBHOOK_SECRET'),
     mcpToken: verplicht(bron, 'MCP_TOKEN'),
+    adminPasswordHash: verplicht(bron, 'ADMIN_PASSWORD_HASH'),
     databaseUrl: verplicht(bron, 'DATABASE_URL'),
     port: leesPoort(bron, 'PORT', 3000),
     logLevel: leesLijst(bron, 'LOG_LEVEL', LOG_LEVELS, 'info'),

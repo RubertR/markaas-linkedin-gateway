@@ -23,6 +23,11 @@
     "start_lokaal": "08:30",
     "einde_lokaal": "17:30",
     "pauze_tussen_acties_minuten": { "min": 2, "max": 8 },
+    "pauze_mcp_sync_seconden": {
+      "$toelichting": "Pauze tussen opeenvolgende synchrone MCP-aanroepen van hetzelfde type op hetzelfde account (SPEC §7). Zoekopdrachten zijn zwaarder dan profielbezoeken.",
+      "profile": { "min": 30, "max": 90 },
+      "search": { "min": 120, "max": 480 }
+    },
     "tijdzone_standaard": "Europe/Amsterdam"
   },
 
