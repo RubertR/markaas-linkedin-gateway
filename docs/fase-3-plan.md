@@ -136,7 +136,8 @@ rooktest door Rubert op een lokale draai met `npm run admin:hash` +
 Doel: eenvoudige sequentie verzoek → geaccepteerd → bericht → opvolging; stopt
 bij een reactie (SPEC §2). Datamodel staat al (`sequences`-tabel uit migratie
 `0001_init.sql`); kolommen voor leaddata, teksten en koppeling aan `actions`
-staan in migratie `0002_sequences.sql` (nog niet uitgevoerd op Supabase).
+staan in migratie `0002_sequences.sql` (op 1 okt 2026 uitgevoerd op Supabase,
+na akkoord van Rubert).
 
 **Harde grenzen:**
 
@@ -231,7 +232,8 @@ sequenties echt op zijn account draaien gedurende de drie-weken-proef (SPEC
   `NODE_ENV=production`, `PLANNER_ENABLED=false`, optioneel
   `TIMEZONE_DEFAULT`, `LOG_LEVEL`, `PUBLIC_BASE_URL`. (Een apart
   sessie-geheim is niet nodig: sessies staan in het geheugen.)
-- Migratie `0002_sequences.sql` op Supabase, na akkoord.
+- ~~Migratie `0002_sequences.sql` op Supabase, na akkoord.~~ Uitgevoerd op
+  1 okt 2026; dry-run daarna: geen openstaande migraties.
 - Startcommando: `npm start`.
 - Domein instellen (bijv. `gateway.markaas.nl`), DNS via Railway.
 - Supabase-netwerkregel: alleen Railway-egress-IP's toelaten als

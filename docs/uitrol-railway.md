@@ -22,11 +22,11 @@ planner in een aparte stap aan.
 
 ## Vooraf
 
-1. **Migratie 0002.** De sequentie-code verwacht de kolommen uit
-   `db/migrations/0002_sequences.sql`. Die migratie is nog niet op Supabase uitgevoerd.
-   Doe dat vóór of direct na de eerste uitrol, met een bewuste beslissing:
-   eerst `npm run migrate -- --dry-run`, daarna `npm run migrate`. Zonder deze migratie
-   starten `/health` en `/admin` wel, maar mislukken sequentie-acties.
+1. **Migraties.** De database moet bij zijn. Migratie `0002_sequences.sql` is op
+   1 oktober 2026 op Supabase uitgevoerd; `npm run migrate -- --dry-run` meldde daarna
+   "Geen openstaande migraties". Controleer dit vóór elke uitrol opnieuw met dezelfde
+   dry-run. Komt er een nieuwe migratie bij, voer die dan pas na een bewuste beslissing
+   uit met `npm run migrate`.
 2. **Wachtwoord-hash.** Maak lokaal een hash met `npm run admin:hash` en houd de regel
    bij de hand. Kies hiervoor een ander wachtwoord dan voor je lokale demo.
 3. **Productie-sleutels.** Gebruik de API-sleutel van de Unipile-app voor productie
