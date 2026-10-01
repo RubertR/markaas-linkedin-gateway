@@ -11,7 +11,7 @@ de SPEC aan (met Rubert) en dan de code.
 2. **Alle Unipile-aanroepen alleen in `src/unipile/`.** Andere modules importeren de client
    daarvandaan.
 3. **Geen echte accounts in tests.** Tests gebruiken `test/fake-unipile/`. Handmatige proeven
-   alleen op Ruberts eigen account in de ontwikkel-app van Unipile.
+   alleen op Ruberts eigen account, met het ontwikkel-token van Unipile.
 4. **Geen geheimen in de repo.** API-sleutels, DSN's en webhook-secrets komen uit `.env`
    (zie `.env.example`). Nooit loggen.
 5. **Geen cookies of wachtwoorden opslaan.** Unipile beheert de sessies.
@@ -37,9 +37,10 @@ de SPEC aan (met Rubert) en dan de code.
 
 ## Omgevingen
 
-| Omgeving | Unipile-app | Accounts |
+| Omgeving | Unipile-toegang | Accounts |
 | --- | --- | --- |
-| ontwikkeling | `markaas-dev` | alleen Rubert |
-| productie | `markaas-prod` | klantaccounts |
+| ontwikkeling | eigen Access Token (lokale `.env`) | alleen Rubert |
+| productie | eigen Access Token met lange geldigheid (bijv. `gateway-railway`) | klantaccounts |
 
-Aparte API-sleutels per omgeving.
+Unipile v1 kent geen aparte apps: beide omgevingen gebruiken dezelfde DSN. Het onderscheid zit
+in een eigen Access Token per omgeving, zodat je er één apart kunt intrekken of vervangen.
