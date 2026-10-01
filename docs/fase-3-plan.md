@@ -203,17 +203,36 @@ sequenties echt op zijn account draaien gedurende de drie-weken-proef (SPEC
 - Observability: minimaal gestructureerde logs plus de events-tabel. Geen
   nieuwe tooling tot er een concreet gemis is.
 
-**Checklist (geen testdoelen; dit zijn uitrolstappen):**
+**Deel A — code klaar voor Railway (afgerond 1 okt 2026, nog niets uitgerold):**
 
-- Railway-project aanmaken, regio `europe-west4` (of ander EU), service
-  gekoppeld aan de repo.
-- Secrets zetten: `UNIPILE_DSN`, `UNIPILE_API_KEY`, `WEBHOOK_SECRET`,
-  `DATABASE_URL`, `MCP_TOKEN`, `APPROVAL_PASSWORD_HASH`,
-  `APPROVAL_SESSION_SECRET`, `TIMEZONE_DEFAULT=Europe/Amsterdam`,
-  `NODE_ENV=production`, `LOG_LEVEL=info`.
-- Startcommando: `node --import tsx src/main.ts` (nog aan te maken in ronde
-  1 of ronde 4; voorkeur: ronde 1 zodat lokaal draaien hetzelfde pad gebruikt
-  als productie).
+- `npm start` (`src/main.ts`): één proces met de hono-server (`/health`,
+  `/webhooks/*`, `/mcp`, `/admin/*`) en de planner-lus (`src/queue/lus.ts`).
+  De lus draait alleen bij `PLANNER_ENABLED=true` (standaard uit), tickt op
+  willekeurige momenten (`tijdvenster.pauze_tussen_acties_minuten`) en alleen
+  binnen werkdagen/werktijd; per tick eerst de sequentie-tick, dan de planner.
+  Bij een geweigerde gateway-sleutel stopt de lus tot een herstart.
+- `GET /health`: altijd 200 met versie en `database.bereikbaar`; geen
+  geheimen of accountgegevens.
+- `NODE_ENV=production`: cookies `Secure`, client-IP uit Railway's
+  proxy-headers (laatste `X-Forwarded-For`-item); poort uit `PORT`.
+- Variabelencontrole bij het starten: één NL-foutregel per ontbrekende of
+  ongeldige variabele, nooit waarden.
+- JSON-logging (`src/log/logger.ts`) met afscherming op veldnaam én op
+  bekende geheime waarden.
+- Webhooks zijn nu gekoppeld aan de sequentie-motor (`sequentieHook`).
+- Stappenplan voor Rubert: [docs/uitrol-railway.md](uitrol-railway.md).
+
+**Checklist deel B (geen testdoelen; dit zijn uitrolstappen):**
+
+- Railway-project aanmaken, regio EU West (Amsterdam, `europe-west4`),
+  service gekoppeld aan de repo.
+- Variabelen zetten: `UNIPILE_DSN`, `UNIPILE_API_KEY`, `WEBHOOK_SECRET`,
+  `DATABASE_URL`, `MCP_TOKEN`, `ADMIN_PASSWORD_HASH`,
+  `NODE_ENV=production`, `PLANNER_ENABLED=false`, optioneel
+  `TIMEZONE_DEFAULT`, `LOG_LEVEL`, `PUBLIC_BASE_URL`. (Een apart
+  sessie-geheim is niet nodig: sessies staan in het geheugen.)
+- Migratie `0002_sequences.sql` op Supabase, na akkoord.
+- Startcommando: `npm start`.
 - Domein instellen (bijv. `gateway.markaas.nl`), DNS via Railway.
 - Supabase-netwerkregel: alleen Railway-egress-IP's toelaten als
   Supabase dat ondersteunt zonder stabiel-IP-abonnement; anders

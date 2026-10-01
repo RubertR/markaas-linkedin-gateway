@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { leesEnv } from './env.ts';
+import { EnvFout, VERPLICHTE_VARIABELEN, leesEnv } from './env.ts';
 
 const volledig = {
   UNIPILE_DSN: 'api68.unipile.com:19841',
@@ -110,5 +110,68 @@ describe('leesEnv', () => {
         return true;
       },
     );
+  });
+
+  it('noemt elke ontbrekende verplichte variabele apart, zonder waarden', () => {
+    assert.throws(
+      () => leesEnv({ UNIPILE_DSN: 'api68.unipile.com:19841', MCP_TOKEN: 'mcp-geheim-123' }),
+      (err: unknown) => {
+        assert.ok(err instanceof EnvFout);
+        const ontbrekend = VERPLICHTE_VARIABELEN.filter(
+          (n) => n !== 'UNIPILE_DSN' && n !== 'MCP_TOKEN',
+        );
+        assert.equal(err.meldingen.length, ontbrekend.length);
+        for (const naam of ontbrekend) {
+          assert.ok(
+            err.meldingen.some((m) => m.includes(naam) && /ontbreekt/.test(m)),
+            `melding voor ${naam} ontbreekt`,
+          );
+        }
+        assert.doesNotMatch(err.message, /mcp-geheim-123|api68/);
+        return true;
+      },
+    );
+  });
+
+  it('meldt ontbrekende variabelen en ongeldige waarden samen', () => {
+    const { DATABASE_URL: _weg, ...zonder } = volledig;
+    assert.throws(
+      () => leesEnv({ ...zonder, PLANNER_ENABLED: 'ja' }),
+      (err: unknown) => {
+        assert.ok(err instanceof EnvFout);
+        assert.equal(err.meldingen.length, 2);
+        assert.match(err.message, /DATABASE_URL/);
+        assert.match(err.message, /PLANNER_ENABLED/);
+        return true;
+      },
+    );
+  });
+
+  it('zet de planner standaard uit', () => {
+    assert.equal(leesEnv(volledig).plannerEnabled, false);
+    assert.equal(leesEnv({ ...volledig, PLANNER_ENABLED: '' }).plannerEnabled, false);
+    assert.equal(leesEnv({ ...volledig, PLANNER_ENABLED: 'false' }).plannerEnabled, false);
+  });
+
+  it('zet de planner alleen aan met PLANNER_ENABLED=true', () => {
+    assert.equal(leesEnv({ ...volledig, PLANNER_ENABLED: 'true' }).plannerEnabled, true);
+    assert.throws(() => leesEnv({ ...volledig, PLANNER_ENABLED: '1' }), /PLANNER_ENABLED/);
+  });
+
+  it('bepaalt de publieke basis-URL uit PUBLIC_BASE_URL, Railway of localhost', () => {
+    assert.equal(leesEnv(volledig).publicBaseUrl, 'http://localhost:3000');
+    assert.equal(
+      leesEnv({ ...volledig, RAILWAY_PUBLIC_DOMAIN: 'gw.up.railway.app' }).publicBaseUrl,
+      'https://gw.up.railway.app',
+    );
+    assert.equal(
+      leesEnv({
+        ...volledig,
+        RAILWAY_PUBLIC_DOMAIN: 'gw.up.railway.app',
+        PUBLIC_BASE_URL: 'https://gateway.markaas.nl/',
+      }).publicBaseUrl,
+      'https://gateway.markaas.nl',
+    );
+    assert.throws(() => leesEnv({ ...volledig, PUBLIC_BASE_URL: 'geen url' }), /PUBLIC_BASE_URL/);
   });
 });

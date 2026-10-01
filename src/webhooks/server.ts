@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 
 import type { Backend } from '../db/backend.ts';
 import { verwerkKoppelCallback, type KoppelflowOpties } from '../register/koppelflow.ts';
+import type { SequentieHookDeps } from '../sequences/hooks.ts';
 import type { UnipileClient } from '../unipile/client.ts';
 
 import { WEBHOOK_SECRET_HEADER, vergelijkGeheim } from './geheim.ts';
@@ -12,6 +13,8 @@ export interface WebhookDeps {
   unipile: UnipileClient;
   webhookSecret: string;
   koppelOpties: KoppelflowOpties;
+  /** Koppelt new_relation/message_received aan de sequentie-motor (SPEC §8a). */
+  sequentieHook?: SequentieHookDeps;
 }
 
 const WEIGER_TEKST = 'Webhook geweigerd: geheim ontbreekt of klopt niet.';
@@ -42,6 +45,7 @@ export function maakWebhookApp(deps: WebhookDeps) {
       deps.unipile,
       deps.koppelOpties,
       payload as Record<string, unknown>,
+      deps.sequentieHook,
     );
     return c.json(uitkomst, 200);
   });

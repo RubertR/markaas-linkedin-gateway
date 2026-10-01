@@ -26,9 +26,14 @@ Geteste Unipile-endpoints staan in `docs/unipile-notities.md`.
 | [docs/fase-2-plan.md](docs/fase-2-plan.md) | Afgerond — kernbouw, test-eerst per onderdeel |
 | [docs/fase-3-plan.md](docs/fase-3-plan.md) | Lopend — MCP-server, goedkeuringspagina, sequenties, uitrol Railway |
 | [docs/limieten.md](docs/limieten.md) | Werknormen per account en actie |
+| [docs/uitrol-railway.md](docs/uitrol-railway.md) | Stappenplan voor de uitrol op Railway (EU West) |
 
 ## Scripts
 
+- `npm start` — start de gateway (hono-server met `/health`, `/webhooks/*`,
+  `/mcp`, `/admin/*`, plus de planner-lus als `PLANNER_ENABLED=true`). Dit is
+  het startcommando op Railway; zie [docs/uitrol-railway.md](docs/uitrol-railway.md).
+- `npm run dev` — hetzelfde, maar leest lokaal `.env`.
 - `npm test` — alle tests tegen PGlite.
 - `npm run typecheck` — `tsc --noEmit`.
 - `npm run db:check` — alleen-lezen verbindingstest tegen Supabase.

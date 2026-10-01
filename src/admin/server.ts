@@ -2,6 +2,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 
 import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
+import { getConnInfo } from '@hono/node-server/conninfo';
 
 import type { Klok } from '../budget/klok.ts';
 import type { Limieten } from '../budget/limits.ts';
@@ -47,6 +48,12 @@ export interface AdminDeps {
   klok: Klok;
   wachtwoordHash: string;
   cookieSecure: boolean;
+  /**
+   * Vertrouw `X-Forwarded-For`/`X-Real-IP` voor het client-IP (brute-force-
+   * blokkade). Alleen aanzetten achter een proxy die deze headers zelf zet,
+   * zoals Railway in productie. Standaard `true` (gedrag van ronde 2).
+   */
+  vertrouwProxy?: boolean;
   /** Standaard: in-memory stores. Tests kunnen eigen instances meegeven. */
   sessies?: SessieStore;
   pogingen?: PogingenTracker;
@@ -68,7 +75,7 @@ export function maakAdminApp(deps: AdminDeps) {
   });
 
   app.post('/admin/login', async (c) => {
-    const sleutel = clientSleutel(c);
+    const sleutel = clientSleutel(c, deps.vertrouwProxy ?? true);
     if (pogingen.isGeblokkeerd(sleutel)) {
       const csrf = krijgOfMaakPreCsrf(c, deps);
       c.status(429);
@@ -257,15 +264,29 @@ export function maakAdminApp(deps: AdminDeps) {
 
 // -- hulpjes ---------------------------------------------------------------
 
-function clientSleutel(c: AdminContext): string {
-  // Op Railway en achter proxies vul X-Forwarded-For in; valt dat weg, dan
-  // vallen we terug op "onbekend" — brute-force-blokkade werkt dan nog steeds
-  // als globale rem (één gebruiker).
-  return (
-    c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ??
-    c.req.header('x-real-ip')?.trim() ??
-    'onbekend'
-  );
+function clientSleutel(c: AdminContext, vertrouwProxy: boolean): string {
+  if (vertrouwProxy) {
+    // Railway's edge-proxy voegt het echte client-IP achteraan `X-Forwarded-For`
+    // toe; eerdere items kan de client zelf meesturen. Daarom het laatste item.
+    const doorgestuurd = c.req
+      .header('x-forwarded-for')
+      ?.split(',')
+      .map((d) => d.trim())
+      .filter((d) => d !== '');
+    const laatste = doorgestuurd?.[doorgestuurd.length - 1];
+    if (laatste) return laatste;
+    const echt = c.req.header('x-real-ip')?.trim();
+    if (echt) return echt;
+  } else {
+    try {
+      const adres = getConnInfo(c).remote.address;
+      if (adres) return adres;
+    } catch {
+      /* geen Node-socket (bijv. app.request in tests) */
+    }
+  }
+  // Valt alles weg, dan werkt de blokkade nog als globale rem (één gebruiker).
+  return 'onbekend';
 }
 
 function krijgOfMaakPreCsrf(c: AdminContext, deps: AdminDeps): string {
