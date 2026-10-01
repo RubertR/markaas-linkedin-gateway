@@ -10,7 +10,9 @@
   "scripts": {
     "test": "node --import tsx --test 'src/**/*.test.ts' 'test/**/*.test.ts'",
     "test:watch": "node --import tsx --test --watch 'src/**/*.test.ts' 'test/**/*.test.ts'",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
+    "db:check": "node --env-file-if-exists=.env --import tsx scripts/db-check.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.2.14",
