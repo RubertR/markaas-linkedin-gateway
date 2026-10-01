@@ -29,9 +29,12 @@ planner in een aparte stap aan.
    uit met `npm run migrate`.
 2. **Wachtwoord-hash.** Maak lokaal een hash met `npm run admin:hash` en houd de regel
    bij de hand. Kies hiervoor een ander wachtwoord dan voor je lokale demo.
-3. **Productie-sleutels.** Gebruik de API-sleutel van de Unipile-app voor productie
-   (`markaas-prod`) en een **nieuw** `WEBHOOK_SECRET` en `MCP_TOKEN`, niet de waarden
-   uit je lokale `.env`. Een sterk geheim maak je bijvoorbeeld met
+3. **Productie-sleutels.** Unipile v1 kent geen aparte apps: productie gebruikt
+   **dezelfde DSN** als ontwikkeling. Maak in het Unipile-dashboard wel een **eigen
+   Access Token** voor de gateway, met een lange geldigheid en een herkenbare naam
+   (bijv. `gateway-railway`). Gebruik dus niet het token uit je lokale `.env`; dan kun je
+   het productie-token apart intrekken of vervangen. Maak daarnaast een **nieuw**
+   `WEBHOOK_SECRET` en `MCP_TOKEN`. Een sterk geheim maak je bijvoorbeeld met
    `openssl rand -base64 32`.
 4. **Databaseverbinding.** Gebruik de URL van de Supabase **Session pooler** (poort 5432),
    dezelfde soort als lokaal voor `npm run db:check`. De directe verbinding werkt alleen
@@ -61,8 +64,8 @@ waarden uit "Vooraf".
 
 | Variabele | Verplicht | Wat erin hoort |
 | --- | --- | --- |
-| `UNIPILE_DSN` | ja | DSN van de Unipile-app `markaas-prod` (host:poort) |
-| `UNIPILE_API_KEY` | ja | API-sleutel van `markaas-prod` |
+| `UNIPILE_DSN` | ja | Dezelfde Unipile-DSN als bij ontwikkeling (host:poort) |
+| `UNIPILE_API_KEY` | ja | Het eigen Access Token voor de gateway (bijv. `gateway-railway`), lange geldigheid |
 | `WEBHOOK_SECRET` | ja | Nieuw geheim voor de Unipile-webhooks |
 | `MCP_TOKEN` | ja | Nieuw bearer-token voor de skills |
 | `ADMIN_PASSWORD_HASH` | ja | De regel uit `npm run admin:hash` (alleen het deel na `=`) |
