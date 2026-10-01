@@ -251,3 +251,6 @@ welke sequentie het verzoek komt zonder in de database te duiken.
 - ~~Supabase als database, of een beheerde Postgres bij de host?~~ Beslist in fase 2:
   **Supabase, Frankfurt (`eu-central-1`)**.
 - Unipile-API-versie: de proefomgeving (30 sep 2026) is **v1** (DSN `api68.unipile.com:19841`, account-ID's zonder `acc_`). Vaststellen of v1 de basis blijft of dat we naar v2 migreren.
+- Apart Unipile-account voor productie vóór fase 4? Nu delen ontwikkeling en productie
+  één Unipile-account en DSN, en verschillen ze alleen in hun Access Token. Besluiten
+  voordat de eerste klantaccounts overgaan.
