@@ -1,0 +1,202 @@
+# Fase 3 — Eigen proef (plan)
+
+Versie 0.1 · 1 oktober 2026 · eigenaar: Rubert Rietkerk.
+
+Doel van fase 3 (SPEC §10): MCP-server, goedkeuringspagina en sequenties staan;
+drie weken op Ruberts eigen account op halve normen zonder waarschuwing van
+LinkedIn of Unipile. Poort naar fase 4 is dezelfde drie weken foutloos achter de
+rug — pas dan gaan klanten over.
+
+Werkwijze: zoals SPEC §10 en CLAUDE.md voorschrijven, **eerst de SPEC, dan de
+code**. Elk onderdeel start met tests (inclusief foutpaden 429, `CREDENTIALS`,
+time-out). Geen echte LinkedIn- of Unipile-aanroepen uit de rondes zelf — tests
+blijven tegen `test/fake-unipile/`. Handmatige proeven op Ruberts account
+blijven voorbehouden aan Rubert zelf, los van deze rondes.
+
+## Rondes
+
+### Ronde 1 — MCP-server (`src/mcp/`)
+
+Doel: een Streamable-HTTP-MCP-endpoint op `/mcp` binnen de bestaande hono-server
+met de zeven tools uit SPEC §7. Niets meer, niets minder.
+
+**Harde grenzen** (hergezegd vanuit SPEC §7 en §12):
+
+- Geen tool kan een actie goedkeuren, afwijzen, op `approved` zetten of direct
+  verzenden. `queue_action` plaatst de actie uitsluitend als `draft`.
+- Alleen de zeven tools zijn beschikbaar: `list_accounts`, `account_health`,
+  `get_budget`, `search_people`, `get_profile`, `queue_action`, `get_results`.
+  Een vrije HTTP-pass-through of een "test-tool" is uitgesloten.
+- `search_people` en `get_profile` lopen via de budgetmotor en wachtrij —
+  nooit rechtstreeks naar Unipile. Overschrijding → NL-foutmelding met oorzaak
+  en vervolgstap uit de bestaande `beoordeel`-helper.
+- Transport: Streamable HTTP, beveiligd met een bearer-token uit `MCP_TOKEN`
+  (`.env.example` bijgewerkt, waarde nooit gelogd, vergelijking via
+  `timingSafeEqual` net als bij `WEBHOOK_SECRET`). Zonder of met fout token: 401.
+
+**Tests-first (SPEC §10):**
+
+- Geen enkele tool kan een actie goedkeuren of verzenden (gecontroleerd per
+  tool: `queue_action` schrijft `status='draft'`, alle andere tools roeren
+  `goedgekeurd_door`/`goedgekeurd_op` niet aan).
+- Verzoek zonder bearer-token → 401, geen tool-aanroep uitgevoerd.
+- Verzoek met fout bearer-token → 401, body-vorm identiek aan het geval
+  zonder token (constante tijd, geen informatielek).
+- `search_people` en `get_profile` die de budgetmotor "weigering" of "wachtrij"
+  teruggeven → NL-foutmelding richting skill met reden en vervolgstap.
+- Fake-Unipile `429` tijdens `get_profile` → budgetmotor zet account in
+  afkoeling, tool-respons bevat de NL-tekst, actie belandt in `events`.
+- `queue_action` zonder goedkeuring in de payload → actie `draft`; met een
+  `approved: true`-poging in de payload → 400 met NL-tekst (de MCP accepteert
+  dat veld bewust niet).
+
+**Omvang:**
+
+- `src/mcp/server.ts` — hono-handler op `/mcp` die MCP-protocolberichten
+  pareert, de token controleert en de tool-dispatcher aanroept.
+- `src/mcp/tools.ts` — zeven tool-implementaties, pure functies die de
+  bestaande helpers aanroepen (`src/register/`, `src/queue/`, `src/budget/`,
+  `src/unipile/`).
+- `src/mcp/schema.ts` — JSON-schema's per tool (invoer en uitvoer), zodat de
+  skills tegen een duidelijk contract draaien.
+- `.env.example` krijgt `MCP_TOKEN=`; `src/config/env.ts` valideert hem als
+  verplicht.
+
+Poort naar ronde 2: alle tests groen, inclusief de 401-paden en de drie
+budget-foutpaden. Handmatige rooktest op Ruberts account **buiten de code**: één
+`get_profile` op Rubert zelf via de MCP, met akkoord vooraf.
+
+### Ronde 2 — Goedkeuringspagina (`src/approval/`)
+
+Doel: een kleine webpagina binnen dezelfde hono-server waarmee Rubert `draft`-
+en `onzeker`-acties kan inzien, goedkeuren, afwijzen of opnieuw plannen. Geen
+MCP-tool, geen publieke API.
+
+**Harde grenzen:**
+
+- Login verplicht; alleen Rubert komt binnen. Simpelste vorm: één
+  gebruiker, wachtwoord-hash in env (`APPROVAL_PASSWORD_HASH`), sessie-cookie
+  met HttpOnly + Secure + SameSite=Strict. Geen tweede gebruiker in v1.
+- De pagina schrijft via `keurActieGoed`, `zetActieStatus` uit
+  `src/queue/acties.ts`. Geen directe UPDATE's op `actions`.
+- Alleen actiegegevens die bij de accounts van Rubert horen zijn zichtbaar; de
+  pagina sluit uit dat per ongeluk klantdata buiten de scope getoond wordt
+  (relevant zodra fase 4 start).
+
+**Tests-first:**
+
+- Niet-ingelogde GET → redirect naar `/login`.
+- Verkeerd wachtwoord → geen sessie, melding "Onjuist wachtwoord", geen leak
+  wie wél bestaat.
+- Goedkeuren van een `draft`-actie zet `status='approved'`,
+  `goedgekeurd_door='rubert'`, `goedgekeurd_op=now()`.
+- Afwijzen zet `status='rejected'` met reden uit het formulier.
+- Opnieuw plannen van een `onzeker`-actie zet `status='approved'` en
+  `gepland_op`-waarde uit het formulier.
+- CSRF-token verplicht op mutaties; ontbreken → 403.
+
+**Omvang:**
+
+- `src/approval/server.ts` — hono-routes `/approval/*`.
+- `src/approval/views/` — kleine server-rendered HTML (geen SPA), met
+  minimale CSS. Geen frameworks; blijft binnen "geen frameworks die we niet
+  nodig hebben" (CLAUDE.md).
+- `.env.example` krijgt `APPROVAL_PASSWORD_HASH=` en
+  `APPROVAL_SESSION_SECRET=`.
+
+Poort naar ronde 3: alle tests groen, Rubert kan handmatig één
+`draft`-actie goedkeuren via de pagina (op lokale draai, nog niet in productie).
+
+### Ronde 3 — Sequenties (`src/sequences/`)
+
+Doel: eenvoudige sequentie verzoek → geaccepteerd → bericht → opvolging; stopt
+bij een reactie (SPEC §2). Datamodel staat al (`sequences`-tabel uit migratie
+`0001_init.sql`).
+
+**Harde grenzen:**
+
+- Een sequentie plaatst zélf nooit een actie met status `approved`. Elke
+  stap die een `invite`/`message`/`inmail` nodig heeft, komt als `draft` in de
+  wachtrij — pas na goedkeuring via ronde 2 loopt hij door.
+- Sequenties reageren op webhooks via de bestaande events-tabel: `new_relation`
+  → één stap verder; `message_received` (`is_sender=false`) → status `reactie`
+  en sequentie stopt.
+- Ontdubbeling blijft bij de bestaande webhook-helpers; sequenties lezen
+  alleen eigen state.
+
+**Tests-first:**
+
+- Start sequentie voor een lead: maakt rij in `sequences` met `stap=0`,
+  `status='lopend'`, een eerste `draft`-invite in `actions`, geen approved.
+- `new_relation` voor die lead → `stap=1`, nieuwe `draft`-message, geen
+  approved. Als er geen openstaande sequentie is → sequentie wordt niet
+  gestart (webhook blijft "voor onderzoek").
+- `message_received` (reactie) → `status='reactie'`, geen nieuwe actie meer
+  gegenereerd.
+- Dubbele `new_relation` binnen tien minuten → één stap verder, niet twee
+  (ontdubbeling via events-tabel).
+- Sequentie waarvan het account `CREDENTIALS` krijgt → geen nieuwe acties
+  tot het account weer `OK` of `RECONNECTED` is.
+
+**Omvang:**
+
+- `src/sequences/motor.ts` — pure stap-logica.
+- `src/sequences/hooks.ts` — koppelt zich aan de bestaande webhook-flow en
+  aan de planner-tick (voor opvolging op tijd).
+- Tests tegen PGlite + fake-Unipile; geen echte accounts.
+
+Poort naar ronde 4: alle tests groen, planner-tick kiest de volgende stap van
+een sequentie correct per account, en Rubert heeft handmatig één sequentie
+doorlopen op zijn eigen account via de goedkeuringspagina.
+
+### Ronde 4 — Uitrol op Railway
+
+Doel: de gateway live krijgen op Railway in de EU-regio zodat Ruberts
+sequenties echt op zijn account draaien gedurende de drie-weken-proef (SPEC
+§10). **Deze ronde start pas na expliciet akkoord van Rubert.**
+
+**Harde grenzen:**
+
+- Alleen Ruberts account draait live. Geen klantaccounts in deze fase.
+- Database blijft Supabase (Frankfurt, `eu-central-1`). Geen tweede database.
+- Secrets gaan in Railway's secret store; `.env` blijft lokaal. Geen secrets
+  in de repo, geen secrets in logs (geldt al, hier bevestigd).
+- Observability: minimaal gestructureerde logs plus de events-tabel. Geen
+  nieuwe tooling tot er een concreet gemis is.
+
+**Checklist (geen testdoelen; dit zijn uitrolstappen):**
+
+- Railway-project aanmaken, regio `europe-west4` (of ander EU), service
+  gekoppeld aan de repo.
+- Secrets zetten: `UNIPILE_DSN`, `UNIPILE_API_KEY`, `WEBHOOK_SECRET`,
+  `DATABASE_URL`, `MCP_TOKEN`, `APPROVAL_PASSWORD_HASH`,
+  `APPROVAL_SESSION_SECRET`, `TIMEZONE_DEFAULT=Europe/Amsterdam`,
+  `NODE_ENV=production`, `LOG_LEVEL=info`.
+- Startcommando: `node --import tsx src/main.ts` (nog aan te maken in ronde
+  1 of ronde 4; voorkeur: ronde 1 zodat lokaal draaien hetzelfde pad gebruikt
+  als productie).
+- Domein instellen (bijv. `gateway.markaas.nl`), DNS via Railway.
+- Supabase-netwerkregel: alleen Railway-egress-IP's toelaten als
+  Supabase dat ondersteunt zonder stabiel-IP-abonnement; anders
+  SSL-only + sterke `DATABASE_URL` als enige poort.
+- Unipile-webhook-URL's omzetten van ontwikkel- naar productie-endpoint.
+- Eén handmatige rooktest per endpoint (webhook, MCP, goedkeuringspagina),
+  door Rubert, voordat sequenties worden geactiveerd.
+
+Poort naar fase 4 (SPEC §10): drie weken op halve normen zonder waarschuwing
+van LinkedIn of Unipile — pas dan gaan de eerste klantaccounts over
+(IPknowledge, Aqua, ICT Media, TAG).
+
+## Beslissingen vastgelegd
+
+- MCP-tools goedkeuren of versturen niet. Goedkeuring loopt uitsluitend via de
+  goedkeuringspagina (SPEC §7, §12).
+- Hosting: Railway, EU-regio (SPEC §13).
+- Uitrol is een aparte ronde met akkoord vooraf (ronde 4).
+
+## Open punten
+
+- Exacte Railway-regio: `europe-west4` of `europe-west1`. Keuze bij ronde 4.
+- Observability-niveau in productie: minimaal nu, uitbreiden op signaal.
+- Pipedrive-koppeling: valt buiten fase 3; eerste prototype pas als sequenties
+  stabiel lopen.

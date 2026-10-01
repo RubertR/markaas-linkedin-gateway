@@ -95,10 +95,38 @@ verzoeken ≥ 30%; maximaal 1.0.
 | `get_budget` | Resterend budget per actie, vandaag en deze week | nee |
 | `search_people` | LinkedIn- of Sales Navigator-zoekopdracht | ja |
 | `get_profile` | Eén profiel | ja |
-| `queue_action` | Verzoek, bericht of InMail als **concept** | ja, bij uitvoering |
+| `queue_action` | Verzoek, bericht of InMail als **concept** (status `draft`) | ja, bij uitvoering |
 | `get_results` | Status van acties, acceptaties, reacties | nee |
 
-Er is **geen** tool die direct verstuurt of een vrije API-aanroep doet.
+Er is **geen** tool die direct verstuurt of een vrije API-aanroep doet. Er is ook **geen**
+MCP-tool die een actie kan goedkeuren, afwijzen of op `approved` zetten; `queue_action`
+plaatst de actie uitsluitend als `draft` in de wachtrij. Goedkeuring loopt uitsluitend via
+de goedkeuringspagina van de gateway (zie §12).
+
+De MCP-server luistert via Streamable HTTP op `/mcp` binnen de bestaande HTTP-server en is
+beveiligd met een bearer-token (`MCP_TOKEN` uit `.env`, in constante tijd vergeleken,
+nooit gelogd). Verzoeken zonder of met een fout token krijgen HTTP 401.
+
+## 12. Goedkeuring en bediening
+
+Goedkeuren, afwijzen en opnieuw plannen van `invite`-, `message`- en `inmail`-acties
+gebeurt uitsluitend via de **goedkeuringspagina van de gateway** zelf. Deze pagina:
+
+- is onderdeel van dezelfde HTTP-server als de webhooks en de MCP-server;
+- heeft een eigen login (alleen Rubert) en is niet via de MCP bereikbaar;
+- schrijft rechtstreeks in de `actions`-tabel (`status = 'approved'`, `goedgekeurd_door`
+  en `goedgekeurd_op`) via de bestaande helpers in `src/queue/acties.ts`.
+
+Skills zien goedgekeurde acties alleen terug via `get_results`; ze kunnen zelf niets
+goedkeuren of versturen.
+
+## 13. Hosting
+
+De gateway draait op **Railway** in de EU-regio (bij voorkeur `europe-west4`), zodat alle
+verwerking van zakelijke profieldata binnen de EU blijft (SPEC §9). De uitrol — eerste
+deploy, DNS, secrets instellen in Railway — is een **aparte stap** die pas start na
+expliciet akkoord van Rubert en wordt uitgevoerd in ronde 4 van fase 3 (zie
+`docs/fase-3-plan.md`).
 
 ## 8. Webhooks van Unipile
 
@@ -131,6 +159,7 @@ momenten.
 
 ## 11. Open vragen
 
-- Hosting: Railway of Fly.io (EU)? Keuze in fase 2.
-- Supabase als database, of een beheerde Postgres bij de host?
+- ~~Hosting: Railway of Fly.io (EU)?~~ Beslist: **Railway, EU-regio** (zie §13).
+- ~~Supabase als database, of een beheerde Postgres bij de host?~~ Beslist in fase 2:
+  **Supabase, Frankfurt (`eu-central-1`)**.
 - Unipile-API-versie: de proefomgeving (30 sep 2026) is **v1** (DSN `api68.unipile.com:19841`, account-ID's zonder `acc_`). Vaststellen of v1 de basis blijft of dat we naar v2 migreren.

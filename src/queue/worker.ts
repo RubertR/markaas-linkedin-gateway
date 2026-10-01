@@ -212,9 +212,23 @@ async function voerType(
       return { response: { ...antwoord } };
     }
     case 'search': {
-      throw new Error(
-        'Zoekopdrachten (search) worden pas in fase 3 via de wachtrij uitgevoerd; nu nog niet ondersteund.',
-      );
+      const p = actie.payload as {
+        api?: 'classic' | 'sales_navigator';
+        category?: 'people' | 'companies';
+        keywords?: string;
+        limit?: number;
+        cursor?: string;
+        filters?: Record<string, unknown>;
+      };
+      const zoekArgs: Parameters<UnipileClient['zoekPersonen']>[0] = { accountId: uid };
+      if (p.api !== undefined) zoekArgs.api = p.api;
+      if (p.category !== undefined) zoekArgs.category = p.category;
+      if (p.keywords !== undefined) zoekArgs.keywords = p.keywords;
+      if (p.limit !== undefined) zoekArgs.limit = p.limit;
+      if (p.cursor !== undefined) zoekArgs.cursor = p.cursor;
+      if (p.filters !== undefined) zoekArgs.filters = p.filters;
+      const antwoord = await ctx.unipile.zoekPersonen(zoekArgs);
+      return { response: { ...antwoord } };
     }
   }
 }

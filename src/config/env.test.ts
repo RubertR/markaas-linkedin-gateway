@@ -7,6 +7,7 @@ const volledig = {
   UNIPILE_DSN: 'api68.unipile.com:19841',
   UNIPILE_API_KEY: 'geheime-sleutel-abc',
   WEBHOOK_SECRET: 'webhook-geheim-xyz',
+  MCP_TOKEN: 'mcp-geheim-123',
   DATABASE_URL: 'postgres://user:pass@host:5432/db',
 };
 
@@ -16,7 +17,29 @@ describe('leesEnv', () => {
     assert.equal(env.unipileDsn, 'api68.unipile.com:19841');
     assert.equal(env.unipileApiKey, 'geheime-sleutel-abc');
     assert.equal(env.webhookSecret, 'webhook-geheim-xyz');
+    assert.equal(env.mcpToken, 'mcp-geheim-123');
     assert.equal(env.databaseUrl, 'postgres://user:pass@host:5432/db');
+  });
+
+  it('eist een MCP_TOKEN en noemt de naam in de fout', () => {
+    const { MCP_TOKEN: _weg, ...zonder } = volledig;
+    assert.throws(
+      () => leesEnv(zonder),
+      (err: Error) => {
+        assert.match(err.message, /MCP_TOKEN/);
+        assert.match(err.message, /ontbreek/i);
+        return true;
+      },
+    );
+  });
+
+  it('lekt de MCP_TOKEN niet in een foutmelding', () => {
+    try {
+      leesEnv({ ...volledig, DATABASE_URL: '' });
+      assert.fail('leesEnv had moeten falen bij een lege DATABASE_URL');
+    } catch (err) {
+      assert.doesNotMatch((err as Error).message, /mcp-geheim-123/);
+    }
   });
 
   it('vult standaardwaarden in voor optionele velden', () => {

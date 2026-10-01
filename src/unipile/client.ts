@@ -50,6 +50,29 @@ export type UnipileProfiel = Record<string, unknown> & {
   public_identifier?: string;
 };
 
+export type ZoekApi = 'classic' | 'sales_navigator';
+export type ZoekCategorie = 'people' | 'companies';
+
+export interface ZoekAanvraag {
+  accountId: string;
+  api?: ZoekApi;
+  category?: ZoekCategorie;
+  keywords?: string;
+  limit?: number;
+  cursor?: string;
+  /**
+   * Overige LinkedIn- of Sales-Navigator-filters zoals `company_location`,
+   * `industry`, `function`, `seniority`. Zie docs/unipile-notities.md §Zoeken.
+   */
+  filters?: Record<string, unknown>;
+}
+
+export interface ZoekResultaat {
+  items: Array<Record<string, unknown>>;
+  pagingTotalCount?: number;
+  cursor?: string;
+}
+
 export interface InviteAanvraag {
   accountId: string;
   providerId: string;
@@ -95,6 +118,7 @@ export interface UnipileClient {
   haalAccounts(): Promise<UnipileAccount[]>;
   maakKoppellink(aanvraag: KoppellinkAanvraag): Promise<Koppellink>;
   haalProfiel(aanvraag: ProfielAanvraag): Promise<UnipileProfiel>;
+  zoekPersonen(aanvraag: ZoekAanvraag): Promise<ZoekResultaat>;
   stuurInvite(aanvraag: InviteAanvraag): Promise<InviteAntwoord>;
   stuurBericht(aanvraag: BerichtAanvraag): Promise<BerichtAntwoord>;
   startGesprek(aanvraag: GesprekAanvraag): Promise<GesprekAntwoord>;
@@ -247,6 +271,29 @@ export function maakUnipileClient(opties: UnipileOpties): UnipileClient {
         delete profiel['birthdate'];
       }
       return profiel;
+    },
+
+    async zoekPersonen(aanvraag) {
+      const query = new URLSearchParams({ account_id: aanvraag.accountId });
+      if (aanvraag.limit !== undefined) query.set('limit', String(aanvraag.limit));
+      if (aanvraag.cursor !== undefined) query.set('cursor', aanvraag.cursor);
+      const pad = `/api/v1/linkedin/search?${query.toString()}`;
+      const body: Record<string, unknown> = {
+        api: aanvraag.api ?? 'classic',
+        category: aanvraag.category ?? 'people',
+        ...(aanvraag.filters ?? {}),
+      };
+      if (aanvraag.keywords !== undefined) body['keywords'] = aanvraag.keywords;
+      const res = await verzoek('POST', pad, { json: body });
+      const parsed = await ontleed<{
+        items?: Array<Record<string, unknown>>;
+        paging?: { total_count?: number };
+        cursor?: string;
+      }>(res, pad, { accountId: aanvraag.accountId });
+      const uit: ZoekResultaat = { items: parsed.items ?? [] };
+      if (parsed.paging?.total_count !== undefined) uit.pagingTotalCount = parsed.paging.total_count;
+      if (parsed.cursor !== undefined) uit.cursor = parsed.cursor;
+      return uit;
     },
 
     async stuurInvite(aanvraag) {

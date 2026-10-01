@@ -378,15 +378,23 @@ describe('worker — profile', () => {
   });
 });
 
-describe('worker — search (nog niet in fase 2)', () => {
-  it('zet actie op "failed" met NL-tekst dat search in fase 3 landt', async () => {
+describe('worker — search (fase 3)', () => {
+  it('voert een zoekopdracht uit via Unipile en bewaart items in de response', async () => {
+    fake.antwoord('POST', '/api/v1/linkedin/search', {
+      status: 200,
+      body: {
+        items: [{ id: 'ACo-1', public_identifier: 'persoon-1' }],
+        paging: { total_count: 1 },
+      },
+    });
     const actie = await maakReservedeActie({
       type: 'search',
-      payload: { keywords: 'ceo' },
+      payload: { keywords: 'ceo', api: 'sales_navigator', limit: 10 },
     });
     const uitkomst = await voerActieUit(basisContext(), actie);
-    assert.equal(uitkomst.status, 'failed');
-    assert.match(uitkomst.reden!, /search|zoek|fase/i);
+    assert.equal(uitkomst.status, 'done');
+    const items = (uitkomst.response as { items?: unknown[] })?.items ?? [];
+    assert.equal(items.length, 1);
   });
 });
 
