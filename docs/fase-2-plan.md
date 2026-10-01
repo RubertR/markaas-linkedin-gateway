@@ -1,6 +1,11 @@
 # Fase 2 — Kern bouwen (plan)
 
-Versie 0.1 · 30 september 2026 · eigenaar: Rubert Rietkerk.
+Versie 0.2 · 1 oktober 2026 · eigenaar: Rubert Rietkerk.
+
+**Status: afgerond op 1 oktober 2026.** 248 tests groen op `node --test` tegen
+`test/fake-unipile/` en PGlite. Migratie `0001_init.sql` toegepast op Supabase
+Frankfurt (`eu-central-1`, project `uujvmoqsalpgshptiljy`); zeven tabellen plus
+`schema_migrations` staan live. Volgende fase: zie SPEC §10, "3 Eigen proef".
 
 Doel van fase 2 (SPEC §10): register, koppelflow, webhooks, budgetmotor en wachtrij
 staan; alle tests (inclusief 429 en `CREDENTIALS`) draaien groen tegen `test/fake-unipile/`.
@@ -8,7 +13,7 @@ Nog geen MCP-server, geen sequenties, geen echte Unipile-aanroepen buiten fase 1
 
 Poort naar fase 3: `npm test` (of `npm test`) groen op een schone checkout, migratie
 `0001_init.sql` schoon uitvoerbaar tegen een lege Postgres, en de fake-Unipile dekt de
-foutpaden 429, `CREDENTIALS` en time-out per actietype.
+foutpaden 429, `CREDENTIALS` en time-out per actietype. **Alle drie behaald.**
 
 ## 1. Projectopzet
 
@@ -366,15 +371,15 @@ tests injecteren de fake, dev/prod injecteren `UNIPILE_DSN` via env.
 
 ## 5. Volgorde van werk en poorten
 
-1. Projectopzet + `0001_init.sql` — poort: `npm test` draait (leeg), migratie schoon op
-   een verse PGlite-instantie in een test.
-2. `src/config` + `src/db` + `src/unipile` (skeleton met fake) — poort: unit tests voor
-   env-lezing en Unipile-client-retry groen.
-3. Register en koppelflow — poort: alle §3.1-tests groen.
-4. Webhooks — poort: alle §3.2-tests groen, inclusief ontdubbeling.
-5. Budgetmotor — poort: alle §3.3-tests groen, inclusief zomer-/wintertijd en 429.
-6. Wachtrij — poort: alle §3.4-tests groen; end-to-end-test die een `invite` uit `draft`
-   → `approved` → `queued` → `done` brengt via fake-Unipile.
+- [x] Projectopzet + `0001_init.sql` — `npm test` draait, migratie schoon op PGlite.
+- [x] `src/config` + `src/db` + `src/unipile` (skeleton met fake) — env- en client-retry-tests groen.
+- [x] Register en koppelflow — §3.1-tests groen.
+- [x] Webhooks — §3.2-tests groen, inclusief ontdubbeling.
+- [x] Budgetmotor — §3.3-tests groen, inclusief zomer-/wintertijd en 429.
+- [x] Wachtrij — §3.4-tests groen; end-to-end-test `invite` van `draft` → `done` via fake-Unipile.
+- [x] Correctie: time-out op verzend-acties → status `onzeker` (apart commit, zie git log).
+- [x] Supabase aangesloten: `postgresBackend`, `npm run db:check`, `npm run migrate --dry-run`,
+  `npm run migrate`. Migratie `0001_init.sql` toegepast op 1 okt 2026.
 
 Daarna: overgang naar fase 3 (MCP-server + sequenties). Dat valt **buiten** deze fase.
 
@@ -383,17 +388,27 @@ Daarna: overgang naar fase 3 (MCP-server + sequenties). Dat valt **buiten** deze
 Vastgesteld bij akkoord op dit plan (30 sep 2026):
 
 - **Database**: Supabase, Frankfurt (`eu-central-1`), project-ref `uujvmoqsalpgshptiljy`.
-  Migraties alleen na expliciet akkoord per migratie uitvoeren.
+  Migraties alleen na expliciet akkoord per migratie uitvoeren. Verbinding via de
+  Session pooler (poort 5432), SSL verplicht. `DATABASE_URL` komt uit `.env` en wordt
+  nooit gelogd (ook niet in foutmeldingen).
 - **Tests**: PGlite (`@electric-sql/pglite`); geen Docker, geen lokale Postgres nodig.
+  Tests draaien **nooit** tegen Supabase.
 - **HTTP-server**: `hono` met `@hono/node-server`.
 - **Testframework**: `node:test` + `tsx`.
 - **`salesnav_advanced`**: gelijk aan `salesnav_core` totdat aparte werknormen bekend zijn.
 
-Nog open:
+Open punten voor fase 3:
 
-- **Hosting**: Railway of Fly.io — beslissing pas nodig bij deployment (fase 3).
-- **API-versie**: v1 blijft basis in fase 2; v2-migratie apart traject.
-
-Volgorde na akkoord: `package.json` + `tsconfig` + scripts → `src/config/env.ts` +
-`db/migrations/0001_init.sql` + PGlite-testhelper → `test/fake-unipile/`-skeleton →
-tests-first per onderdeel in de volgorde van §5.
+- **Hosting**: Railway of Fly.io — beslissen vóór deployment.
+- **API-versie**: v1 blijft basis; v2-migratie apart traject plannen.
+- **MCP-server**: ontwerp en implementatie van de tools uit SPEC §7
+  (`list_accounts`, `account_health`, `get_budget`, `search_people`, `get_profile`,
+  `queue_action`, `get_results`).
+- **Sequenties**: verzoek → geaccepteerd → bericht → opvolging; stopt bij reactie.
+  Datamodel staat al (tabel `sequences`), logica nog niet.
+- **Secrets-beheer in productie**: `.env` is lokaal; voor productie een secret store
+  bij de gekozen host (fase 4).
+- **Observability**: minimaal gestructureerde logs plus een manier om webhook-events
+  terug te zien zonder bij Unipile in te loggen.
+- **`salesnav_advanced`-werknormen**: aparte limieten vaststellen zodra Sales Navigator
+  Advanced-abonnementen in gebruik komen.
