@@ -170,6 +170,31 @@ describe('planner — kiest oudste approved actie per account', () => {
     const resultaat = await voerPlannerTickUit(basisContext());
     assert.equal(resultaat.verwerkt, 0);
   });
+
+  it('overslaat acties met status "onzeker" (vereisen handmatige verificatie)', async () => {
+    fake.antwoord('POST', '/api/v1/users/invite', () => ({
+      status: 200,
+      body: { object: 'UserInvitationSent', invitation_id: `inv-${Math.random()}` },
+    }));
+    const onzeker = await maakActie(db, {
+      accountId,
+      type: 'invite',
+      payload: { providerId: 'ACo-onzeker' },
+    });
+    await db.query(
+      `update actions set status = 'onzeker'::action_status,
+                          reden = 'Time-out: mogelijk verzonden...'
+       where id = $1`,
+      [onzeker.id],
+    );
+    // Een gewone approved actie ernaast — die moet wél opgepakt worden.
+    const normaal = await maakGoedgekeurdeInvite({ accountId, providerId: 'ACo-ok' });
+
+    const resultaat = await voerPlannerTickUit(basisContext());
+    assert.equal(resultaat.verwerkt, 1);
+    assert.equal(resultaat.details[0]?.actieId, normaal.id);
+    assert.equal((await vindActie(db, onzeker.id))?.status, 'onzeker');
+  });
 });
 
 describe('planner — budget', () => {

@@ -35,7 +35,8 @@ create type action_status as enum (
   'running',
   'done',
   'failed',
-  'rejected'
+  'rejected',
+  'onzeker'
 );
 
 create type sequence_status as enum (

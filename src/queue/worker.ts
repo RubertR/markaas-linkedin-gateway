@@ -34,9 +34,14 @@ import {
  * - UnipileGatewayAuthFout (401/403) → signaal `gatewayAuthFout: true` zodat
  *   de planner alles stopt; account blijft ongewijzigd (het is onze API-sleutel).
  * - Overige 422 → `failed` (permanent, NL-reden).
- * - Timeout → `queued`, opnieuw inplannen over 5 minuten; geen dubbele verzending
- *   doordat de reservering (en usage-telling) al in de budgetmotor-transactie
- *   is gedaan.
+ * - Timeout bij `invite`/`message`/`inmail` → status `onzeker`: LinkedIn
+ *   kan het verzoek wél hebben verstuurd; automatisch opnieuw proberen
+ *   zou dubbele verzending naar dezelfde persoon betekenen. Een event
+ *   komt in de events-tabel zodat Rubert handmatig in LinkedIn kan
+ *   controleren en de actie op `done` of opnieuw `approved` zet. Budget
+ *   blijft verbruikt.
+ * - Timeout bij `search`/`profile` → `queued` + 5 minuten; herhaaldelijk
+ *   lezen is onschadelijk.
  * - Succes → `done`, antwoord in `unipile_response`; Unipile-usage-signaal
  *   ≥ 75% verlaagt opbouw_factor en vraagt de planner dit actietype vandaag
  *   te stoppen.
@@ -56,7 +61,7 @@ export interface WorkerContext {
 }
 
 export interface WorkerUitkomst {
-  status: Extract<ActieStatus, 'done' | 'failed' | 'queued'>;
+  status: Extract<ActieStatus, 'done' | 'failed' | 'queued' | 'onzeker'>;
   reden: string | null;
   response?: Record<string, unknown>;
   usageSignaalPercentage?: number;
@@ -68,6 +73,14 @@ export interface WorkerUitkomst {
 }
 
 const UITVOER_TIME_OUT_HERPLANNING_SECONDEN = 300;
+
+/**
+ * Actietypes die iets naar een persoon versturen. Bij een time-out op deze
+ * types weten we niet of LinkedIn het verzoek wél of niet heeft ontvangen;
+ * automatisch opnieuw sturen zou dubbele uitnodigingen of berichten
+ * veroorzaken.
+ */
+const VERZEND_TYPES: ReadonlySet<Actie['type']> = new Set(['invite', 'message', 'inmail']);
 
 const PERMANENTE_422: ReadonlySet<Unipile422Code> = new Set([
   'already_invited_recently',
@@ -243,10 +256,17 @@ async function verwerkFout(
   }
 
   if (err instanceof UnipileTimeoutFout) {
+    if (VERZEND_TYPES.has(actie.type)) {
+      const reden =
+        'Time-out: mogelijk verzonden. Controleer in LinkedIn en zet handmatig op done of opnieuw approved.';
+      await persisteer(ctx.db, actie.id, 'onzeker', { reden });
+      await bewaarOnzekerEvent(ctx.db, actie, reden, ctx.klok.nu());
+      return { status: 'onzeker', reden };
+    }
     const nu = ctx.klok.nu();
     const geplandOp = new Date(nu.getTime() + UITVOER_TIME_OUT_HERPLANNING_SECONDEN * 1000);
     const reden =
-      'Unipile niet bereikbaar binnen de time-out; actie opnieuw inplannen over 5 minuten (geen dubbele verzending).';
+      'Unipile niet bereikbaar binnen de time-out; actie opnieuw inplannen over 5 minuten (herhaaldelijk lezen is onschadelijk).';
     await persisteer(ctx.db, actie.id, 'queued', { reden, geplandOp });
     return { status: 'queued', reden };
   }
@@ -296,4 +316,36 @@ async function persisteer(
   },
 ): Promise<void> {
   await zetActieStatus(db, actieId, status, opties);
+}
+
+/**
+ * Legt een `actie_onzeker`-event vast zodat Rubert in de events-tabel ziet
+ * welke acties handmatige controle in LinkedIn nodig hebben. Dedup per
+ * actie-id: één event per onzeker-overgang.
+ */
+async function bewaarOnzekerEvent(
+  db: Backend,
+  actie: Actie,
+  reden: string,
+  nu: Date,
+): Promise<void> {
+  const externId = `actie_onzeker:${actie.id}`;
+  const payload = {
+    actie_id: actie.id,
+    account_id: actie.accountId,
+    type: actie.type,
+    reden,
+    ontvangen_op: nu.toISOString(),
+  };
+  try {
+    await db.query(
+      `insert into events(bron, type, extern_id, account_id, payload)
+       values ('gateway', 'actie_onzeker', $1, $2, $3::jsonb)`,
+      [externId, actie.accountId, JSON.stringify(payload)],
+    );
+  } catch (err) {
+    const bericht = (err as Error)?.message ?? '';
+    if (/duplicate|unique/i.test(bericht)) return;
+    throw err;
+  }
 }

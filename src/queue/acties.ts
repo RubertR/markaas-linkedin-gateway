@@ -8,7 +8,8 @@ export type ActieStatus =
   | 'running'
   | 'done'
   | 'failed'
-  | 'rejected';
+  | 'rejected'
+  | 'onzeker';
 
 export interface Actie {
   id: string;
@@ -135,7 +136,7 @@ export async function keurActieGoed(
          goedgekeurd_door = $2,
          goedgekeurd_op = $3
      where id = $1
-       and status in ('draft'::action_status, 'queued'::action_status)
+       and status in ('draft'::action_status, 'queued'::action_status, 'onzeker'::action_status)
      returning ${KOLOMMEN}`,
     [actieId, door, nu.toISOString()],
   );

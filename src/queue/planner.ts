@@ -42,7 +42,7 @@ export interface PlannerContext {
   reconnectHook?: (accountId: string) => Promise<void>;
 }
 
-export type PlannerDetailStatus = 'done' | 'failed' | 'queued' | 'rejected';
+export type PlannerDetailStatus = 'done' | 'failed' | 'queued' | 'rejected' | 'onzeker';
 
 export interface PlannerDetail {
   actieId: string;

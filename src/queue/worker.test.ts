@@ -175,7 +175,7 @@ describe('worker — invite (foutpaden)', () => {
     assert.equal(account?.afkoelingTot, null);
   });
 
-  it('timeout → actie "queued" met geplandOp ~ nu+5min', async () => {
+  it('timeout bij invite → actie "onzeker" (nooit automatisch opnieuw) en event voor Rubert', async () => {
     fake.antwoord('POST', '/api/v1/users/invite', {
       status: 200,
       delayMs: 400,
@@ -187,12 +187,82 @@ describe('worker — invite (foutpaden)', () => {
       payload: { providerId: 'ACo-4' },
     });
     const uitkomst = await voerActieUit(basisContext({ klok: vasteKlok(nu) }), actie);
+    assert.equal(uitkomst.status, 'onzeker');
+    assert.match(uitkomst.reden!, /time-?out.*mogelijk verzonden.*LinkedIn/i);
+    const na = await vindActie(db, actie.id);
+    assert.equal(na?.status, 'onzeker');
+    // Geplande herhaling is uit — alleen handmatige actie van Rubert kan dit verder brengen.
+    assert.equal(na?.geplandOp, null);
+
+    const events = await db.query<{ type: string; payload: unknown }>(
+      "select type, payload from events where type = 'actie_onzeker'",
+    );
+    assert.equal(events.length, 1);
+    const payload = events[0]!.payload as { actie_id: string; reden: string; type: string };
+    assert.equal(payload.actie_id, actie.id);
+    assert.equal(payload.type, 'invite');
+    assert.match(payload.reden, /mogelijk verzonden/i);
+  });
+
+  it('timeout bij message → actie "onzeker"', async () => {
+    fake.antwoord('POST', /^\/api\/v1\/chats\/[^/]+\/messages$/, {
+      status: 200,
+      delayMs: 400,
+      body: { object: 'MessageSent', message_id: 'nooit' },
+    });
+    const actie = await maakReservedeActie({
+      type: 'message',
+      payload: { chatId: 'chat-1', tekst: 'Hoi!' },
+    });
+    const uitkomst = await voerActieUit(basisContext(), actie);
+    assert.equal(uitkomst.status, 'onzeker');
+    const events = await db.query<{ type: string }>(
+      "select type from events where type = 'actie_onzeker'",
+    );
+    assert.equal(events.length, 1);
+  });
+
+  it('timeout bij inmail → actie "onzeker"', async () => {
+    fake.antwoord('POST', '/api/v1/chats', {
+      status: 200,
+      delayMs: 400,
+      body: { object: 'ChatStarted', chat_id: 'nooit', message_id: 'nooit' },
+    });
+    const actie = await maakReservedeActie({
+      type: 'inmail',
+      payload: {
+        attendeesIds: ['ACw-1'],
+        tekst: 'Hoi!',
+        linkedinApi: 'sales_navigator',
+      },
+    });
+    const uitkomst = await voerActieUit(basisContext(), actie);
+    assert.equal(uitkomst.status, 'onzeker');
+  });
+
+  it('timeout bij profile → actie "queued" (lezen mag opnieuw)', async () => {
+    fake.antwoord('GET', /^\/api\/v1\/users\//, {
+      status: 200,
+      delayMs: 400,
+      body: { provider_id: 'ACo-9' },
+    });
+    const nu = new Date('2026-10-06T10:00:00Z');
+    const actie = await maakReservedeActie({
+      type: 'profile',
+      payload: { identifier: 'john' },
+    });
+    const uitkomst = await voerActieUit(basisContext({ klok: vasteKlok(nu) }), actie);
     assert.equal(uitkomst.status, 'queued');
     assert.match(uitkomst.reden!, /time-?out|niet bereikbaar|5 minuten/i);
     const na = await vindActie(db, actie.id);
     assert.ok(na?.geplandOp);
     const verschilSec = (na!.geplandOp!.getTime() - nu.getTime()) / 1000;
     assert.ok(verschilSec >= 290 && verschilSec <= 310);
+    // Geen event: alleen voor onzeker-overgang.
+    const events = await db.query<{ aantal: string }>(
+      "select count(*)::text as aantal from events where type = 'actie_onzeker'",
+    );
+    assert.equal(events[0]?.aantal, '0');
   });
 
   it('account-credentials-fout → account naar CREDENTIALS en reconnectHook aangeroepen', async () => {
