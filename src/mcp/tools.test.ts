@@ -41,6 +41,7 @@ after(async () => {
 beforeEach(async () => {
   await db.query('delete from usage');
   await db.query('delete from actions');
+  await db.query('delete from sequences');
   await db.query('delete from events');
   await db.query('delete from accounts');
   await db.query('delete from clients');
@@ -394,6 +395,77 @@ describe('search_people', () => {
   });
 });
 
+describe('start_sequence', () => {
+  function basisArgs(overschrijf: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      accountId,
+      lead: {
+        providerId: 'ACo-sv',
+        naam: 'Sven',
+        functie: 'CTO',
+        bedrijf: 'Flux',
+        linkedinUrl: 'https://www.linkedin.com/in/sven/',
+        waarom: 'Lead uit zoekactie "logistiek" (score 0.82).',
+      },
+      teksten: {
+        invite: 'Hoi Sven, zullen we even sparren?',
+        bericht: 'Dag Sven, dank voor de connectie!',
+        opvolging: 'Hoi Sven, nog even een korte reminder.',
+      },
+      ...overschrijf,
+    };
+  }
+
+  it('maakt een draft-invite aan en geeft het sequentie-id terug', async () => {
+    const resultaat = (await voerTool(deps, 'start_sequence', basisArgs())) as {
+      sequentieId: string;
+      status: string;
+      invite: { actieId: string; status: string };
+      bericht: string;
+    };
+    assert.ok(resultaat.sequentieId);
+    assert.equal(resultaat.status, 'lopend');
+    assert.equal(resultaat.invite.status, 'draft');
+    assert.match(resultaat.bericht, /goedkeuringspagina/i);
+
+    const actie = await vindActie(db, resultaat.invite.actieId);
+    assert.equal(actie?.type, 'invite');
+    assert.equal(actie?.status, 'draft');
+    assert.equal(actie?.goedgekeurdDoor, null);
+    const payload = actie?.payload as Record<string, unknown>;
+    assert.equal(payload['sequence_id'], resultaat.sequentieId);
+    assert.equal(payload['sequence_stap'], 1);
+  });
+
+  it('weigert een lead-url die geen linkedin.com is', async () => {
+    const args = basisArgs();
+    const lead = args['lead'] as Record<string, unknown>;
+    lead['linkedinUrl'] = 'https://acme.nl/sven';
+    await assert.rejects(
+      () => voerTool(deps, 'start_sequence', args),
+      /linkedin\.com/i,
+    );
+  });
+
+  it('weigert een tweede sequentie voor dezelfde lead op hetzelfde account', async () => {
+    await voerTool(deps, 'start_sequence', basisArgs());
+    await assert.rejects(
+      () => voerTool(deps, 'start_sequence', basisArgs()),
+      /Er loopt al een sequentie/,
+    );
+  });
+
+  it('weigert een invite-tekst boven de maximum-tekenlimiet', async () => {
+    const lang = 'x'.repeat(limieten.tekst_max_tekens.invite + 1);
+    const args = basisArgs();
+    (args['teksten'] as Record<string, unknown>)['invite'] = lang;
+    await assert.rejects(
+      () => voerTool(deps, 'start_sequence', args),
+      /invite.*tekens/,
+    );
+  });
+});
+
 describe('get_results', () => {
   it('geeft recente acties en events voor een account', async () => {
     fake.antwoord('GET', /\/api\/v1\/users\/./, {
@@ -408,10 +480,47 @@ describe('get_results', () => {
     });
     const res = (await voerTool(deps, 'get_results', { accountId })) as {
       acties: Array<Record<string, unknown>>;
+      sequenties: Array<Record<string, unknown>>;
     };
     assert.equal(res.acties.length, 2);
     const draft = res.acties.find((a) => a['status'] === 'draft');
     assert.ok(draft, 'queue_action moet een draft opleveren in get_results');
     assert.equal(draft!['goedgekeurdDoor'], null);
+    assert.deepEqual(res.sequenties, []);
+  });
+
+  it('toont lopende sequenties met stap, status en laatste gebeurtenis', async () => {
+    await voerTool(deps, 'start_sequence', {
+      accountId,
+      lead: {
+        providerId: 'ACo-sv',
+        naam: 'Sven',
+        functie: 'CTO',
+        bedrijf: 'Flux',
+        linkedinUrl: 'https://www.linkedin.com/in/sven/',
+        waarom: 'Lead uit zoekactie',
+      },
+      teksten: {
+        invite: 'Hoi Sven',
+        bericht: 'Dank Sven',
+        opvolging: 'Reminder',
+      },
+    });
+    const res = (await voerTool(deps, 'get_results', { accountId })) as {
+      sequenties: Array<Record<string, unknown>>;
+      acties: Array<Record<string, unknown>>;
+    };
+    assert.equal(res.sequenties.length, 1);
+    assert.equal(res.sequenties[0]!['stap'], 0);
+    assert.equal(res.sequenties[0]!['status'], 'lopend');
+    const laatste = res.sequenties[0]!['laatsteGebeurtenis'] as Record<string, unknown>;
+    assert.equal(laatste['stap'], 1);
+    assert.equal(laatste['type'], 'invite');
+    assert.equal(laatste['status'], 'draft');
+
+    const actie = res.acties[0]!;
+    assert.ok(actie['sequentieId']);
+    assert.equal(actie['sequentieStap'], 1);
+    assert.ok(actie['sequentieGestartOp']);
   });
 });

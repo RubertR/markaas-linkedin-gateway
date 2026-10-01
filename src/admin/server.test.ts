@@ -37,6 +37,7 @@ after(async () => {
 beforeEach(async () => {
   await db.query('delete from usage');
   await db.query('delete from actions');
+  await db.query('delete from sequences');
   await db.query('delete from events');
   await db.query('delete from accounts');
   await db.query('delete from clients');
@@ -338,6 +339,28 @@ describe('overzicht', () => {
     const html = await resp.text();
     assert.match(html, /<script>[\s\S]*data-maxtekens[\s\S]*<\/script>/);
     assert.doesNotMatch(html, /\bimport\b/, 'script moet puur vanilla JS zijn');
+  });
+
+  it('toont "Stap N van 3 · sequentie gestart op …" bij een draft uit een sequentie', async () => {
+    const { startSequentie } = await import('../sequences/motor.ts');
+    await startSequentie(db, {
+      accountId,
+      lead: {
+        providerId: 'ACo-sv',
+        naam: 'Sven',
+        functie: 'CTO',
+        bedrijf: 'Flux',
+        linkedinUrl: 'https://www.linkedin.com/in/sven/',
+        waarom: 'Lead',
+      },
+      teksten: { invite: 'Hoi', bericht: 'Dank', opvolging: 'Reminder' },
+    });
+    const jar = nieuweJar();
+    await logIn(jar);
+    const resp = await get('/admin/', jar);
+    const html = await resp.text();
+    assert.match(html, /Stap 1 van 3/);
+    assert.match(html, /sequentie gestart op/i);
   });
 });
 

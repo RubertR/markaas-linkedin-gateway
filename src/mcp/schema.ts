@@ -22,6 +22,7 @@ export const TOOL_NAMEN = [
   'search_people',
   'get_profile',
   'queue_action',
+  'start_sequence',
   'get_results',
 ] as const;
 
@@ -147,6 +148,46 @@ export const TOOL_DEFINITIES: readonly ToolDefinitie[] = [
         },
       },
       required: ['accountId', 'type', 'payload'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'start_sequence',
+    description:
+      'Start een drie-staps-sequentie (verzoek → eerste bericht → opvolging) voor één lead op één account. Maakt uitsluitend het CONCEPT voor stap 1 (invite); stap 2 en 3 worden pas later door de sequentie-tick aangemaakt en lopen ook via de goedkeuringspagina. Deze tool keurt niets goed en verstuurt niets.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        accountId: { type: 'string', description: 'Interne account-id (UUID).' },
+        lead: {
+          type: 'object',
+          properties: {
+            providerId: { type: 'string', minLength: 1 },
+            naam: { type: 'string', minLength: 1 },
+            functie: { type: 'string', minLength: 1 },
+            bedrijf: { type: 'string', minLength: 1 },
+            linkedinUrl: {
+              type: 'string',
+              pattern: '^https://([a-z0-9-]+\\.)?linkedin\\.com/',
+            },
+            waarom: { type: 'string', minLength: 1 },
+          },
+          required: ['providerId', 'naam', 'functie', 'bedrijf', 'linkedinUrl', 'waarom'],
+          additionalProperties: false,
+        },
+        teksten: {
+          type: 'object',
+          description: 'Teksten voor elke stap. invite = optionele connectienotitie; bericht = eerste bericht na acceptatie; opvolging = opvolging zonder reactie.',
+          properties: {
+            invite: { type: 'string', minLength: 1 },
+            bericht: { type: 'string', minLength: 1 },
+            opvolging: { type: 'string', minLength: 1 },
+          },
+          required: ['invite', 'bericht', 'opvolging'],
+          additionalProperties: false,
+        },
+      },
+      required: ['accountId', 'lead', 'teksten'],
       additionalProperties: false,
     },
   },

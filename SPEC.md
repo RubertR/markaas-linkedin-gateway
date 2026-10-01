@@ -96,12 +96,13 @@ verzoeken ≥ 30%; maximaal 1.0.
 | `search_people` | LinkedIn- of Sales Navigator-zoekopdracht | ja |
 | `get_profile` | Eén profiel | ja |
 | `queue_action` | Verzoek, bericht of InMail als **concept** (status `draft`) | ja, bij uitvoering |
-| `get_results` | Status van acties, acceptaties, reacties | nee |
+| `start_sequence` | Start een sequentie voor één lead; maakt alleen het **concept** voor stap 1 (invite) | ja, bij uitvoering |
+| `get_results` | Status van acties, acceptaties, reacties, en lopende sequenties | nee |
 
 Er is **geen** tool die direct verstuurt of een vrije API-aanroep doet. Er is ook **geen**
 MCP-tool die een actie kan goedkeuren, afwijzen of op `approved` zetten; `queue_action`
-plaatst de actie uitsluitend als `draft` in de wachtrij. Goedkeuring loopt uitsluitend via
-de goedkeuringspagina van de gateway (zie §12).
+en `start_sequence` plaatsen hun acties uitsluitend als `draft` in de wachtrij.
+Goedkeuring loopt uitsluitend via de goedkeuringspagina van de gateway (zie §12).
 
 De MCP-server luistert via Streamable HTTP op `/mcp` binnen de bestaande HTTP-server en is
 beveiligd met een bearer-token (`MCP_TOKEN` uit `.env`, in constante tijd vergeleken,
@@ -145,6 +146,84 @@ expliciet akkoord van Rubert en wordt uitgevoerd in ronde 4 van fase 3 (zie
 
 Geen polling op vaste tijden; waar polling nodig is: enkele keren per dag op willekeurige
 momenten.
+
+## 8a. Sequenties
+
+Een sequentie is één drie-staps-traject per lead per account: **verzoek → eerste bericht
+→ opvolging**. Elke stap verschijnt als `draft` op de goedkeuringspagina; verzenden
+gebeurt pas na menselijke goedkeuring (SPEC §12). De gateway stuurt zelf niets uit en
+keurt zelf niets goed — alle harde regels uit CLAUDE.md gelden onverkort.
+
+### 8a.1 Stappen en wachttijden
+
+| Stap | Wat | Trigger / wachttijd |
+| --- | --- | --- |
+| 1 (invite) | `draft`-invite, met of zonder notitie | Meteen bij `start_sequence` |
+| 2 (eerste bericht) | `draft`-message in de bestaande chat | 1–3 werkdagen na `new_relation`, willekeurig |
+| 3 (opvolging) | `draft`-message, kortere herinnering | 5–7 werkdagen nadat stap 2 is verstuurd en zonder reactie, willekeurig |
+
+Wachttijden staan in `config/limits.json` (`sequenties.wachttijden_werkdagen`); niet
+hardcoderen. "Werkdagen" wordt bepaald in de tijdzone van het account (zelfde regels
+als §5 controle 5). Willekeurige keuze is uniform binnen de bandbreedte, met één
+`SeqPauzeKiezer` die in tests vervangen wordt door een vaste waarde.
+
+### 8a.2 Status en stoppen
+
+Status-enum (`sequence_status`, zie §4):
+
+- `lopend` — invite is `draft`/`queued`/`approved`, nog geen `new_relation` ontvangen.
+- `geaccepteerd` — `new_relation` ontvangen; wacht op (of heeft al) een `draft`-message
+  voor stap 2 of 3.
+- `reactie` — lead stuurde een bericht (`message_received`, `is_sender=false`); sequentie
+  stopt en openstaande `draft`/`queued`-stappen worden `rejected` met reden
+  "lead heeft gereageerd".
+- `gestopt` — eindigt zonder reactie. Redenen vastgelegd in `sequences.stop_reden`:
+  "verzoek niet geaccepteerd" (na 21 dagen zonder `new_relation`) of "sequentie
+  voltooid" (opvolging is verstuurd).
+- `mislukt` — gereserveerd voor onvoorziene fouten; nog niet actief gebruikt.
+
+### 8a.3 Pauze versus stoppen
+
+De sequentie **stopt** alleen bij een reactie of bij 21 dagen zonder acceptatie. Alle
+andere obstakels zijn **pauzes** die vanzelf voorbijgaan:
+
+- Account `CREDENTIALS`, `ERROR`, `STOPPED` of in afkoeling → de tick maakt geen
+  nieuwe `draft`-stap zolang de account niet weer `OK`/`RECONNECTED` is. Status
+  blijft wat hij was; wachttijden lopen door (geen inhaalslag).
+- Dubbele `new_relation` of dubbel `message_received` binnen tien minuten → de
+  bestaande events-dedup (uniek `extern_id`) telt het slechts één keer; de
+  sequentie-overgang gebeurt dus ook één keer.
+
+Verzoek intrekken is **niet** onderdeel van v1; na 21 dagen zonder acceptatie wordt
+de sequentie `gestopt` zonder een intrekactie te plannen.
+
+### 8a.4 Sequentie-tick
+
+Eén idempotente tick (`verwerkSequentieTick`) kiest per lopende sequentie welke
+volgende `draft` aan de beurt is. Bij elke tick-run:
+
+1. **21-dagen-stop** — sequenties met `status='lopend'` en `aangemaakt_op <= nu - 21d`
+   worden `gestopt` (`stop_reden = 'verzoek niet geaccepteerd'`).
+2. **Stap 2** — sequenties met `status='geaccepteerd'`, `stap = 1`, geen stap-2-actie
+   en `volgende_actie_op <= nu` → maak `draft`-message aan, zet `stap = 2`, bereken
+   `volgende_actie_op` voor stap 3 (op basis van `uitgevoerd_op`, maar bij ontbreken
+   terugvallend op "nu" zodat de tick zelfhelend is).
+3. **Stap 3** — sequenties met `stap = 2`, geen stap-3-actie, stap-2-actie is `done`,
+   `volgende_actie_op <= nu` → maak `draft`-opvolging aan, zet `stap = 3`.
+4. **Afronden** — sequenties met `stap = 3` waarvan de opvolging `done` is → status
+   `gestopt`, `stop_reden = 'sequentie voltooid'`.
+
+Account-pauze wordt per sequentie gecontroleerd (status moet `OK` of `RECONNECTED`
+zijn en `afkoeling_tot` moet voorbij zijn). De tick staat los van de bestaande
+`voerPlannerTickUit`; de planner behandelt de `approved` acties die uit de
+goedkeuringspagina rollen.
+
+### 8a.5 Koppeling met de goedkeuringspagina
+
+De `actions`-tabel krijgt in migratie `0002` twee velden: `sequence_id` (uuid) en
+`sequence_stap` (integer 1–3). De goedkeuringspagina toont bij elk concept met een
+`sequence_id` de regel "Stap N van 3 · sequentie gestart op …" zodat Rubert ziet uit
+welke sequentie het verzoek komt zonder in de database te duiken.
 
 ## 9. Niet-functionele eisen
 

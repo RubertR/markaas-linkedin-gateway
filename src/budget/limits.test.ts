@@ -22,6 +22,35 @@ describe('laadLimieten', () => {
     assert.equal(limieten.tekst_max_tekens.invite, 300);
     assert.equal(limieten.tekst_max_tekens.message, 8000);
     assert.equal(limieten.tekst_max_tekens.inmail, 2000);
+    assert.equal(
+      limieten.sequenties.wachttijden_werkdagen.eerste_bericht_na_acceptatie.min,
+      1,
+    );
+    assert.equal(
+      limieten.sequenties.wachttijden_werkdagen.eerste_bericht_na_acceptatie.max,
+      3,
+    );
+    assert.equal(
+      limieten.sequenties.wachttijden_werkdagen.opvolging_na_eerste_bericht.min,
+      5,
+    );
+    assert.equal(
+      limieten.sequenties.wachttijden_werkdagen.opvolging_na_eerste_bericht.max,
+      7,
+    );
+    assert.equal(limieten.sequenties.verzoek_vervalt_na_dagen, 21);
+    assert.equal(
+      limieten.sequenties.stop_redenen.reactie,
+      'lead heeft gereageerd',
+    );
+    assert.equal(
+      limieten.sequenties.stop_redenen.niet_geaccepteerd,
+      'verzoek niet geaccepteerd',
+    );
+    assert.equal(
+      limieten.sequenties.stop_redenen.voltooid,
+      'sequentie voltooid',
+    );
 
     for (const abonnement of [
       'free',
@@ -58,6 +87,18 @@ describe('limietenUitObject', () => {
         tijdzone_standaard: 'Europe/Amsterdam',
       },
       tekst_max_tekens: { invite: 300, message: 8000, inmail: 2000 },
+      sequenties: {
+        wachttijden_werkdagen: {
+          eerste_bericht_na_acceptatie: { min: 1, max: 3 },
+          opvolging_na_eerste_bericht: { min: 5, max: 7 },
+        },
+        verzoek_vervalt_na_dagen: 21,
+        stop_redenen: {
+          reactie: 'lead heeft gereageerd',
+          niet_geaccepteerd: 'verzoek niet geaccepteerd',
+          voltooid: 'sequentie voltooid',
+        },
+      },
       unipile_usage_signaal: { afremmen_bij_percentage: 75, nieuwe_factor_bij_afremmen: 0.5 },
       abonnementen: {
         free: {},
@@ -124,6 +165,18 @@ function basisConfig(): Record<string, Record<string, unknown>> & {
       invite: 300,
       message: 8000,
       inmail: 2000,
+    },
+    sequenties: {
+      wachttijden_werkdagen: {
+        eerste_bericht_na_acceptatie: { min: 1, max: 3 },
+        opvolging_na_eerste_bericht: { min: 5, max: 7 },
+      },
+      verzoek_vervalt_na_dagen: 21,
+      stop_redenen: {
+        reactie: 'lead heeft gereageerd',
+        niet_geaccepteerd: 'verzoek niet geaccepteerd',
+        voltooid: 'sequentie voltooid',
+      },
     },
     unipile_usage_signaal: {
       afremmen_bij_percentage: 75,

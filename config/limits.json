@@ -38,6 +38,20 @@
     "inmail": 2000
   },
 
+  "sequenties": {
+    "$toelichting": "Wachttijden en levensduur voor de drie-staps-sequentie (SPEC §8a). Werkdagen zijn gelijk aan tijdvenster.werkdagen; wachttijd wordt uniform willekeurig gekozen binnen [min, max] inclusief.",
+    "wachttijden_werkdagen": {
+      "eerste_bericht_na_acceptatie": { "min": 1, "max": 3 },
+      "opvolging_na_eerste_bericht": { "min": 5, "max": 7 }
+    },
+    "verzoek_vervalt_na_dagen": 21,
+    "stop_redenen": {
+      "reactie": "lead heeft gereageerd",
+      "niet_geaccepteerd": "verzoek niet geaccepteerd",
+      "voltooid": "sequentie voltooid"
+    }
+  },
+
   "unipile_usage_signaal": {
     "$toelichting": "Unipile geeft in het invite-antwoord soms een usage-percentage terug bij 50/75/90/95%. Bij deze drempel of hoger direct opbouw_factor omlaag.",
     "afremmen_bij_percentage": 75,

@@ -2,6 +2,7 @@ import type { Backend } from '../db/backend.ts';
 import { vindAccountBijUnipileId, werkAccountStatusBij } from '../register/accounts.ts';
 import { maakReconnectLink, type KoppelflowOpties } from '../register/koppelflow.ts';
 import { mapUnipileStatus } from '../register/status.ts';
+import { opMessageReceived, opNewRelation, type SequentieHookDeps } from '../sequences/hooks.ts';
 import type { UnipileClient } from '../unipile/client.ts';
 
 export interface UnipileWebhookPayload {
@@ -26,6 +27,7 @@ export async function verwerkUnipileWebhook(
   unipile: UnipileClient,
   koppelOpties: KoppelflowOpties,
   payload: UnipileWebhookPayload,
+  sequentieHook?: SequentieHookDeps,
 ): Promise<WebhookUitkomst> {
   const event = (payload.event ?? '').toString();
   if (!event) {
@@ -33,10 +35,10 @@ export async function verwerkUnipileWebhook(
   }
 
   if (event === 'message_received') {
-    return await verwerkMessageReceived(db, payload);
+    return await verwerkMessageReceived(db, payload, sequentieHook);
   }
   if (event === 'new_relation') {
-    return await verwerkNewRelation(db, payload);
+    return await verwerkNewRelation(db, payload, sequentieHook);
   }
 
   // Andere messaging-events (message_read, message_reaction, message_edited,
@@ -121,6 +123,7 @@ async function verwerkAccountStatus(
 async function verwerkNewRelation(
   db: Backend,
   payload: UnipileWebhookPayload,
+  sequentieHook?: SequentieHookDeps,
 ): Promise<WebhookUitkomst> {
   const unipileAccountId = payload.account_id?.toString();
   if (!unipileAccountId) {
@@ -154,12 +157,20 @@ async function verwerkNewRelation(
      where id = $1`,
     [account.id],
   );
+  if (sequentieHook) {
+    await opNewRelation(sequentieHook, {
+      unipileAccountId,
+      attendeeProviderId:
+        payload.attendee_provider_id ?? payload.sender?.attendee_provider_id,
+    });
+  }
   return { verwerkt: true };
 }
 
 async function verwerkMessageReceived(
   db: Backend,
   payload: UnipileWebhookPayload,
+  sequentieHook?: SequentieHookDeps,
 ): Promise<WebhookUitkomst> {
   if (payload.is_sender === true) {
     return {
@@ -188,6 +199,14 @@ async function verwerkMessageReceived(
   );
   if (!opgeslagen) {
     return { verwerkt: false, reden: 'Webhook is al eerder verwerkt (dubbele levering).' };
+  }
+  if (sequentieHook && account) {
+    await opMessageReceived(sequentieHook, {
+      accountIdIntern: account.id,
+      chatId,
+      senderProviderId:
+        payload.sender?.attendee_provider_id ?? payload.attendee_provider_id,
+    });
   }
   return { verwerkt: true };
 }

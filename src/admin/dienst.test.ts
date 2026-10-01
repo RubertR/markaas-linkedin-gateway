@@ -10,6 +10,7 @@ import type { Backend } from '../db/backend.ts';
 import { maakActie, vindActie } from '../queue/acties.ts';
 import { markeerAccountGekoppeld, registreerAccount } from '../register/accounts.ts';
 import { maakClient } from '../register/clients.ts';
+import { startSequentie } from '../sequences/motor.ts';
 import { verseDatabaseMetMigraties } from '../../test/helpers/pglite.ts';
 
 import {
@@ -46,6 +47,7 @@ after(async () => {
 beforeEach(async () => {
   await db.query('delete from usage');
   await db.query('delete from actions');
+  await db.query('delete from sequences');
   await db.query('delete from events');
   await db.query('delete from accounts');
   await db.query('delete from clients');
@@ -132,6 +134,32 @@ describe('lijstDrafts', () => {
     });
     const drafts = await lijstDrafts(db, { limieten, klok });
     assert.equal(drafts.length, 0);
+  });
+
+  it('toont sequentie-herkomst bij een draft die uit start_sequence komt', async () => {
+    const seq = await startSequentie(db, {
+      accountId,
+      lead: {
+        providerId: 'ACo-sv',
+        naam: 'Sven',
+        functie: 'CTO',
+        bedrijf: 'Flux',
+        linkedinUrl: 'https://www.linkedin.com/in/sven/',
+        waarom: 'Lead uit zoekactie',
+      },
+      teksten: {
+        invite: 'Hoi Sven',
+        bericht: 'Dank Sven',
+        opvolging: 'Reminder Sven',
+      },
+    });
+    const drafts = await lijstDrafts(db, { limieten, klok });
+    const d = drafts.find((x) => x.actieId === seq.invite.id)!;
+    assert.ok(d.sequentie, 'draft uit een sequentie heeft een sequentie-blok');
+    assert.equal(d.sequentie!.sequentieId, seq.sequentie.id);
+    assert.equal(d.sequentie!.stap, 1);
+    assert.equal(d.sequentie!.totaalStappen, 3);
+    assert.ok(d.sequentie!.gestartOp instanceof Date);
   });
 
   it('filtert op accountId wanneer meegegeven', async () => {

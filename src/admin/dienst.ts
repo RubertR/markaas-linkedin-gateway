@@ -41,6 +41,13 @@ export interface OntvangerWeergave {
   technischeId: string;
 }
 
+export interface SequentieHerkomst {
+  sequentieId: string;
+  stap: number;
+  totaalStappen: number;
+  gestartOp: Date;
+}
+
 export interface DraftWeergave {
   actieId: string;
   accountId: string;
@@ -54,6 +61,7 @@ export interface DraftWeergave {
   aangemaaktDoorSkill: string;
   aangemaaktOp: Date;
   budget: BudgetResterendPerType;
+  sequentie: SequentieHerkomst | null;
 }
 
 export interface OnzekerWeergave {
@@ -84,12 +92,22 @@ interface ActieRij {
   reden: string | null;
   uitgevoerd_op: string | Date | null;
   aangemaakt_op: string | Date;
+  sequence_id: string | null;
+  sequence_stap: number | null;
+  sequentie_gestart_op: string | Date | null;
 }
 
 const LIJST_KOLOMMEN = `a.id, a.account_id, acc.eigenaar_naam, c.naam as client_naam,
     acc.abonnement::text as abonnement, acc.opbouw_factor, acc.tijdzone,
     a.type::text as type, a.payload, a.status::text as status, a.reden,
-    a.uitgevoerd_op, a.aangemaakt_op`;
+    a.uitgevoerd_op, a.aangemaakt_op,
+    a.sequence_id, a.sequence_stap,
+    s.aangemaakt_op as sequentie_gestart_op`;
+
+const LIJST_FROM = `from actions a
+    join accounts acc on acc.id = a.account_id
+    join clients c on c.id = acc.client_id
+    left join sequences s on s.id = a.sequence_id`;
 
 export interface LijstDraftsOpties {
   limieten: Limieten;
@@ -102,9 +120,7 @@ export async function lijstDrafts(
   opties: LijstDraftsOpties,
 ): Promise<DraftWeergave[]> {
   const sql = `select ${LIJST_KOLOMMEN}
-    from actions a
-    join accounts acc on acc.id = a.account_id
-    join clients c on c.id = acc.client_id
+    ${LIJST_FROM}
     where a.status = 'draft'::action_status
       ${opties.accountId ? 'and a.account_id = $1' : ''}
     order by a.aangemaakt_op asc`;
@@ -136,9 +152,20 @@ export async function lijstDrafts(
         limieten: opties.limieten,
         klok: opties.klok,
       }),
+      sequentie: sequentieHerkomstUit(rij),
     });
   }
   return uit;
+}
+
+function sequentieHerkomstUit(rij: ActieRij): SequentieHerkomst | null {
+  if (!rij.sequence_id || rij.sequence_stap == null || !rij.sequentie_gestart_op) return null;
+  return {
+    sequentieId: rij.sequence_id,
+    stap: rij.sequence_stap,
+    totaalStappen: 3,
+    gestartOp: alsDatum(rij.sequentie_gestart_op),
+  };
 }
 
 export function tekenMaxVoorType(type: AdminActieType, limieten: Limieten): number {
@@ -150,9 +177,7 @@ export async function lijstOnzeker(
   opties: { accountId?: string } = {},
 ): Promise<OnzekerWeergave[]> {
   const sql = `select ${LIJST_KOLOMMEN}
-    from actions a
-    join accounts acc on acc.id = a.account_id
-    join clients c on c.id = acc.client_id
+    ${LIJST_FROM}
     where a.status = 'onzeker'::action_status
       ${opties.accountId ? 'and a.account_id = $1' : ''}
     order by a.aangemaakt_op asc`;

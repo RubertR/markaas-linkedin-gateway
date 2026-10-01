@@ -1,5 +1,10 @@
 import { formatteerAmsterdam } from './datum.ts';
-import type { DraftWeergave, OnzekerWeergave, OntvangerWeergave } from './dienst.ts';
+import type {
+  DraftWeergave,
+  OnzekerWeergave,
+  OntvangerWeergave,
+  SequentieHerkomst,
+} from './dienst.ts';
 
 /**
  * Server-rendered HTML voor de goedkeuringspagina. Geen framework, geen
@@ -52,6 +57,9 @@ main { max-width: 60rem; margin: 0 auto; }
 .waarom { background: #f0f4f8; border-left: 3px solid #0b63b7;
           padding: 0.4rem 0.6rem; margin: 0 0 0.6rem; border-radius: 3px; }
 .waarom .label { font-weight: 600; color: #0b63b7; font-size: 0.85rem; }
+.sequentie { background: #f7f0e4; border-left: 3px solid #a86b00;
+             padding: 0.3rem 0.6rem; margin: 0 0 0.6rem; border-radius: 3px;
+             font-size: 0.9rem; color: #5a3b00; }
 .teken-teller { font-size: 0.85rem; color: #555; margin: 0.2rem 0 0.4rem; }
 .teken-teller.over { color: #b23c2d; font-weight: 600; }
 button[disabled] { opacity: 0.5; cursor: not-allowed; }
@@ -168,6 +176,14 @@ function budgetTekst(d: DraftWeergave): string {
   return stukjes.join(' · ');
 }
 
+function sequentieBanner(s: SequentieHerkomst): string {
+  return `
+<div class="sequentie">
+  Stap ${h(s.stap)} van ${h(s.totaalStappen)} ·
+  sequentie gestart op ${h(formatteerAmsterdam(s.gestartOp))}
+</div>`;
+}
+
 function ontvangerBlok(o: OntvangerWeergave): string {
   return `
 <div class="ontvanger">
@@ -189,6 +205,7 @@ function draftKaart(d: DraftWeergave, csrfToken: string): string {
   return `
 <article class="actie-kaart" data-type="${h(d.type)}">
   <h3>${h(etiket(d.type))}</h3>
+  ${d.sequentie ? sequentieBanner(d.sequentie) : ''}
   ${ontvangerBlok(d.ontvanger)}
   <div class="waarom">
     <div class="label">Waarom</div>

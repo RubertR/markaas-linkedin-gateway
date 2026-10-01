@@ -131,11 +131,12 @@ Poort naar ronde 3: alle tests groen (350), typecheck schoon. Handmatige
 rooktest door Rubert op een lokale draai met `npm run admin:hash` +
 `.env` voordat ronde 3 begint.
 
-### Ronde 3 — Sequenties (`src/sequences/`)
+### Ronde 3 — Sequenties (`src/sequences/`) — afgerond 1 okt 2026
 
 Doel: eenvoudige sequentie verzoek → geaccepteerd → bericht → opvolging; stopt
 bij een reactie (SPEC §2). Datamodel staat al (`sequences`-tabel uit migratie
-`0001_init.sql`).
+`0001_init.sql`); kolommen voor leaddata, teksten en koppeling aan `actions`
+staan in migratie `0002_sequences.sql` (nog niet uitgevoerd op Supabase).
 
 **Harde grenzen:**
 
@@ -162,12 +163,26 @@ bij een reactie (SPEC §2). Datamodel staat al (`sequences`-tabel uit migratie
 - Sequentie waarvan het account `CREDENTIALS` krijgt → geen nieuwe acties
   tot het account weer `OK` of `RECONNECTED` is.
 
-**Omvang:**
+**Omvang (gerealiseerd):**
 
-- `src/sequences/motor.ts` — pure stap-logica.
-- `src/sequences/hooks.ts` — koppelt zich aan de bestaande webhook-flow en
-  aan de planner-tick (voor opvolging op tijd).
-- Tests tegen PGlite + fake-Unipile; geen echte accounts.
+- `src/sequences/motor.ts` — pure stap-logica: `startSequentie`,
+  `verwerkAcceptatie` (new_relation), `verwerkReactie` (message_received),
+  `verwerkSequentieTick` (21-dagen-verval, stap 2, stap 3, afronden).
+- `src/sequences/hooks.ts` — koppelt de motor aan de bestaande Unipile-
+  webhook-flow (`verwerkUnipileWebhook` krijgt een optionele
+  `SequentieHookDeps`).
+- `src/sequences/wachttijd.ts` — werkdagen-kiezer (vast of random) en de
+  `teltDoorWerkdagen`-helper die zaterdag/zondag overslaat in de tijdzone
+  van het account.
+- MCP-tool `start_sequence` (SPEC §7) accepteert lead + drie teksten en
+  maakt alleen stap 1 (invite) als `draft`.
+- `get_results` toont per sequentie stap, status en laatste gebeurtenis.
+- Goedkeuringspagina toont bij elke concept-actie uit een sequentie
+  "Stap N van 3 · sequentie gestart op …".
+- `scripts/dev-demo.ts` bevat één lopende sequentie zodat Rubert hem lokaal
+  op `/admin` ziet.
+- Tests tegen PGlite + fake-Unipile; geen echte accounts (401 tests groen,
+  typecheck schoon).
 
 Poort naar ronde 4: alle tests groen, planner-tick kiest de volgende stap van
 een sequentie correct per account, en Rubert heeft handmatig één sequentie

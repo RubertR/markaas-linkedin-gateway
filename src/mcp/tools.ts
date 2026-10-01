@@ -10,6 +10,12 @@ import { dagenInMaand, lokaleDag, lokaleDagen } from '../budget/tijdvenster.ts';
 import type { Backend } from '../db/backend.ts';
 import { maakActie, type ActieStatus } from '../queue/acties.ts';
 import type { PauzeKiezer } from '../queue/pauze.ts';
+import {
+  lijstActiesVoorSequentie,
+  startSequentie,
+  type Lead,
+  type SequentieTeksten,
+} from '../sequences/motor.ts';
 import type { UnipileClient } from '../unipile/client.ts';
 
 import { TOOL_NAMEN, type ToolNaam } from './schema.ts';
@@ -70,6 +76,8 @@ export async function voerTool(
       return await getProfile(deps, argumenten);
     case 'queue_action':
       return await queueAction(deps, argumenten);
+    case 'start_sequence':
+      return await startSequenceTool(deps, argumenten);
     case 'get_results':
       return await getResults(deps, argumenten);
   }
@@ -441,6 +449,75 @@ function isLinkedInUrl(url: string): boolean {
   }
 }
 
+// -- start_sequence ----------------------------------------------------------
+
+async function startSequenceTool(deps: McpToolsDeps, args: Record<string, unknown>) {
+  const accountId = vereistString(args, 'accountId');
+  const lead = args['lead'];
+  if (!isObject(lead)) {
+    throw new McpToolInvoerFout('Veld "lead" is verplicht en moet een object zijn.');
+  }
+  const teksten = args['teksten'];
+  if (!isObject(teksten)) {
+    throw new McpToolInvoerFout('Veld "teksten" is verplicht en moet een object zijn.');
+  }
+  const leadObj: Lead = {
+    providerId: vereistString(lead, 'providerId'),
+    naam: vereistString(lead, 'naam'),
+    functie: vereistString(lead, 'functie'),
+    bedrijf: vereistString(lead, 'bedrijf'),
+    linkedinUrl: vereistString(lead, 'linkedinUrl'),
+    waarom: vereistString(lead, 'waarom'),
+  };
+  if (!isLinkedInUrl(leadObj.linkedinUrl)) {
+    throw new McpToolInvoerFout(
+      `Veld "lead.linkedinUrl" moet een linkedin.com-URL zijn. Gaf: ${leadObj.linkedinUrl}`,
+    );
+  }
+  const tekstenObj: SequentieTeksten = {
+    invite: vereistString(teksten, 'invite'),
+    bericht: vereistString(teksten, 'bericht'),
+    opvolging: vereistString(teksten, 'opvolging'),
+  };
+  const inviteMax = deps.limieten.tekst_max_tekens.invite;
+  const messageMax = deps.limieten.tekst_max_tekens.message;
+  if (tekstenObj.invite.length > inviteMax) {
+    throw new McpToolInvoerFout(
+      `Veld "teksten.invite" is ${tekstenObj.invite.length} tekens; maximum is ${inviteMax}.`,
+    );
+  }
+  if (tekstenObj.bericht.length > messageMax) {
+    throw new McpToolInvoerFout(
+      `Veld "teksten.bericht" is ${tekstenObj.bericht.length} tekens; maximum is ${messageMax}.`,
+    );
+  }
+  if (tekstenObj.opvolging.length > messageMax) {
+    throw new McpToolInvoerFout(
+      `Veld "teksten.opvolging" is ${tekstenObj.opvolging.length} tekens; maximum is ${messageMax}.`,
+    );
+  }
+
+  try {
+    const uit = await startSequentie(deps.db, {
+      accountId,
+      lead: leadObj,
+      teksten: tekstenObj,
+    });
+    return {
+      sequentieId: uit.sequentie.id,
+      status: uit.sequentie.status,
+      invite: {
+        actieId: uit.invite.id,
+        status: uit.invite.status satisfies ActieStatus,
+      },
+      bericht:
+        'Sequentie gestart. Alleen stap 1 (invite) is als concept aangemaakt — stap 2 en 3 worden pas door de tick aangemaakt na acceptatie en de wachttijden uit config/limits.json. Alle stappen vereisen goedkeuring via de goedkeuringspagina.',
+    };
+  } catch (err) {
+    throw new McpToolInvoerFout((err as Error).message);
+  }
+}
+
 // -- get_results -------------------------------------------------------------
 
 interface ResultaatRij {
@@ -454,6 +531,8 @@ interface ResultaatRij {
   gepland_op: string | Date | null;
   uitgevoerd_op: string | Date | null;
   aangemaakt_op: string | Date;
+  sequence_id: string | null;
+  sequence_stap: number | null;
 }
 
 async function getResults(deps: McpToolsDeps, args: Record<string, unknown>) {
@@ -467,7 +546,8 @@ async function getResults(deps: McpToolsDeps, args: Record<string, unknown>) {
   }
   const max = Math.min(typeof limit === 'number' ? limit : 50, 200);
   const actieKolommen = `id, account_id, type::text as type, status::text as status,
-            reden, goedgekeurd_door, goedgekeurd_op, gepland_op, uitgevoerd_op, aangemaakt_op`;
+            reden, goedgekeurd_door, goedgekeurd_op, gepland_op, uitgevoerd_op, aangemaakt_op,
+            sequence_id, sequence_stap`;
   const rijen = accountId
     ? await deps.db.query<ResultaatRij>(
         `select ${actieKolommen} from actions
@@ -498,24 +578,86 @@ async function getResults(deps: McpToolsDeps, args: Record<string, unknown>) {
          limit $2`,
         [eventTypen, max],
       );
+  const sequentieKolommen = `id, account_id, lead_naam, lead_linkedin_url,
+            stap, status::text as status, stop_reden,
+            volgende_actie_op, aangemaakt_op`;
+  const sequenties = accountId
+    ? await deps.db.query<SequentieResultaatRij>(
+        `select ${sequentieKolommen} from sequences
+         where account_id = $1
+         order by aangemaakt_op desc
+         limit $2`,
+        [accountId, max],
+      )
+    : await deps.db.query<SequentieResultaatRij>(
+        `select ${sequentieKolommen} from sequences
+         order by aangemaakt_op desc
+         limit $1`,
+        [max],
+      );
+  const sequentiePerId = new Map(sequenties.map((s) => [s.id, s]));
+  const sequentieUit = await Promise.all(
+    sequenties.map(async (s) => {
+      const stappen = await lijstActiesVoorSequentie(deps.db, s.id);
+      const laatste = stappen.length > 0 ? stappen[stappen.length - 1]! : null;
+      return {
+        sequentieId: s.id,
+        accountId: s.account_id,
+        leadNaam: s.lead_naam,
+        leadLinkedinUrl: s.lead_linkedin_url,
+        stap: s.stap,
+        status: s.status,
+        stopReden: s.stop_reden,
+        volgendeActieOp: s.volgende_actie_op ? alsIso(s.volgende_actie_op) : null,
+        aangemaaktOp: alsIso(s.aangemaakt_op),
+        laatsteGebeurtenis: laatste
+          ? {
+              stap: laatste.stap,
+              type: laatste.type,
+              status: laatste.status,
+              uitgevoerdOp: laatste.uitgevoerdOp ? laatste.uitgevoerdOp.toISOString() : null,
+            }
+          : null,
+      };
+    }),
+  );
   return {
-    acties: rijen.map((r) => ({
-      actieId: r.id,
-      accountId: r.account_id,
-      type: r.type,
-      status: r.status,
-      reden: r.reden,
-      goedgekeurdDoor: r.goedgekeurd_door,
-      goedgekeurdOp: r.goedgekeurd_op ? alsIso(r.goedgekeurd_op) : null,
-      geplandOp: r.gepland_op ? alsIso(r.gepland_op) : null,
-      uitgevoerdOp: r.uitgevoerd_op ? alsIso(r.uitgevoerd_op) : null,
-      aangemaaktOp: alsIso(r.aangemaakt_op),
-    })),
+    acties: rijen.map((r) => {
+      const seq = r.sequence_id ? sequentiePerId.get(r.sequence_id) : null;
+      return {
+        actieId: r.id,
+        accountId: r.account_id,
+        type: r.type,
+        status: r.status,
+        reden: r.reden,
+        goedgekeurdDoor: r.goedgekeurd_door,
+        goedgekeurdOp: r.goedgekeurd_op ? alsIso(r.goedgekeurd_op) : null,
+        geplandOp: r.gepland_op ? alsIso(r.gepland_op) : null,
+        uitgevoerdOp: r.uitgevoerd_op ? alsIso(r.uitgevoerd_op) : null,
+        aangemaaktOp: alsIso(r.aangemaakt_op),
+        sequentieId: r.sequence_id,
+        sequentieStap: r.sequence_stap,
+        sequentieGestartOp: seq ? alsIso(seq.aangemaakt_op) : null,
+      };
+    }),
     recenteEvents: events.map((e) => ({
       type: e.type,
       ontvangenOp: alsIso(e.ontvangen_op),
     })),
+    sequenties: sequentieUit,
   };
+}
+
+interface SequentieResultaatRij {
+  id: string;
+  account_id: string;
+  lead_naam: string | null;
+  lead_linkedin_url: string;
+  stap: number;
+  status: string;
+  stop_reden: string | null;
+  volgende_actie_op: string | Date | null;
+  aangemaakt_op: string | Date;
 }
 
 // -- hulpjes -----------------------------------------------------------------

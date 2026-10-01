@@ -42,6 +42,7 @@ after(async () => {
 beforeEach(async () => {
   await db.query('delete from usage');
   await db.query('delete from actions');
+  await db.query('delete from sequences');
   await db.query('delete from events');
   await db.query('delete from accounts');
   await db.query('delete from clients');
@@ -130,7 +131,7 @@ describe('authenticatie', () => {
 });
 
 describe('tools/list', () => {
-  it('geeft precies de zeven tools uit SPEC §7 terug', async () => {
+  it('geeft precies de acht tools uit SPEC §7 terug', async () => {
     const res = await postMcp(
       { jsonrpc: '2.0', id: 1, method: 'tools/list' },
       { token: TOKEN },
@@ -147,6 +148,7 @@ describe('tools/list', () => {
       'list_accounts',
       'queue_action',
       'search_people',
+      'start_sequence',
     ]);
   });
 
@@ -168,6 +170,9 @@ describe('tools/list', () => {
     const queueTool = body.result.tools.find((t) => t.name === 'queue_action');
     assert.match(queueTool!.description, /draft/i);
     assert.match(queueTool!.description, /goedkeuring/i);
+    const startSeq = body.result.tools.find((t) => t.name === 'start_sequence');
+    assert.match(startSeq!.description, /concept/i);
+    assert.match(startSeq!.description, /goedkeuringspagina/i);
   });
 });
 
@@ -265,6 +270,7 @@ describe('tools/call: geen enkele tool verstuurt direct', () => {
       'search_people',
       'get_profile',
       'queue_action',
+      'start_sequence',
       'get_results',
     ]) {
       const argumenten: Record<string, unknown> = {};
@@ -284,6 +290,22 @@ describe('tools/call: geen enkele tool verstuurt direct', () => {
           ontvanger_bedrijf: 'Acme NV',
           ontvanger_url: 'https://www.linkedin.com/in/nina-jansen/',
           waarom: 'Afkomstig uit zoekactie X-123.',
+        };
+      }
+      if (naam === 'start_sequence') {
+        argumenten['accountId'] = accountId;
+        argumenten['lead'] = {
+          providerId: 'ACo-sv',
+          naam: 'Sven',
+          functie: 'CTO',
+          bedrijf: 'Flux',
+          linkedinUrl: 'https://www.linkedin.com/in/sven/',
+          waarom: 'Lead uit zoekactie Y-456.',
+        };
+        argumenten['teksten'] = {
+          invite: 'Hoi Sven, zullen we even sparren?',
+          bericht: 'Dag Sven, dank voor de connectie.',
+          opvolging: 'Nog even een reminder, Sven.',
         };
       }
       await postMcp(

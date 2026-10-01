@@ -97,11 +97,32 @@ export interface TekstMaxTekens {
   inmail: number;
 }
 
+export interface WerkdagenBereik {
+  min: number;
+  max: number;
+}
+
+export interface SequentieStopRedenen {
+  reactie: string;
+  niet_geaccepteerd: string;
+  voltooid: string;
+}
+
+export interface SequentieLimieten {
+  wachttijden_werkdagen: {
+    eerste_bericht_na_acceptatie: WerkdagenBereik;
+    opvolging_na_eerste_bericht: WerkdagenBereik;
+  };
+  verzoek_vervalt_na_dagen: number;
+  stop_redenen: SequentieStopRedenen;
+}
+
 export interface Limieten {
   opbouw: Opbouw;
   afkoeling: Afkoeling;
   tijdvenster: Tijdvenster;
   tekst_max_tekens: TekstMaxTekens;
+  sequenties: SequentieLimieten;
   unipile_usage_signaal: UnipileSignaal;
   abonnementen: Record<Abonnement, AbonnementLimieten>;
 }
@@ -139,6 +160,7 @@ export function limietenUitObject(obj: unknown): Limieten {
   const afkoeling = parseAfkoeling(obj['afkoeling']);
   const tijdvenster = parseTijdvenster(obj['tijdvenster']);
   const tekst_max_tekens = parseTekstMax(obj['tekst_max_tekens']);
+  const sequenties = parseSequenties(obj['sequenties']);
   const unipile_usage_signaal = parseUnipileSignaal(obj['unipile_usage_signaal']);
 
   const bronAbonnementen = obj['abonnementen'];
@@ -161,8 +183,48 @@ export function limietenUitObject(obj: unknown): Limieten {
     afkoeling,
     tijdvenster,
     tekst_max_tekens,
+    sequenties,
     unipile_usage_signaal,
     abonnementen,
+  };
+}
+
+function parseSequenties(raw: unknown): SequentieLimieten {
+  if (!isRecord(raw)) {
+    throw new Error('Veld "sequenties" ontbreekt in limieten-configuratie.');
+  }
+  const wacht = raw['wachttijden_werkdagen'];
+  if (!isRecord(wacht)) {
+    throw new Error('Veld "sequenties.wachttijden_werkdagen" ontbreekt.');
+  }
+  const eerste = wacht['eerste_bericht_na_acceptatie'];
+  const opvolg = wacht['opvolging_na_eerste_bericht'];
+  if (!isRecord(eerste) || !isRecord(opvolg)) {
+    throw new Error(
+      'Velden "sequenties.wachttijden_werkdagen.eerste_bericht_na_acceptatie" en "...opvolging_na_eerste_bericht" moeten elk {min, max} bevatten.',
+    );
+  }
+  const stop = raw['stop_redenen'];
+  if (!isRecord(stop)) {
+    throw new Error('Veld "sequenties.stop_redenen" ontbreekt.');
+  }
+  return {
+    wachttijden_werkdagen: {
+      eerste_bericht_na_acceptatie: {
+        min: positiefGetal(eerste, 'min'),
+        max: positiefGetal(eerste, 'max'),
+      },
+      opvolging_na_eerste_bericht: {
+        min: positiefGetal(opvolg, 'min'),
+        max: positiefGetal(opvolg, 'max'),
+      },
+    },
+    verzoek_vervalt_na_dagen: positiefGetal(raw, 'verzoek_vervalt_na_dagen'),
+    stop_redenen: {
+      reactie: tekst(stop, 'reactie'),
+      niet_geaccepteerd: tekst(stop, 'niet_geaccepteerd'),
+      voltooid: tekst(stop, 'voltooid'),
+    },
   };
 }
 

@@ -15,11 +15,13 @@ const VERWACHTE_TABELLEN = [
   'usage',
 ];
 
+const ALLE_MIGRATIES = ['0001_init.sql', '0002_sequences.sql'];
+
 describe('0001_init.sql', () => {
   it('past de migratie schoon toe op een verse PGlite', async () => {
     const { db, toegepast, close } = await verseDatabaseMetMigraties();
     try {
-      assert.deepEqual(toegepast, ['0001_init.sql']);
+      assert.deepEqual(toegepast, ALLE_MIGRATIES);
 
       const rijen = await db.query<{ tablename: string }>(
         "select tablename from pg_tables where schemaname = 'public' order by tablename",
@@ -36,7 +38,7 @@ describe('0001_init.sql', () => {
       const rijen = await db.query<{ naam: string }>(
         'select naam from schema_migrations order by naam',
       );
-      assert.deepEqual(rijen.map((r) => r.naam), ['0001_init.sql']);
+      assert.deepEqual(rijen.map((r) => r.naam), ALLE_MIGRATIES);
     } finally {
       await close();
     }
@@ -47,7 +49,7 @@ describe('0001_init.sql', () => {
     try {
       const eerste = await draaiMigraties(db, MIGRATIE_MAP);
       const tweede = await draaiMigraties(db, MIGRATIE_MAP);
-      assert.deepEqual(eerste, ['0001_init.sql']);
+      assert.deepEqual(eerste, ALLE_MIGRATIES);
       assert.deepEqual(tweede, []);
     } finally {
       await close();
@@ -182,6 +184,85 @@ describe('0001_init.sql', () => {
 
       const [rij] = await db.query<{ aantal: string }>('select count(*)::text as aantal from events');
       assert.equal(rij?.aantal, '4');
+    } finally {
+      await close();
+    }
+  });
+
+  it('0002: voegt lead-metadata, teksten en stop_reden toe aan sequences', async () => {
+    const { db, close } = await verseDatabaseMetMigraties();
+    try {
+      const kolommen = await db.query<{ column_name: string }>(
+        `select column_name from information_schema.columns
+         where table_schema = 'public' and table_name = 'sequences'
+         order by column_name`,
+      );
+      const namen = new Set(kolommen.map((k) => k.column_name));
+      for (const verwacht of [
+        'lead_naam',
+        'lead_functie',
+        'lead_bedrijf',
+        'waarom',
+        'tekst_invite',
+        'tekst_bericht',
+        'tekst_opvolging',
+        'stop_reden',
+      ]) {
+        assert.ok(namen.has(verwacht), `kolom ${verwacht} ontbreekt in sequences`);
+      }
+    } finally {
+      await close();
+    }
+  });
+
+  it('0002: voegt sequence_id en sequence_stap toe aan actions, met FK en check', async () => {
+    const { db, close } = await verseDatabaseMetMigraties();
+    try {
+      const kolommen = await db.query<{ column_name: string }>(
+        `select column_name from information_schema.columns
+         where table_schema = 'public' and table_name = 'actions'
+         order by column_name`,
+      );
+      const namen = new Set(kolommen.map((k) => k.column_name));
+      assert.ok(namen.has('sequence_id'));
+      assert.ok(namen.has('sequence_stap'));
+
+      const [client] = await db.query<{ id: string }>(
+        "insert into clients(naam, slug) values ('T', 't') returning id",
+      );
+      const [account] = await db.query<{ id: string }>(
+        `insert into accounts(client_id, eigenaar_naam, abonnement)
+         values ($1, 'R', 'salesnav_core') returning id`,
+        [client!.id],
+      );
+      const [sequentie] = await db.query<{ id: string }>(
+        `insert into sequences(account_id, lead_linkedin_url)
+         values ($1, 'https://www.linkedin.com/in/x') returning id`,
+        [account!.id],
+      );
+
+      // sequence_stap moet 1..3 zijn.
+      await assert.rejects(
+        db.query(
+          `insert into actions(account_id, type, payload, sequence_id, sequence_stap)
+           values ($1, 'invite', '{}'::jsonb, $2, 0)`,
+          [account!.id, sequentie!.id],
+        ),
+        /sequence_stap/,
+      );
+      await assert.rejects(
+        db.query(
+          `insert into actions(account_id, type, payload, sequence_id, sequence_stap)
+           values ($1, 'invite', '{}'::jsonb, $2, 4)`,
+          [account!.id, sequentie!.id],
+        ),
+        /sequence_stap/,
+      );
+      await db.query(
+        `insert into actions(account_id, type, payload, sequence_id, sequence_stap)
+         values ($1, 'invite', '{}'::jsonb, $2, 1)`,
+        [account!.id, sequentie!.id],
+      );
     } finally {
       await close();
     }

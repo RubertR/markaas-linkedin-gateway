@@ -26,6 +26,7 @@ import {
   registreerAccount,
 } from '../src/register/accounts.ts';
 import { maakClient } from '../src/register/clients.ts';
+import { startSequentie } from '../src/sequences/motor.ts';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -106,6 +107,33 @@ async function zaaiDemodata(db: Awaited<ReturnType<typeof pgliteBackend>>): Prom
         'Pieter past bij ons ICP (B2B SaaS, 25-100 FTE, Pipedrive) en reageerde eerder dit ' +
         'jaar op een branchepost over funnel-optimalisatie. InMail-tegoed vandaag beschikbaar.',
       _skill: 'onderzoeker',
+    },
+  });
+
+  // Eén lopende sequentie (ronde 3): stap 1 (invite) staat als draft op de
+  // goedkeuringspagina met het "Stap 1 van 3 · sequentie gestart op …"-blok.
+  await startSequentie(db, {
+    accountId: account.id,
+    lead: {
+      providerId: 'ACo-eva-de-boer',
+      naam: 'Eva de Boer',
+      functie: 'Chief Marketing Officer',
+      bedrijf: 'Veldstra Logistiek',
+      linkedinUrl: 'https://www.linkedin.com/in/eva-de-boer/',
+      waarom:
+        'Afkomstig uit zoekactie "logistiek CMO" (actie S-2026-10-01-004). ' +
+        'Score 0.88 — Veldstra breidt uit richting B2B SaaS; dit is stap 1 van 3.',
+    },
+    teksten: {
+      invite:
+        'Hoi Eva, ik volg Veldstra sinds jullie uitbreiding naar B2B SaaS. ' +
+        'Zullen we even sparren over marketing-automatisering voor MKB-logistiek?',
+      bericht:
+        'Hoi Eva, dank voor de connectie! Je gaf laatst een interview over ' +
+        'account-based marketing — ik ben benieuwd welke onderdelen jullie zelf doen.',
+      opvolging:
+        'Hoi Eva, nog even een korte reminder — mocht het beter uitkomen om later ' +
+        'te sparren, dan hoor ik dat ook graag.',
     },
   });
 
