@@ -91,10 +91,17 @@ export interface UnipileSignaal {
   nieuwe_factor_bij_afremmen: number;
 }
 
+export interface TekstMaxTekens {
+  invite: number;
+  message: number;
+  inmail: number;
+}
+
 export interface Limieten {
   opbouw: Opbouw;
   afkoeling: Afkoeling;
   tijdvenster: Tijdvenster;
+  tekst_max_tekens: TekstMaxTekens;
   unipile_usage_signaal: UnipileSignaal;
   abonnementen: Record<Abonnement, AbonnementLimieten>;
 }
@@ -131,6 +138,7 @@ export function limietenUitObject(obj: unknown): Limieten {
   const opbouw = parseOpbouw(obj['opbouw']);
   const afkoeling = parseAfkoeling(obj['afkoeling']);
   const tijdvenster = parseTijdvenster(obj['tijdvenster']);
+  const tekst_max_tekens = parseTekstMax(obj['tekst_max_tekens']);
   const unipile_usage_signaal = parseUnipileSignaal(obj['unipile_usage_signaal']);
 
   const bronAbonnementen = obj['abonnementen'];
@@ -148,7 +156,25 @@ export function limietenUitObject(obj: unknown): Limieten {
     abonnementen[naam] = parseAbonnement(naam, bronAbonnementen[naam] as Record<string, unknown>);
   }
 
-  return { opbouw, afkoeling, tijdvenster, unipile_usage_signaal, abonnementen };
+  return {
+    opbouw,
+    afkoeling,
+    tijdvenster,
+    tekst_max_tekens,
+    unipile_usage_signaal,
+    abonnementen,
+  };
+}
+
+function parseTekstMax(raw: unknown): TekstMaxTekens {
+  if (!isRecord(raw)) {
+    throw new Error('Veld "tekst_max_tekens" ontbreekt in limieten-configuratie.');
+  }
+  return {
+    invite: positiefGetal(raw, 'invite'),
+    message: positiefGetal(raw, 'message'),
+    inmail: positiefGetal(raw, 'inmail'),
+  };
 }
 
 function parseOpbouw(raw: unknown): Opbouw {

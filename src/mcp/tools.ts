@@ -356,6 +356,20 @@ const VERBODEN_GOEDKEUR_VELDEN: readonly string[] = [
   'status',
 ];
 
+/**
+ * Velden die iedere queue_action-payload moet bevatten zodat de
+ * goedkeuringspagina een menselijke ontvanger kan tonen (naam, functie,
+ * bedrijf, klikbare LinkedIn-link) en de "waarom" van de skill zichtbaar
+ * is (SPEC §12, scope-wijziging 2026-10-01).
+ */
+const VERPLICHTE_PAYLOAD_VELDEN: readonly string[] = [
+  'ontvanger_naam',
+  'ontvanger_functie',
+  'ontvanger_bedrijf',
+  'ontvanger_url',
+  'waarom',
+];
+
 async function queueAction(deps: McpToolsDeps, args: Record<string, unknown>) {
   const accountId = vereistString(args, 'accountId');
   const type = vereistString(args, 'type');
@@ -375,6 +389,20 @@ async function queueAction(deps: McpToolsDeps, args: Record<string, unknown>) {
         `Veld "${veld}" is niet toegestaan via de MCP: goedkeuring loopt uitsluitend via de goedkeuringspagina van de gateway (SPEC §12).`,
       );
     }
+  }
+  for (const veld of VERPLICHTE_PAYLOAD_VELDEN) {
+    const w = payload[veld];
+    if (typeof w !== 'string' || w.trim() === '') {
+      throw new McpToolInvoerFout(
+        `Veld "${veld}" is verplicht in de payload van queue_action (voor de goedkeuringspagina). Vul een niet-lege tekst in.`,
+      );
+    }
+  }
+  const url = payload['ontvanger_url'] as string;
+  if (!isLinkedInUrl(url)) {
+    throw new McpToolInvoerFout(
+      `Veld "ontvanger_url" moet een linkedin.com-URL zijn (profiel of sales-navigator). Gaf: ${url}`,
+    );
   }
   let geplandOp: Date | undefined;
   if (args['geplandOp'] !== undefined) {
@@ -400,6 +428,17 @@ async function queueAction(deps: McpToolsDeps, args: Record<string, unknown>) {
     bericht:
       'Actie staat als concept (draft) in de wachtrij. Keur hem goed via de goedkeuringspagina van de gateway voordat hij wordt verzonden.',
   };
+}
+
+function isLinkedInUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:') return false;
+    const host = parsed.hostname.toLowerCase();
+    return host === 'linkedin.com' || host.endsWith('.linkedin.com');
+  } catch {
+    return false;
+  }
 }
 
 // -- get_results -------------------------------------------------------------

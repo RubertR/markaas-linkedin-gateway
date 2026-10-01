@@ -134,8 +134,25 @@ function csrfUit(html: string): string {
   return m[1]!;
 }
 
-async function maakDraft(payload: Record<string, unknown> = { providerId: 'ACo-abc' }): Promise<string> {
-  const actie = await maakActie(db, { accountId, type: 'invite', payload });
+function ontvangerVelden(
+  overschrijf: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    ontvanger_naam: 'Nina Jansen',
+    ontvanger_functie: 'Marketing manager',
+    ontvanger_bedrijf: 'Acme NV',
+    ontvanger_url: 'https://www.linkedin.com/in/nina-jansen/',
+    waarom: 'Afkomstig uit zoekactie X-123.',
+    ...overschrijf,
+  };
+}
+
+async function maakDraft(payload: Record<string, unknown> = {}): Promise<string> {
+  const actie = await maakActie(db, {
+    accountId,
+    type: 'invite',
+    payload: { providerId: 'ACo-abc', ...ontvangerVelden(), ...payload },
+  });
   return actie.id;
 }
 
@@ -229,18 +246,98 @@ describe('authenticatie', () => {
 });
 
 describe('overzicht', () => {
-  it('toont concepten (status draft) met tekst, ontvanger en budget', async () => {
+  it('toont concepten met naam/functie/bedrijf/klikbare LinkedIn-link, waarom, provider-id klein, en budget', async () => {
     await maakDraft({ providerId: 'ACo-xyz', message: 'Welkom!', _skill: 'leadworker' });
     const jar = nieuweJar();
     await logIn(jar);
     const resp = await get('/admin/', jar);
     assert.equal(resp.status, 200);
     const html = await resp.text();
-    assert.match(html, /ACo-xyz/);
+    // Leesbare ontvanger-weergave.
+    assert.match(html, /Nina Jansen/);
+    assert.match(html, /Marketing manager/);
+    assert.match(html, /Acme NV/);
+    assert.match(
+      html,
+      /<a href="https:\/\/www\.linkedin\.com\/in\/nina-jansen\/"[^>]*target="_blank"/,
+      'LinkedIn-link moet klikbaar en in een nieuw tabblad openen',
+    );
+    // Provider-id staat klein onder de ontvanger (in <small>).
+    assert.match(html, /<small>id: ACo-xyz<\/small>/);
+    // Waarom-blok.
+    assert.match(html, /class="waarom"/);
+    assert.match(html, /zoekactie X-123/);
+    // Overige.
     assert.match(html, /Welkom!/);
     assert.match(html, /leadworker/);
     assert.match(html, /Markaas/);
     assert.match(html, /dag 0\/10/); // salesnav_core invite 20/dag * 0.5
+  });
+
+  it('toont datum in Europe/Amsterdam, formaat "1 okt, 13:07"', async () => {
+    // Standaard NU = 2026-10-06T10:00:00Z, dus aangemaakt_op valt rond dat moment.
+    // We maken de draft en lezen pas daarna, zodat beide tegen vasteKlok klokken.
+    await maakDraft();
+    const jar = nieuweJar();
+    await logIn(jar);
+    const resp = await get('/admin/', jar);
+    const html = await resp.text();
+    // De aangemaakt_op krijgt een PGlite default now(); vorm van de datum is
+    // belangrijker dan de exacte waarde. Verwacht: "<dag> <mnd>, HH:MM".
+    assert.match(
+      html,
+      /\d{1,2} (jan|feb|mrt|apr|mei|jun|jul|aug|sep|okt|nov|dec), \d{2}:\d{2}/,
+      'datum moet "1 okt, 13:07"-formaat gebruiken',
+    );
+  });
+
+  it('toont de teken-teller met de limiet uit limits.json en schakelt Goedkeuren uit boven de limiet', async () => {
+    const teLang = 'x'.repeat(limieten.tekst_max_tekens.invite + 50);
+    await maakDraft({ providerId: 'ACo-xyz', message: teLang });
+    const jar = nieuweJar();
+    await logIn(jar);
+    const resp = await get('/admin/', jar);
+    const html = await resp.text();
+    assert.match(html, /class="teken-teller over"/);
+    assert.match(html, /boven de limiet/i);
+    assert.match(
+      html,
+      /<button type="submit" disabled>Goedkeuren<\/button>/,
+      'Goedkeuren-knop moet uitgeschakeld zijn boven de limiet',
+    );
+    // En de tekst-teller bevat de limiet 300.
+    assert.match(html, /\/300 tekens/);
+  });
+
+  it('neemt de limiet per actietype uit limits.json (message = 8000)', async () => {
+    await db.query(
+      `insert into actions(account_id, type, payload, status) values
+       ($1, 'message'::action_type, $2::jsonb, 'draft'::action_status)`,
+      [
+        accountId,
+        JSON.stringify({
+          chatId: 'C-leo',
+          tekst: 'Dag Leo',
+          ...ontvangerVelden(),
+        }),
+      ],
+    );
+    const jar = nieuweJar();
+    await logIn(jar);
+    const resp = await get('/admin/', jar);
+    const html = await resp.text();
+    assert.match(html, /data-maxtekens="8000"/);
+    assert.match(html, /\/8000 tekens/);
+  });
+
+  it('voegt een inline tekenteller-script toe zodat het label en de knop live reageren', async () => {
+    await maakDraft();
+    const jar = nieuweJar();
+    await logIn(jar);
+    const resp = await get('/admin/', jar);
+    const html = await resp.text();
+    assert.match(html, /<script>[\s\S]*data-maxtekens[\s\S]*<\/script>/);
+    assert.doesNotMatch(html, /\bimport\b/, 'script moet puur vanilla JS zijn');
   });
 });
 
@@ -313,6 +410,32 @@ describe('goedkeuren via de UI', () => {
     const actie = await vindActie(db, actieId);
     assert.equal(actie?.status, 'rejected');
     assert.equal(actie?.reden, 'niet relevant');
+  });
+
+  it('weigert server-side goedkeuren wanneer de nieuwe tekst over de limiet gaat', async () => {
+    const actieId = await maakDraft({ message: 'kort' });
+    const jar = nieuweJar();
+    await logIn(jar);
+    const overzicht = await get('/admin/', jar);
+    const csrf = csrfUit(await overzicht.text());
+    const teLang = 'x'.repeat(limieten.tekst_max_tekens.invite + 1);
+    const resp = await post(
+      '/admin/acties/goedkeuren',
+      { csrf, actieId, nieuweTekst: teLang },
+      jar,
+    );
+    assert.equal(resp.status, 303);
+    const actie = await vindActie(db, actieId);
+    assert.equal(actie?.status, 'draft', 'actie blijft draft bij te lange tekst');
+    assert.equal(
+      (actie?.payload as { message?: string })?.message,
+      'kort',
+      'tekst mag niet aangepast zijn',
+    );
+    // De flash-cookie bevat de foutmelding.
+    const na = await get('/admin/', jar);
+    const nahtml = await na.text();
+    assert.match(nahtml, /maximum voor invite is 300/);
   });
 
   it('weigert goedkeuren zonder csrf-token (403)', async () => {

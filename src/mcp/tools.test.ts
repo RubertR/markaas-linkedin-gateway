@@ -149,12 +149,25 @@ describe('get_budget', () => {
   });
 });
 
+function volledigeInvitePayload(overschrijf: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    providerId: 'ACo-abc',
+    message: 'Hoi Nina, zullen we even sparren?',
+    ontvanger_naam: 'Nina Jansen',
+    ontvanger_functie: 'Marketing manager',
+    ontvanger_bedrijf: 'Acme NV',
+    ontvanger_url: 'https://www.linkedin.com/in/nina-jansen/',
+    waarom: 'Afkomstig uit zoekopdracht "logistiek marketing manager" (zie actie X-123).',
+    ...overschrijf,
+  };
+}
+
 describe('queue_action', () => {
   it('maakt een invite-actie als "draft" en noemt de goedkeuringspagina', async () => {
     const resultaat = (await voerTool(deps, 'queue_action', {
       accountId,
       type: 'invite',
-      payload: { providerId: 'ACo-abc', message: 'Hoi!' },
+      payload: volledigeInvitePayload(),
     })) as { actieId: string; status: string; bericht: string };
 
     assert.equal(resultaat.status, 'draft');
@@ -163,6 +176,13 @@ describe('queue_action', () => {
     assert.equal(actie?.status, 'draft');
     assert.equal(actie?.goedgekeurdDoor, null);
     assert.equal(actie?.goedgekeurdOp, null);
+    // Nieuwe velden belanden in de payload zodat de admin UI ze kan tonen.
+    const payload = actie?.payload as Record<string, unknown>;
+    assert.equal(payload['ontvanger_naam'], 'Nina Jansen');
+    assert.equal(payload['ontvanger_functie'], 'Marketing manager');
+    assert.equal(payload['ontvanger_bedrijf'], 'Acme NV');
+    assert.equal(payload['ontvanger_url'], 'https://www.linkedin.com/in/nina-jansen/');
+    assert.match(payload['waarom'] as string, /zoekopdracht/);
   });
 
   it('weigert search of profile — die horen bij search_people/get_profile', async () => {
@@ -183,7 +203,7 @@ describe('queue_action', () => {
         voerTool(deps, 'queue_action', {
           accountId,
           type: 'invite',
-          payload: { providerId: 'x', goedgekeurd_door: 'nep@niemand.nl' },
+          payload: volledigeInvitePayload({ goedgekeurd_door: 'nep@niemand.nl' }),
         }),
       /niet toegestaan via de MCP/,
     );
@@ -195,7 +215,7 @@ describe('queue_action', () => {
         voerTool(deps, 'queue_action', {
           accountId,
           type: 'invite',
-          payload: { providerId: 'x' },
+          payload: volledigeInvitePayload(),
           approved: true,
         } as unknown as Record<string, unknown>),
       /niet toegestaan via de MCP/,
@@ -208,10 +228,73 @@ describe('queue_action', () => {
         voerTool(deps, 'queue_action', {
           accountId,
           type: 'invite',
-          payload: { providerId: 'x' },
+          payload: volledigeInvitePayload(),
           geplandOp: 'morgen',
         }),
       /geldige ISO-8601/,
+    );
+  });
+
+  for (const veld of [
+    'ontvanger_naam',
+    'ontvanger_functie',
+    'ontvanger_bedrijf',
+    'ontvanger_url',
+    'waarom',
+  ] as const) {
+    it(`werpt NL-fout wanneer verplicht veld "${veld}" ontbreekt`, async () => {
+      const payload = volledigeInvitePayload();
+      delete (payload as Record<string, unknown>)[veld];
+      await assert.rejects(
+        () =>
+          voerTool(deps, 'queue_action', { accountId, type: 'invite', payload }),
+        (err: Error) => {
+          assert.match(err.message, new RegExp(`"${veld}"`));
+          assert.match(err.message, /verplicht/i);
+          return true;
+        },
+      );
+      // Geen actie aangemaakt bij een validatiefout.
+      const rijen = await db.query<{ aantal: number | string }>(
+        `select count(*)::int as aantal from actions where account_id = $1`,
+        [accountId],
+      );
+      assert.equal(Number(rijen[0]?.aantal), 0);
+    });
+  }
+
+  it('werpt NL-fout wanneer ontvanger_url geen LinkedIn-url is', async () => {
+    await assert.rejects(
+      () =>
+        voerTool(deps, 'queue_action', {
+          accountId,
+          type: 'invite',
+          payload: volledigeInvitePayload({ ontvanger_url: 'https://acme.nl/nina' }),
+        }),
+      /linkedin\.com/i,
+    );
+  });
+
+  it('verwerkt message-type met alle verplichte velden', async () => {
+    const resultaat = (await voerTool(deps, 'queue_action', {
+      accountId,
+      type: 'message',
+      payload: {
+        chatId: 'C-leo',
+        tekst: 'Dag Leo, dank voor de connectie.',
+        ontvanger_naam: 'Leo Bakker',
+        ontvanger_functie: 'Head of Growth',
+        ontvanger_bedrijf: 'Finbase',
+        ontvanger_url: 'https://www.linkedin.com/in/leo-bakker/',
+        waarom: 'Opvolgbericht na nieuwe connectie (sequentie S-42, stap 2).',
+      },
+    })) as { actieId: string };
+    const actie = await vindActie(db, resultaat.actieId);
+    assert.equal(actie?.type, 'message');
+    assert.equal(actie?.status, 'draft');
+    assert.equal(
+      (actie?.payload as Record<string, unknown>)['ontvanger_naam'],
+      'Leo Bakker',
     );
   });
 });
@@ -321,7 +404,7 @@ describe('get_results', () => {
     await voerTool(deps, 'queue_action', {
       accountId,
       type: 'invite',
-      payload: { providerId: 'ACo-xyz' },
+      payload: volledigeInvitePayload({ providerId: 'ACo-xyz' }),
     });
     const res = (await voerTool(deps, 'get_results', { accountId })) as {
       acties: Array<Record<string, unknown>>;

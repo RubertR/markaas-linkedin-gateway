@@ -1,4 +1,5 @@
-import type { DraftWeergave, OnzekerWeergave } from './dienst.ts';
+import { formatteerAmsterdam } from './datum.ts';
+import type { DraftWeergave, OnzekerWeergave, OntvangerWeergave } from './dienst.ts';
 
 /**
  * Server-rendered HTML voor de goedkeuringspagina. Geen framework, geen
@@ -41,6 +42,19 @@ main { max-width: 60rem; margin: 0 auto; }
                         margin-top: 0.4rem; }
 .actie-kaart .knoppen input[type="text"] { flex: 1 1 10rem; padding: 0.4rem;
                                            border: 1px solid #c4c9cf; border-radius: 4px; }
+.ontvanger { margin: 0 0 0.6rem; }
+.ontvanger .naam { font-weight: 600; font-size: 1.05rem; }
+.ontvanger .functie { color: #333; }
+.ontvanger .bedrijf { color: #333; }
+.ontvanger a { color: #0b63b7; text-decoration: underline; }
+.ontvanger small { color: #666; display: block; margin-top: 0.1rem;
+                   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.waarom { background: #f0f4f8; border-left: 3px solid #0b63b7;
+          padding: 0.4rem 0.6rem; margin: 0 0 0.6rem; border-radius: 3px; }
+.waarom .label { font-weight: 600; color: #0b63b7; font-size: 0.85rem; }
+.teken-teller { font-size: 0.85rem; color: #555; margin: 0.2rem 0 0.4rem; }
+.teken-teller.over { color: #b23c2d; font-weight: 600; }
+button[disabled] { opacity: 0.5; cursor: not-allowed; }
 button, .knop {
   background: #0b63b7; color: #fff; border: 0; padding: 0.6rem 0.9rem;
   border-radius: 4px; font-size: 0.95rem; min-height: 44px; cursor: pointer;
@@ -74,7 +88,31 @@ export function h(waarde: unknown): string {
     .replace(/'/g, '&#39;');
 }
 
-function layout(titel: string, inhoud: string): string {
+// Kleine vanilla-JS teller: werkt het "nog N tekens"-label live bij en
+// schakelt Goedkeuren uit zodra de tekst over de limiet gaat. Server-side
+// controleert `goedkeur` dit óók — dit is enkel ergonomie.
+const TELLER_JS = `
+document.querySelectorAll('textarea[data-maxtekens]').forEach(function (ta) {
+  var max = Number(ta.dataset.maxtekens);
+  var teller = ta.parentElement.querySelector('.teken-teller');
+  var knop = ta.form ? ta.form.querySelector('button[type="submit"]') : null;
+  function werkBij() {
+    var lengte = ta.value.length;
+    var over = lengte > max;
+    if (teller) {
+      teller.textContent = over
+        ? (lengte + '/' + max + ' tekens — boven de limiet, korter maken')
+        : (lengte + '/' + max + ' tekens (nog ' + (max - lengte) + ')');
+      teller.classList.toggle('over', over);
+    }
+    if (knop) knop.disabled = over;
+  }
+  ta.addEventListener('input', werkBij);
+  werkBij();
+});
+`.trim();
+
+function layout(titel: string, inhoud: string, metScript = false): string {
   return `<!doctype html>
 <html lang="nl">
 <head>
@@ -86,6 +124,7 @@ function layout(titel: string, inhoud: string): string {
 </head>
 <body>
 ${inhoud}
+${metScript ? `<script>${TELLER_JS}</script>` : ''}
 </body>
 </html>`;
 }
@@ -129,24 +168,50 @@ function budgetTekst(d: DraftWeergave): string {
   return stukjes.join(' · ');
 }
 
+function ontvangerBlok(o: OntvangerWeergave): string {
+  return `
+<div class="ontvanger">
+  <div class="naam">${h(o.naam)}</div>
+  <div class="functie">${h(o.functie)}</div>
+  <div class="bedrijf">${h(o.bedrijf)}</div>
+  ${
+    o.url && o.url !== '—'
+      ? `<a href="${h(o.url)}" target="_blank" rel="noopener noreferrer">LinkedIn-profiel openen</a>`
+      : ''
+  }
+  <small>id: ${h(o.technischeId)}</small>
+</div>`;
+}
+
 function draftKaart(d: DraftWeergave, csrfToken: string): string {
+  const vrij = Math.max(0, d.tekenMax - d.tekst.length);
+  const teLang = d.tekst.length > d.tekenMax;
   return `
 <article class="actie-kaart" data-type="${h(d.type)}">
-  <h3>${h(etiket(d.type))} — ${h(d.ontvanger)}</h3>
+  <h3>${h(etiket(d.type))}</h3>
+  ${ontvangerBlok(d.ontvanger)}
+  <div class="waarom">
+    <div class="label">Waarom</div>
+    <div>${h(d.waarom)}</div>
+  </div>
   <dl>
     <dt>Account</dt><dd>${h(d.clientNaam)} / ${h(d.eigenaarNaam)}</dd>
     <dt>Aangemaakt door</dt><dd>${h(d.aangemaaktDoorSkill)}</dd>
-    <dt>Aangemaakt op</dt><dd>${h(d.aangemaaktOp.toISOString())}</dd>
+    <dt>Aangemaakt op</dt><dd>${h(formatteerAmsterdam(d.aangemaaktOp))}</dd>
     <dt>Budget</dt><dd class="budget">${h(budgetTekst(d))}</dd>
   </dl>
   <form method="post" action="/admin/acties/goedkeuren">
     <input type="hidden" name="csrf" value="${h(csrfToken)}">
     <input type="hidden" name="actieId" value="${h(d.actieId)}">
     <label for="tekst-${h(d.actieId)}">Volledige tekst (aan te passen vóór goedkeuren)</label>
-    <textarea id="tekst-${h(d.actieId)}" name="nieuweTekst">${h(d.tekst)}</textarea>
+    <textarea id="tekst-${h(d.actieId)}" name="nieuweTekst"
+              data-maxtekens="${h(d.tekenMax)}">${h(d.tekst)}</textarea>
+    <div class="teken-teller${teLang ? ' over' : ''}" data-voor="${h(d.actieId)}">
+      ${h(d.tekst.length)}/${h(d.tekenMax)} tekens${teLang ? ' — boven de limiet, korter maken' : ` (nog ${h(vrij)})`}
+    </div>
     <div class="knoppen">
       <label class="checkbox"><input type="checkbox" name="batch" value="${h(d.actieId)}" form="batch-form"> Selecteren voor batch</label>
-      <button type="submit">Goedkeuren</button>
+      <button type="submit" ${teLang ? 'disabled' : ''}>Goedkeuren</button>
     </div>
   </form>
   <form method="post" action="/admin/acties/afwijzen">
@@ -163,11 +228,16 @@ function draftKaart(d: DraftWeergave, csrfToken: string): string {
 function onzekerKaart(o: OnzekerWeergave, csrfToken: string): string {
   return `
 <article class="actie-kaart">
-  <h3>Onzeker — ${h(etiket(o.type))} — ${h(o.ontvanger)}</h3>
+  <h3>Onzeker — ${h(etiket(o.type))}</h3>
+  ${ontvangerBlok(o.ontvanger)}
+  <div class="waarom">
+    <div class="label">Waarom</div>
+    <div>${h(o.waarom)}</div>
+  </div>
   <dl>
     <dt>Account</dt><dd>${h(o.clientNaam)} / ${h(o.eigenaarNaam)}</dd>
     <dt>Reden</dt><dd>${h(o.reden ?? '—')}</dd>
-    <dt>Aangemaakt op</dt><dd>${h(o.aangemaaktOp.toISOString())}</dd>
+    <dt>Aangemaakt op</dt><dd>${h(formatteerAmsterdam(o.aangemaaktOp))}</dd>
     <dt>Tekst</dt><dd><pre style="white-space:pre-wrap;margin:0">${h(o.tekst)}</pre></dd>
   </dl>
   <div class="knoppen">
@@ -247,5 +317,5 @@ export function overzichtView(opts: OverzichtViewOpties): string {
     ${onzekerSectie}
   </section>
 </main>`;
-  return layout('Goedkeuren', inhoud);
+  return layout('Goedkeuren', inhoud, true);
 }

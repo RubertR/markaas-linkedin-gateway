@@ -59,12 +59,29 @@ beforeEach(async () => {
   await markeerAccountGekoppeld(db, accountId, 'uni-rub');
 });
 
+function ontvangerVelden(
+  overschrijf: Partial<Record<string, unknown>> = {},
+): Record<string, unknown> {
+  return {
+    ontvanger_naam: 'Nina Jansen',
+    ontvanger_functie: 'Marketing manager',
+    ontvanger_bedrijf: 'Acme NV',
+    ontvanger_url: 'https://www.linkedin.com/in/nina-jansen/',
+    waarom: 'Afkomstig uit zoekactie X-123.',
+    ...overschrijf,
+  };
+}
+
 async function maakDraft(type: 'invite' | 'message' | 'inmail', payload: Record<string, unknown>) {
-  return await maakActie(db, { accountId, type, payload });
+  return await maakActie(db, {
+    accountId,
+    type,
+    payload: { ...ontvangerVelden(), ...payload },
+  });
 }
 
 describe('lijstDrafts', () => {
-  it('toont draft invites met ontvanger, tekst, skill en resterend budget', async () => {
+  it('toont draft invites met ontvanger (naam/functie/bedrijf/url), waarom, skill, tekenMax en resterend budget', async () => {
     await maakDraft('invite', {
       providerId: 'ACo-abc',
       message: 'Hoi, zullen we even bellen?',
@@ -74,14 +91,30 @@ describe('lijstDrafts', () => {
     assert.equal(drafts.length, 1);
     const d = drafts[0]!;
     assert.equal(d.type, 'invite');
-    assert.equal(d.ontvanger, 'ACo-abc');
+    assert.equal(d.ontvanger.naam, 'Nina Jansen');
+    assert.equal(d.ontvanger.functie, 'Marketing manager');
+    assert.equal(d.ontvanger.bedrijf, 'Acme NV');
+    assert.equal(d.ontvanger.url, 'https://www.linkedin.com/in/nina-jansen/');
+    assert.equal(d.ontvanger.technischeId, 'ACo-abc');
     assert.match(d.tekst, /Hoi, zullen we even bellen/);
+    assert.match(d.waarom, /zoekactie X-123/);
+    assert.equal(d.tekenMax, 300);
     assert.equal(d.aangemaaktDoorSkill, 'leadworker');
     assert.equal(d.clientNaam, 'Markaas');
     assert.equal(d.eigenaarNaam, 'Rubert');
     assert.ok(d.budget.dag, 'invite heeft een dagbudget');
     assert.equal(d.budget.dag!.norm, 10); // salesnav_core 20/dag × opbouwFactor 0.5
     assert.equal(d.budget.dag!.resterend, 10);
+  });
+
+  it('toont tekenMax 8000 voor message en 2000 voor inmail', async () => {
+    await maakDraft('message', { chatId: 'C-1', tekst: 'Hoi' });
+    await maakDraft('inmail', { attendeesIds: ['ACo-a'], tekst: 'Hoi', onderwerp: 'Vraag' });
+    const drafts = await lijstDrafts(db, { limieten, klok });
+    const msg = drafts.find((d) => d.type === 'message')!;
+    const im = drafts.find((d) => d.type === 'inmail')!;
+    assert.equal(msg.tekenMax, 8000);
+    assert.equal(im.tekenMax, 2000);
   });
 
   it('toont "onbekend" als geen skill in de payload staat', async () => {
@@ -145,6 +178,40 @@ describe('goedkeur', () => {
       () => goedkeur(db, draft.id, { klok, nieuweTekst: 'te laat' }),
       /tekst alleen aan te passen op drafts/i,
     );
+  });
+
+  it('weigert server-side wanneer nieuwe tekst boven de limiet uitkomt', async () => {
+    const draft = await maakDraft('invite', { providerId: 'A', message: 'kort' });
+    const teLang = 'x'.repeat(limieten.tekst_max_tekens.invite + 1);
+    await assert.rejects(
+      () => goedkeur(db, draft.id, { klok, limieten, nieuweTekst: teLang }),
+      /maximum voor invite is 300/,
+    );
+    const na = await vindActie(db, draft.id);
+    assert.equal(na?.status, 'draft', 'actie blijft draft bij te lange tekst');
+    assert.equal(
+      (na?.payload as { message?: string })?.message,
+      'kort',
+      'tekst mag niet aangepast zijn',
+    );
+  });
+
+  it('weigert server-side ook wanneer de bestaande tekst al over de limiet is (zonder nieuweTekst)', async () => {
+    const teLang = 'x'.repeat(limieten.tekst_max_tekens.invite + 1);
+    const draft = await maakDraft('invite', { providerId: 'A', message: teLang });
+    await assert.rejects(
+      () => goedkeur(db, draft.id, { klok, limieten }),
+      /maximum voor invite is 300/,
+    );
+    const na = await vindActie(db, draft.id);
+    assert.equal(na?.status, 'draft');
+  });
+
+  it('aan de rand (exact de limiet) is wel toegestaan', async () => {
+    const opDeRand = 'x'.repeat(limieten.tekst_max_tekens.invite);
+    const draft = await maakDraft('invite', { providerId: 'A' });
+    const g = await goedkeur(db, draft.id, { klok, limieten, nieuweTekst: opDeRand });
+    assert.equal(g.status, 'approved');
   });
 });
 

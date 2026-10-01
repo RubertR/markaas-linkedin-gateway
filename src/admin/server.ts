@@ -160,7 +160,10 @@ export function maakAdminApp(deps: AdminDeps) {
     const actieId = getString(form, 'actieId');
     const nieuweTekstRaw = getString(form, 'nieuweTekst');
     try {
-      const opts: Parameters<typeof goedkeur>[2] = { klok: deps.klok };
+      const opts: Parameters<typeof goedkeur>[2] = {
+        klok: deps.klok,
+        limieten: deps.limieten,
+      };
       if (nieuweTekstRaw.trim() !== '') opts.nieuweTekst = nieuweTekstRaw;
       await goedkeur(deps.db, actieId, opts);
       zetFlash(c, deps, { soort: 'ok', tekst: 'Actie goedgekeurd.' });

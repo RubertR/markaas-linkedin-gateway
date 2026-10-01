@@ -31,6 +31,13 @@
     "tijdzone_standaard": "Europe/Amsterdam"
   },
 
+  "tekst_max_tekens": {
+    "$toelichting": "Maximumlengte van de voor-mensen-tekst per actietype voor de goedkeuringspagina (SPEC §12). invite = LinkedIn-connectienotitie (300); message = chatbericht (8000); inmail = InMail-body (2000). Niet dezelfde regel als abonnement.invite.notitie.tekens_max — die is de door Unipile/LinkedIn gerapporteerde ondergrens per abonnement; dit is wat de UI toont als harde limiet.",
+    "invite": 300,
+    "message": 8000,
+    "inmail": 2000
+  },
+
   "unipile_usage_signaal": {
     "$toelichting": "Unipile geeft in het invite-antwoord soms een usage-percentage terug bij 50/75/90/95%. Bij deze drempel of hoger direct opbouw_factor omlaag.",
     "afremmen_bij_percentage": 75,

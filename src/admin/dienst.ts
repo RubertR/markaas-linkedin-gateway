@@ -32,14 +32,25 @@ export interface BudgetResterendPerType {
   maand?: { gebruikt: number; norm: number; resterend: number };
 }
 
+export interface OntvangerWeergave {
+  naam: string;
+  functie: string;
+  bedrijf: string;
+  url: string;
+  /** Technische verwijzing die klein onder de naam past (providerId, chatId of attendees). */
+  technischeId: string;
+}
+
 export interface DraftWeergave {
   actieId: string;
   accountId: string;
   eigenaarNaam: string;
   clientNaam: string;
   type: AdminActieType;
-  ontvanger: string;
+  ontvanger: OntvangerWeergave;
   tekst: string;
+  tekenMax: number;
+  waarom: string;
   aangemaaktDoorSkill: string;
   aangemaaktOp: Date;
   budget: BudgetResterendPerType;
@@ -51,8 +62,9 @@ export interface OnzekerWeergave {
   eigenaarNaam: string;
   clientNaam: string;
   type: AdminActieType;
-  ontvanger: string;
+  ontvanger: OntvangerWeergave;
   tekst: string;
+  waarom: string;
   reden: string | null;
   uitgevoerdOp: Date | null;
   aangemaaktOp: Date;
@@ -111,6 +123,8 @@ export async function lijstDrafts(
       type: rij.type as AdminActieType,
       ontvanger: ontvangerUitPayload(rij.type as AdminActieType, payload),
       tekst: tekstUitPayload(rij.type as AdminActieType, payload),
+      tekenMax: tekenMaxVoorType(rij.type as AdminActieType, opties.limieten),
+      waarom: waaromUitPayload(payload),
       aangemaaktDoorSkill: skillUitPayload(payload),
       aangemaaktOp: alsDatum(rij.aangemaakt_op),
       budget: await budgetVoorType(db, {
@@ -125,6 +139,10 @@ export async function lijstDrafts(
     });
   }
   return uit;
+}
+
+export function tekenMaxVoorType(type: AdminActieType, limieten: Limieten): number {
+  return limieten.tekst_max_tekens[type];
 }
 
 export async function lijstOnzeker(
@@ -153,6 +171,7 @@ export async function lijstOnzeker(
       type: rij.type as AdminActieType,
       ontvanger: ontvangerUitPayload(rij.type as AdminActieType, payload),
       tekst: tekstUitPayload(rij.type as AdminActieType, payload),
+      waarom: waaromUitPayload(payload),
       reden: rij.reden,
       uitgevoerdOp: rij.uitgevoerd_op ? alsDatum(rij.uitgevoerd_op) : null,
       aangemaaktOp: alsDatum(rij.aangemaakt_op),
@@ -164,6 +183,12 @@ export async function lijstOnzeker(
 export interface GoedkeurenOpties {
   nieuweTekst?: string;
   klok?: Klok;
+  /**
+   * Verplicht wanneer we tekstlengte willen controleren — in productie
+   * altijd meegegeven; onze invariant is "server-side ook controleren,
+   * nooit vertrouwen op JS-counter in de browser".
+   */
+  limieten?: Limieten;
 }
 
 export async function goedkeur(
@@ -172,7 +197,9 @@ export async function goedkeur(
   opts: GoedkeurenOpties = {},
 ): Promise<Actie> {
   if (opts.nieuweTekst !== undefined) {
-    await werkTekstBij(db, actieId, opts.nieuweTekst);
+    await werkTekstBij(db, actieId, opts.nieuweTekst, opts.limieten);
+  } else if (opts.limieten) {
+    await controleerBestaandeTekst(db, actieId, opts.limieten);
   }
   const nu = opts.klok?.nu() ?? new Date();
   return await keurActieGoed(db, actieId, GOEDKEURDER_RUBERT, nu);
@@ -273,7 +300,25 @@ function alsDatum(w: string | Date): Date {
   return w instanceof Date ? w : new Date(w);
 }
 
-function ontvangerUitPayload(type: AdminActieType, p: Record<string, unknown>): string {
+function ontvangerUitPayload(
+  type: AdminActieType,
+  p: Record<string, unknown>,
+): OntvangerWeergave {
+  return {
+    naam: tekstVeld(p, 'ontvanger_naam'),
+    functie: tekstVeld(p, 'ontvanger_functie'),
+    bedrijf: tekstVeld(p, 'ontvanger_bedrijf'),
+    url: tekstVeld(p, 'ontvanger_url'),
+    technischeId: technischeIdVoor(type, p),
+  };
+}
+
+function tekstVeld(p: Record<string, unknown>, naam: string): string {
+  const w = p[naam];
+  return typeof w === 'string' && w.trim() !== '' ? w : '—';
+}
+
+function technischeIdVoor(type: AdminActieType, p: Record<string, unknown>): string {
   switch (type) {
     case 'invite':
       return (p['providerId'] as string) ?? (p['userEmail'] as string) ?? '—';
@@ -285,6 +330,11 @@ function ontvangerUitPayload(type: AdminActieType, p: Record<string, unknown>): 
       return '—';
     }
   }
+}
+
+function waaromUitPayload(p: Record<string, unknown>): string {
+  const w = p['waarom'];
+  return typeof w === 'string' && w.trim() !== '' ? w : '—';
 }
 
 function tekstUitPayload(type: AdminActieType, p: Record<string, unknown>): string {
@@ -312,7 +362,12 @@ function skillUitPayload(p: Record<string, unknown>): string {
   return 'onbekend';
 }
 
-async function werkTekstBij(db: Backend, actieId: string, nieuweTekst: string): Promise<void> {
+async function werkTekstBij(
+  db: Backend,
+  actieId: string,
+  nieuweTekst: string,
+  limieten?: Limieten,
+): Promise<void> {
   const actie = await vindActie(db, actieId);
   if (!actie) throw new Error(`Actie ${actieId} bestaat niet.`);
   if (actie.status !== 'draft') {
@@ -320,20 +375,46 @@ async function werkTekstBij(db: Backend, actieId: string, nieuweTekst: string): 
       `Actie ${actieId} heeft status "${actie.status}"; tekst alleen aan te passen op drafts.`,
     );
   }
-  const schoon = nieuweTekst.trim();
-  const nieuwePayload = { ...actie.payload };
-  if (actie.type === 'invite') nieuwePayload['message'] = schoon;
-  else if (actie.type === 'message') nieuwePayload['tekst'] = schoon;
-  else if (actie.type === 'inmail') nieuwePayload['tekst'] = schoon;
-  else {
+  if (!isAdminType(actie.type)) {
     throw new Error(
       `Tekst aanpassen wordt niet ondersteund voor actietype "${actie.type}".`,
     );
   }
+  const schoon = nieuweTekst.trim();
+  if (limieten) {
+    const max = tekenMaxVoorType(actie.type, limieten);
+    if (schoon.length > max) {
+      throw new Error(
+        `Tekst is ${schoon.length} tekens; maximum voor ${actie.type} is ${max} tekens. Korter maken vóór goedkeuren.`,
+      );
+    }
+  }
+  const nieuwePayload = { ...actie.payload };
+  if (actie.type === 'invite') nieuwePayload['message'] = schoon;
+  else if (actie.type === 'message') nieuwePayload['tekst'] = schoon;
+  else if (actie.type === 'inmail') nieuwePayload['tekst'] = schoon;
   await db.query(
     `update actions set payload = $2::jsonb where id = $1`,
     [actieId, JSON.stringify(nieuwePayload)],
   );
+}
+
+async function controleerBestaandeTekst(
+  db: Backend,
+  actieId: string,
+  limieten: Limieten,
+): Promise<void> {
+  const actie = await vindActie(db, actieId);
+  if (!actie) throw new Error(`Actie ${actieId} bestaat niet.`);
+  if (!isAdminType(actie.type)) return;
+  const payload = actie.payload as Record<string, unknown>;
+  const tekst = tekstUitPayload(actie.type, payload);
+  const max = tekenMaxVoorType(actie.type, limieten);
+  if (tekst.length > max) {
+    throw new Error(
+      `Tekst is ${tekst.length} tekens; maximum voor ${actie.type} is ${max} tekens. Korter maken vóór goedkeuren.`,
+    );
+  }
 }
 
 interface BudgetInvoer {

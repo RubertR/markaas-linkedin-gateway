@@ -183,7 +183,15 @@ describe('tools/call: queue_action blijft altijd draft', () => {
           arguments: {
             accountId,
             type: 'invite',
-            payload: { providerId: 'ACo-xyz', message: 'Hoi!' },
+            payload: {
+              providerId: 'ACo-xyz',
+              message: 'Hoi Nina!',
+              ontvanger_naam: 'Nina Jansen',
+              ontvanger_functie: 'Marketing manager',
+              ontvanger_bedrijf: 'Acme NV',
+              ontvanger_url: 'https://www.linkedin.com/in/nina-jansen/',
+              waarom: 'Afkomstig uit zoekactie X-123.',
+            },
           },
         },
       },
@@ -214,7 +222,14 @@ describe('tools/call: queue_action blijft altijd draft', () => {
           arguments: {
             accountId,
             type: 'invite',
-            payload: { providerId: 'ACo-xyz' },
+            payload: {
+              providerId: 'ACo-xyz',
+              ontvanger_naam: 'Nina Jansen',
+              ontvanger_functie: 'Marketing manager',
+              ontvanger_bedrijf: 'Acme NV',
+              ontvanger_url: 'https://www.linkedin.com/in/nina-jansen/',
+              waarom: 'Afkomstig uit zoekactie X-123.',
+            },
             approved: true,
           },
         },
@@ -262,7 +277,14 @@ describe('tools/call: geen enkele tool verstuurt direct', () => {
       if (naam === 'queue_action') {
         argumenten['accountId'] = accountId;
         argumenten['type'] = 'invite';
-        argumenten['payload'] = { providerId: 'ACo-xyz' };
+        argumenten['payload'] = {
+          providerId: 'ACo-xyz',
+          ontvanger_naam: 'Nina Jansen',
+          ontvanger_functie: 'Marketing manager',
+          ontvanger_bedrijf: 'Acme NV',
+          ontvanger_url: 'https://www.linkedin.com/in/nina-jansen/',
+          waarom: 'Afkomstig uit zoekactie X-123.',
+        };
       }
       await postMcp(
         {

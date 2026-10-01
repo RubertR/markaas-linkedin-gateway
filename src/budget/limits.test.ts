@@ -19,6 +19,9 @@ describe('laadLimieten', () => {
     assert.equal(limieten.tijdvenster.pauze_mcp_sync_seconden.search.min, 120);
     assert.equal(limieten.tijdvenster.pauze_mcp_sync_seconden.search.max, 480);
     assert.equal(limieten.unipile_usage_signaal.afremmen_bij_percentage, 75);
+    assert.equal(limieten.tekst_max_tekens.invite, 300);
+    assert.equal(limieten.tekst_max_tekens.message, 8000);
+    assert.equal(limieten.tekst_max_tekens.inmail, 2000);
 
     for (const abonnement of [
       'free',
@@ -54,6 +57,7 @@ describe('limietenUitObject', () => {
         },
         tijdzone_standaard: 'Europe/Amsterdam',
       },
+      tekst_max_tekens: { invite: 300, message: 8000, inmail: 2000 },
       unipile_usage_signaal: { afremmen_bij_percentage: 75, nieuwe_factor_bij_afremmen: 0.5 },
       abonnementen: {
         free: {},
@@ -115,6 +119,11 @@ function basisConfig(): Record<string, Record<string, unknown>> & {
         search: { min: 120, max: 480 },
       },
       tijdzone_standaard: 'Europe/Amsterdam',
+    },
+    tekst_max_tekens: {
+      invite: 300,
+      message: 8000,
+      inmail: 2000,
     },
     unipile_usage_signaal: {
       afremmen_bij_percentage: 75,

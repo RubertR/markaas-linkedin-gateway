@@ -61,6 +61,13 @@ async function zaaiDemodata(db: Awaited<ReturnType<typeof pgliteBackend>>): Prom
       message:
         'Hoi Nina, we helpen MKB-marketeers met LinkedIn-outreach dat niet als spam voelt. ' +
         'Zullen we even sparren of het bij jullie past?',
+      ontvanger_naam: 'Nina Jansen',
+      ontvanger_functie: 'Head of Marketing',
+      ontvanger_bedrijf: 'Acme Logistics',
+      ontvanger_url: 'https://www.linkedin.com/in/nina-jansen/',
+      waarom:
+        'Afkomstig uit zoekactie "logistiek marketing" op Sales Navigator (actie S-2026-10-01-003). ' +
+        'Score 0.82 — werkt sinds 2024 bij Acme, groei van 20 naar 65 FTE.',
       _skill: 'leadworker',
     },
   });
@@ -72,6 +79,13 @@ async function zaaiDemodata(db: Awaited<ReturnType<typeof pgliteBackend>>): Prom
       tekst:
         'Dag Leo, dank voor de connectie! Je gaf vorige week een lezing over account-based ' +
         'marketing — stuur je me die slides?',
+      ontvanger_naam: 'Leo Bakker',
+      ontvanger_functie: 'Head of Growth',
+      ontvanger_bedrijf: 'Finbase',
+      ontvanger_url: 'https://www.linkedin.com/in/leo-bakker/',
+      waarom:
+        'Opvolgbericht: Leo accepteerde ons connectieverzoek op 29 sep. Nog geen reactie ' +
+        'op het verzoek met notitie — nu een kort follow-up met een concrete haak (de lezing).',
       _skill: 'opvolgwerker',
     },
   });
@@ -84,6 +98,13 @@ async function zaaiDemodata(db: Awaited<ReturnType<typeof pgliteBackend>>): Prom
       tekst:
         'Hoi Pieter, ik werk aan een gereedschapsset voor B2B-funnels in Pipedrive. ' +
         'Zou je 15 minuten vrij hebben om jullie aanpak te horen?',
+      ontvanger_naam: 'Pieter Vermeulen',
+      ontvanger_functie: 'Sales Director',
+      ontvanger_bedrijf: 'Trident BV',
+      ontvanger_url: 'https://www.linkedin.com/in/pieter-vermeulen/',
+      waarom:
+        'Pieter past bij ons ICP (B2B SaaS, 25-100 FTE, Pipedrive) en reageerde eerder dit ' +
+        'jaar op een branchepost over funnel-optimalisatie. InMail-tegoed vandaag beschikbaar.',
       _skill: 'onderzoeker',
     },
   });
@@ -95,6 +116,13 @@ async function zaaiDemodata(db: Awaited<ReturnType<typeof pgliteBackend>>): Prom
     payload: {
       providerId: 'ACo-marieke-visser',
       message: 'Hoi Marieke, zullen we even sparren over jullie account-based marketing?',
+      ontvanger_naam: 'Marieke Visser',
+      ontvanger_functie: 'Marketing Director',
+      ontvanger_bedrijf: 'Northline',
+      ontvanger_url: 'https://www.linkedin.com/in/marieke-visser/',
+      waarom:
+        'Afkomstig uit zoekactie "ABM mkb Nederland" (actie S-2026-09-30-012). ' +
+        'Score 0.74 — paste in jouw ICP maar time-out tijdens verzenden; controleer handmatig.',
       _skill: 'leadworker',
     },
   });

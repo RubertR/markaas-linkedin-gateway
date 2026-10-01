@@ -112,7 +112,7 @@ export const TOOL_DEFINITIES: readonly ToolDefinitie[] = [
   {
     name: 'queue_action',
     description:
-      'Zet een invite, bericht of InMail in de wachtrij als CONCEPT (status "draft"). Goedkeuring en verzending lopen uitsluitend via de goedkeuringspagina van de gateway — deze tool keurt zelf niets goed en verstuurt niets.',
+      'Zet een invite, bericht of InMail in de wachtrij als CONCEPT (status "draft"). Goedkeuring en verzending lopen uitsluitend via de goedkeuringspagina van de gateway — deze tool keurt zelf niets goed en verstuurt niets. De payload MOET altijd ontvanger_naam, ontvanger_functie, ontvanger_bedrijf, ontvanger_url (https linkedin.com) en waarom (reden van de skill) bevatten.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -121,7 +121,24 @@ export const TOOL_DEFINITIES: readonly ToolDefinitie[] = [
         payload: {
           type: 'object',
           description:
-            'Veldwaarden voor de actie. Voor invite: providerId (+ optioneel message, userEmail). Voor message: chatId, tekst (+ optioneel quoteId). Voor inmail: attendeesIds, tekst (+ optioneel onderwerp, linkedinApi).',
+            'Veldwaarden voor de actie. Technische velden: invite = providerId (+ optioneel message, userEmail); message = chatId, tekst (+ optioneel quoteId); inmail = attendeesIds, tekst (+ optioneel onderwerp, linkedinApi). Voor de goedkeuringspagina altijd verplicht: ontvanger_naam, ontvanger_functie, ontvanger_bedrijf, ontvanger_url (https linkedin.com) en waarom (reden/signaal waarmee de skill deze lead koos).',
+          properties: {
+            ontvanger_naam: { type: 'string', minLength: 1 },
+            ontvanger_functie: { type: 'string', minLength: 1 },
+            ontvanger_bedrijf: { type: 'string', minLength: 1 },
+            ontvanger_url: {
+              type: 'string',
+              pattern: '^https://([a-z0-9-]+\\.)?linkedin\\.com/',
+            },
+            waarom: { type: 'string', minLength: 1 },
+          },
+          required: [
+            'ontvanger_naam',
+            'ontvanger_functie',
+            'ontvanger_bedrijf',
+            'ontvanger_url',
+            'waarom',
+          ],
           additionalProperties: true,
         },
         geplandOp: {
