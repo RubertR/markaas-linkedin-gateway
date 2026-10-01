@@ -36,5 +36,10 @@ Geteste Unipile-endpoints staan in `docs/unipile-notities.md`.
 - `npm run migrate` — voert openstaande migraties uit (alleen na akkoord van Rubert).
 - `npm run admin:hash` — vraagt tweemaal een wachtwoord (verborgen invoer) en
   toont de regel voor `ADMIN_PASSWORD_HASH` in `.env`.
+- `npm run -s dev:demo` — start de goedkeuringspagina lokaal op PGlite
+  in-memory met demodata (1 klant "Demo", 1 account "Rubert (demo)", 3
+  concepten en 1 onzeker-actie). Geen Supabase, geen Unipile, geen planner
+  of worker. Alleen `ADMIN_PASSWORD_HASH` komt uit `.env`. Toont één regel:
+  het adres om te openen.
 
 Eigenaar: Rubert Rietkerk, MARKaaS.
