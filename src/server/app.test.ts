@@ -9,6 +9,7 @@ import { maakLogger } from '../log/logger.ts';
 import { vastePauze } from '../queue/pauze.ts';
 import { vasteWerkdagen } from '../sequences/wachttijd.ts';
 import { maakUnipileClient } from '../unipile/client.ts';
+import { koppelSleutel } from '../webhooks/geheim.ts';
 import { verseDatabaseMetMigraties } from '../../test/helpers/pglite.ts';
 
 import { maakGatewayApp, unipileBaseUrl } from './app.ts';
@@ -166,6 +167,21 @@ describe('maakGatewayApp', () => {
         assert.ok(!r.includes(waarde), 'logregel bevat een geheime waarde');
       }
     }
+  });
+
+  it('logt een koppel-callback zonder de sleutel uit de querystring', async () => {
+    const regels: string[] = [];
+    const app = maakApp(leesEnv(GEHEIMEN), { regels });
+    const k = koppelSleutel(GEHEIMEN.WEBHOOK_SECRET);
+    const res = await app.request(`/webhooks/koppel?k=${k}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'RECONNECTED', account_id: 'onbekend' }),
+    });
+    assert.equal(res.status, 200);
+    const regel = JSON.parse(regels.at(-1)!);
+    assert.equal(regel.pad, '/webhooks/koppel');
+    for (const r of regels) assert.ok(!r.includes(k), 'logregel bevat de koppelsleutel');
   });
 });
 

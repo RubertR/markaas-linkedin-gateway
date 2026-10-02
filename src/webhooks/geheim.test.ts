@@ -1,7 +1,30 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { vergelijkGeheim } from './geheim.ts';
+import { createHmac } from 'node:crypto';
+
+import { KOPPEL_SLEUTEL_PARAM, koppelNotifyUrl, koppelSleutel, vergelijkGeheim } from './geheim.ts';
+
+describe('koppelSleutel', () => {
+  it('is HMAC-SHA256 over de vaste tekst "koppel" met WEBHOOK_SECRET als sleutel', () => {
+    const verwacht = createHmac('sha256', 'geheim-abc').update('koppel').digest('hex');
+    assert.equal(koppelSleutel('geheim-abc'), verwacht);
+  });
+
+  it('is niet het geheim zelf en verschilt per geheim', () => {
+    assert.notEqual(koppelSleutel('geheim-abc'), 'geheim-abc');
+    assert.notEqual(koppelSleutel('geheim-abc'), koppelSleutel('geheim-xyz'));
+  });
+});
+
+describe('koppelNotifyUrl', () => {
+  it('zet de afgeleide sleutel als queryparameter k achter /webhooks/koppel', () => {
+    const url = new URL(koppelNotifyUrl('https://gateway.example', 'geheim-abc'));
+    assert.equal(url.origin + url.pathname, 'https://gateway.example/webhooks/koppel');
+    assert.equal(url.searchParams.get(KOPPEL_SLEUTEL_PARAM), koppelSleutel('geheim-abc'));
+    assert.ok(!url.href.includes('geheim-abc'), 'notify_url bevat het geheim zelf');
+  });
+});
 
 describe('vergelijkGeheim', () => {
   it('geeft true bij een exact gelijk geheim', () => {

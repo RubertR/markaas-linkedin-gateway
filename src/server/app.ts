@@ -10,6 +10,7 @@ import { maakMcpApp } from '../mcp/server.ts';
 import type { PauzeKiezer } from '../queue/pauze.ts';
 import type { WerkdagenKiezer } from '../sequences/wachttijd.ts';
 import type { UnipileClient } from '../unipile/client.ts';
+import { koppelNotifyUrl } from '../webhooks/geheim.ts';
 import { maakWebhookApp } from '../webhooks/server.ts';
 
 import { maakHealthApp } from './health.ts';
@@ -70,7 +71,7 @@ export function maakGatewayApp(deps: GatewayDeps) {
       unipile: deps.unipile,
       webhookSecret: env.webhookSecret,
       koppelOpties: {
-        notifyUrl: `${env.publicBaseUrl}/webhooks/koppel`,
+        notifyUrl: koppelNotifyUrl(env.publicBaseUrl, env.webhookSecret),
         apiUrl: unipileBaseUrl(env.unipileDsn),
       },
       sequentieHook: {

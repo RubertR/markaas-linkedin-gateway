@@ -23,11 +23,13 @@ import { systeemWerkdagenKiezer } from './sequences/wachttijd.ts';
 import { maakGatewayApp, unipileBaseUrl } from './server/app.ts';
 import { leesVersie } from './server/versie.ts';
 import { maakUnipileClient } from './unipile/client.ts';
+import { koppelNotifyUrl, koppelSleutel } from './webhooks/geheim.ts';
 
 function geheimenUit(env: Env): string[] {
   return [
     env.unipileApiKey,
     env.webhookSecret,
+    koppelSleutel(env.webhookSecret),
     env.mcpToken,
     env.adminPasswordHash,
     env.databaseUrl,
@@ -94,7 +96,10 @@ async function main(): Promise<void> {
     }
   });
 
-  const koppelOpties = { notifyUrl: `${env.publicBaseUrl}/webhooks/koppel`, apiUrl: baseUrl };
+  const koppelOpties = {
+    notifyUrl: koppelNotifyUrl(env.publicBaseUrl, env.webhookSecret),
+    apiUrl: baseUrl,
+  };
   const lus = startPlannerLus({
     ingeschakeld: env.plannerEnabled,
     tijdvenster: limieten.tijdvenster,

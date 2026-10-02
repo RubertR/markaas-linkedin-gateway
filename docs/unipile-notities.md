@@ -182,6 +182,10 @@ optioneel `name`, `format: json`, `headers` (voor een eigen geheim) en `data`.
 - Antwoord: `{"object":"HostedAuthUrl","url":"https://account.unipile.com/…"}`.
 - Callback op `notify_url` na succes: `status: CREATION_SUCCESS` / `RECONNECTED`, `account_id`,
   `name` (nog niet waargenomen; links zijn niet gebruikt).
+- Hosted auth kan bij de `notify_url` **geen eigen headers** meesturen. Daarom zet de gateway
+  een sleutel in de URL: `/webhooks/koppel?k=<HMAC-SHA256(WEBHOOK_SECRET, "koppel")>` (hex),
+  dus nooit het geheim zelf. `/webhooks/koppel` accepteert die `k` óf de header
+  `x-webhook-secret`; `/webhooks/unipile` alleen de header. De toegangslog toont alleen het pad.
 - Links niet in een iframe tonen (captcha/OAuth). Niet in chat of logs laten slingeren.
 
 ## Opruimen na fase 1

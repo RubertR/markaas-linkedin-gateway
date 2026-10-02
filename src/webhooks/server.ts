@@ -5,7 +5,12 @@ import { verwerkKoppelCallback, type KoppelflowOpties } from '../register/koppel
 import type { SequentieHookDeps } from '../sequences/hooks.ts';
 import type { UnipileClient } from '../unipile/client.ts';
 
-import { WEBHOOK_SECRET_HEADER, vergelijkGeheim } from './geheim.ts';
+import {
+  KOPPEL_SLEUTEL_PARAM,
+  WEBHOOK_SECRET_HEADER,
+  koppelSleutel,
+  vergelijkGeheim,
+} from './geheim.ts';
 import { verwerkUnipileWebhook } from './unipile.ts';
 
 export interface WebhookDeps {
@@ -22,9 +27,16 @@ const WEIGER_TEKST = 'Webhook geweigerd: geheim ontbreekt of klopt niet.';
 export function maakWebhookApp(deps: WebhookDeps) {
   const app = new Hono();
 
+  const sleutel = koppelSleutel(deps.webhookSecret);
+
+  // /webhooks/koppel: header óf de afgeleide sleutel in ?k= (hosted auth kan
+  // geen headers meesturen). Alle andere webhooks: alleen de header.
   app.use('/webhooks/*', async (c, next) => {
-    const geleverd = c.req.header(WEBHOOK_SECRET_HEADER);
-    if (!vergelijkGeheim(geleverd, deps.webhookSecret)) {
+    const viaHeader = vergelijkGeheim(c.req.header(WEBHOOK_SECRET_HEADER), deps.webhookSecret);
+    const viaSleutel =
+      c.req.path === '/webhooks/koppel' &&
+      vergelijkGeheim(c.req.query(KOPPEL_SLEUTEL_PARAM), sleutel);
+    if (!viaHeader && !viaSleutel) {
       return c.text(WEIGER_TEKST, 401);
     }
     return await next();

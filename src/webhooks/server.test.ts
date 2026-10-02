@@ -9,7 +9,7 @@ import { maakClient } from '../register/clients.ts';
 import { markeerAccountGekoppeld, registreerAccount, vindAccount } from '../register/accounts.ts';
 import type { KoppelflowOpties } from '../register/koppelflow.ts';
 
-import { WEBHOOK_SECRET_HEADER } from './geheim.ts';
+import { WEBHOOK_SECRET_HEADER, koppelSleutel } from './geheim.ts';
 import { maakWebhookApp } from './server.ts';
 
 const SECRET = 'zeer-geheim-abc';
@@ -169,6 +169,63 @@ describe('POST /webhooks/koppel', () => {
     const account = await vindAccount(db, a.id);
     assert.equal(account?.unipileAccountId, 'unipile-nieuw');
     assert.equal(account?.status, 'OK');
+  });
+});
+
+describe('POST /webhooks/koppel met sleutel in de querystring (hosted auth)', () => {
+  const K = koppelSleutel(SECRET);
+  const CALLBACK = { status: 'RECONNECTED', account_id: UNIPILE_ACCOUNT_ID };
+
+  it('verwerkt een callback zonder header maar met de juiste k', async () => {
+    const res = await verzoek(`/webhooks/koppel?k=${K}`, { secret: null, body: CALLBACK });
+    assert.equal(res.status, 200);
+    const body = await res.json() as { verwerkt: boolean };
+    assert.equal(body.verwerkt, true);
+  });
+
+  it('koppelt een nieuw account via CREATION_SUCCESS met alleen k', async () => {
+    const c = await maakClient(db, { naam: 'Nieuw', slug: 'nieuw' });
+    const a = await registreerAccount(db, {
+      clientId: c.id,
+      eigenaarNaam: 'Andere',
+      abonnement: 'salesnav_core',
+    });
+    const res = await verzoek(`/webhooks/koppel?k=${K}`, {
+      secret: null,
+      body: { status: 'CREATION_SUCCESS', account_id: 'unipile-nieuw', name: a.id },
+    });
+    assert.equal(res.status, 200);
+    assert.equal((await vindAccount(db, a.id))?.unipileAccountId, 'unipile-nieuw');
+  });
+
+  it('401 bij een foute k', async () => {
+    const res = await verzoek('/webhooks/koppel?k=fout', { secret: null, body: CALLBACK });
+    assert.equal(res.status, 401);
+    const rijen = await db.query<{ aantal: string }>('select count(*)::text as aantal from events');
+    assert.equal(rijen[0]?.aantal, '0');
+  });
+
+  it('401 bij een lege k', async () => {
+    const res = await verzoek('/webhooks/koppel?k=', { secret: null, body: CALLBACK });
+    assert.equal(res.status, 401);
+  });
+
+  it('401 als k het ruwe WEBHOOK_SECRET is in plaats van de afgeleide sleutel', async () => {
+    const res = await verzoek(`/webhooks/koppel?k=${SECRET}`, { secret: null, body: CALLBACK });
+    assert.equal(res.status, 401);
+  });
+
+  it('header blijft werken naast een foute k', async () => {
+    const res = await verzoek('/webhooks/koppel?k=fout', { secret: SECRET, body: CALLBACK });
+    assert.equal(res.status, 200);
+  });
+
+  it('/webhooks/unipile accepteert k niet: alleen de header telt', async () => {
+    const res = await verzoek(`/webhooks/unipile?k=${K}`, {
+      secret: null,
+      body: { event: 'ok', account_id: UNIPILE_ACCOUNT_ID },
+    });
+    assert.equal(res.status, 401);
   });
 });
 
