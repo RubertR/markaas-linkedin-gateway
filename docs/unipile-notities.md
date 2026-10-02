@@ -142,6 +142,35 @@ optioneel `name`, `format: json`, `headers` (voor een eigen geheim) en `data`.
 - In productie: eigen endpoint, geheim in `headers` meesturen en controleren.
 - Testwebhooks na fase 1 verwijderen: `DELETE /api/v1/webhooks/{id}`.
 
+**Uit de API-referentie (opgezocht 2 okt 2026, developer.unipile.com, `Webhooks` create/list):**
+
+- `headers` is een **array van `{ "key": string, "value": string }`**, geen object.
+  De gateway stuurt `[{ "key": "x-webhook-secret", "value": <WEBHOOK_SECRET> }]`.
+- `source`-waarden: `messaging`, `users`, `account_status`, `email`, `email_tracking`,
+  `calendar_event`. Let op: **`account_status`**, niet `account`.
+- Events per bron:
+  - `account_status`: `creation_success`, `creation_fail`, `deleted`, `reconnected`,
+    `sync_success`, `stopped`, `ok`, `connecting`, `error`, `credentials`, `permissions`.
+    Let op: **`deleted`**, niet `deletion`.
+  - `messaging`: `message_received`, `message_read`, `message_reaction`, `message_edited`,
+    `message_deleted`, `message_delivered`.
+  - `users`: `new_relation`.
+- Antwoord op aanmaken (201): `{ "object": "WebhookCreated", "webhook_id": "…" }`.
+- `GET /api/v1/webhooks?limit=1..250&cursor=…` → `{ "object": "WebhookList", "items": [...],
+  "cursor": … }`; per item o.a. `id`, `name`, `request_url`, `enabled`, `events`, `headers`.
+
+**Gateway-webhooks** (`npm run webhooks:registreer`, standaard dry-run, `--uitvoeren` om aan te
+maken, `--env-file` voor het env-bestand; idempotent op naam; geen `account_ids` = alle accounts):
+
+| Naam | `source` | Events |
+| --- | --- | --- |
+| `gateway-accountstatus` | `account_status` | `ok`, `error`, `credentials`, `permissions`, `stopped`, `reconnected`, `deleted` |
+| `gateway-messaging` | `messaging` | `message_received` |
+| `gateway-relaties` | `users` | `new_relation` |
+
+Niet geabonneerd: `creation_success`/`creation_fail` (komen via de koppel-callback),
+`sync_success` en `connecting`.
+
 **Waarnemingen 30 sep 2026 (acceptatie van het testverzoek):**
 
 - Bij acceptatie zet LinkedIn de uitnodigingsnotitie als eerste bericht in een nieuw gesprek.

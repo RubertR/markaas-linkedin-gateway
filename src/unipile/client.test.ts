@@ -183,6 +183,88 @@ describe('UnipileClient — haalAccounts', () => {
   });
 });
 
+describe('UnipileClient — haalWebhooks', () => {
+  it('volgt de cursor tot alle pagina’s binnen zijn', async () => {
+    let pagina = 0;
+    fake.antwoord('GET', '/api/v1/webhooks', () => {
+      pagina++;
+      return pagina === 1
+        ? {
+            status: 200,
+            body: {
+              object: 'WebhookList',
+              items: [{ id: 'w1', name: 'een', request_url: 'https://a', enabled: true }],
+              cursor: 'volgende',
+            },
+          }
+        : {
+            status: 200,
+            body: {
+              object: 'WebhookList',
+              items: [{ id: 'w2', name: 'twee', request_url: 'https://b', enabled: false }],
+              cursor: null,
+            },
+          };
+    });
+    const webhooks = await maakClient().haalWebhooks();
+    assert.deepEqual(webhooks.map((w) => w.name), ['een', 'twee']);
+    assert.equal(fake.aanroepen.length, 2);
+    assert.match(fake.aanroepen[1]!.path, /cursor=volgende/);
+  });
+
+  it('vertaalt 401 naar UnipileGatewayAuthFout', async () => {
+    fake.antwoord('GET', '/api/v1/webhooks', { status: 401, body: { error: 'nope' } });
+    await assert.rejects(maakClient().haalWebhooks(), UnipileGatewayAuthFout);
+  });
+});
+
+describe('UnipileClient — maakWebhook', () => {
+  it('stuurt request_url, source, events, name, format, enabled en headers als key/value', async () => {
+    fake.antwoord('POST', '/api/v1/webhooks', {
+      status: 201,
+      body: { object: 'WebhookCreated', webhook_id: 'wh-1' },
+    });
+    const uit = await maakClient().maakWebhook({
+      naam: 'gateway-relaties',
+      requestUrl: 'https://gateway.example/webhooks/unipile',
+      bron: 'users',
+      events: ['new_relation'],
+      headers: { 'x-webhook-secret': 'geheim' },
+    });
+    assert.equal(uit.webhookId, 'wh-1');
+    assert.deepEqual(fake.aanroepen[0]?.body, {
+      name: 'gateway-relaties',
+      request_url: 'https://gateway.example/webhooks/unipile',
+      source: 'users',
+      events: ['new_relation'],
+      format: 'json',
+      enabled: true,
+      headers: [{ key: 'x-webhook-secret', value: 'geheim' }],
+    });
+  });
+
+  it('vertaalt 429 naar UnipileTijdelijkeFout met Retry-After', async () => {
+    fake.antwoord('POST', '/api/v1/webhooks', {
+      status: 429,
+      headers: { 'Retry-After': '30' },
+      body: { error: 'rate_limited' },
+    });
+    await assert.rejects(
+      maakClient().maakWebhook({
+        naam: 'x',
+        requestUrl: 'https://x',
+        bron: 'users',
+        events: ['new_relation'],
+      }),
+      (err: Error) => {
+        assert.ok(err instanceof UnipileTijdelijkeFout);
+        assert.equal((err as UnipileTijdelijkeFout).retryAfterSeconden, 30);
+        return true;
+      },
+    );
+  });
+});
+
 describe('UnipileClient — maakKoppellink', () => {
   it('bouwt de body voor type "create" met LINKEDIN, single_use en cookie_auth uit', async () => {
     fake.antwoord('POST', '/api/v1/hosted/accounts/link', {

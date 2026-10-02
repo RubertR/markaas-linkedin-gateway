@@ -16,7 +16,8 @@
     "migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
     "db:check": "node --env-file-if-exists=.env --import tsx scripts/db-check.ts",
     "account:registreer": "node --env-file-if-exists=.env --import tsx scripts/account-registreer.ts",
-    "admin:hash":"node --import tsx scripts/admin-hash.ts",
+    "webhooks:registreer": "node --import tsx scripts/webhooks-registreer.ts",
+    "admin:hash": "node --import tsx scripts/admin-hash.ts",
     "dev:demo": "node --env-file-if-exists=.env --no-warnings --import tsx scripts/dev-demo.ts"
   },
   "dependencies": {

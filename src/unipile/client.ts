@@ -114,8 +114,32 @@ export interface GesprekAntwoord {
   messageId: string;
 }
 
+export type WebhookBron = 'account_status' | 'messaging' | 'users';
+
+export interface UnipileWebhook {
+  id: string;
+  name: string;
+  request_url?: string;
+  enabled?: boolean;
+  events?: string[];
+  [key: string]: unknown;
+}
+
+export interface WebhookAanvraag {
+  naam: string;
+  requestUrl: string;
+  bron: WebhookBron;
+  events: string[];
+  /** Eigen headers die Unipile bij elke levering meestuurt (bijv. een geheim). */
+  headers?: Record<string, string>;
+}
+
 export interface UnipileClient {
   haalAccounts(): Promise<UnipileAccount[]>;
+  /** Alle webhooks van deze Unipile-omgeving, alle pagina's. */
+  haalWebhooks(): Promise<UnipileWebhook[]>;
+  /** Zonder `account_ids`: geldt voor alle huidige én toekomstige accounts. */
+  maakWebhook(aanvraag: WebhookAanvraag): Promise<{ webhookId: string }>;
   maakKoppellink(aanvraag: KoppellinkAanvraag): Promise<Koppellink>;
   haalProfiel(aanvraag: ProfielAanvraag): Promise<UnipileProfiel>;
   zoekPersonen(aanvraag: ZoekAanvraag): Promise<ZoekResultaat>;
@@ -224,6 +248,40 @@ export function maakUnipileClient(opties: UnipileOpties): UnipileClient {
       const res = await verzoek('GET', '/api/v1/accounts');
       const body = await ontleed<{ items?: UnipileAccount[] }>(res, '/api/v1/accounts');
       return body.items ?? [];
+    },
+
+    async haalWebhooks() {
+      const endpoint = '/api/v1/webhooks';
+      const alle: UnipileWebhook[] = [];
+      let cursor: string | undefined;
+      do {
+        const query = new URLSearchParams({ limit: '250' });
+        if (cursor) query.set('cursor', cursor);
+        const pad = `${endpoint}?${query.toString()}`;
+        const res = await verzoek('GET', pad);
+        const body = await ontleed<{ items?: UnipileWebhook[]; cursor?: unknown }>(res, pad);
+        alle.push(...(body.items ?? []));
+        cursor = typeof body.cursor === 'string' && body.cursor !== '' ? body.cursor : undefined;
+      } while (cursor);
+      return alle;
+    },
+
+    async maakWebhook(aanvraag) {
+      const endpoint = '/api/v1/webhooks';
+      const body: Record<string, unknown> = {
+        name: aanvraag.naam,
+        request_url: aanvraag.requestUrl,
+        source: aanvraag.bron,
+        events: aanvraag.events,
+        format: 'json',
+        enabled: true,
+      };
+      if (aanvraag.headers) {
+        body['headers'] = Object.entries(aanvraag.headers).map(([key, value]) => ({ key, value }));
+      }
+      const res = await verzoek('POST', endpoint, { json: body });
+      const parsed = await ontleed<{ webhook_id: string }>(res, endpoint);
+      return { webhookId: parsed.webhook_id };
     },
 
     async maakKoppellink(aanvraag) {
