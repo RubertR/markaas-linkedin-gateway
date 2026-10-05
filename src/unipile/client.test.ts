@@ -218,6 +218,93 @@ describe('UnipileClient — haalWebhooks', () => {
   });
 });
 
+describe('UnipileClient — telVerstuurdeInvites', () => {
+  function invitaties(aantal: number, start = 0): Array<Record<string, unknown>> {
+    return Array.from({ length: aantal }, (_, i) => ({
+      object: 'InvitationSent',
+      id: `inv-${start + i}`,
+      invited_user_id: `ACo-${start + i}`,
+    }));
+  }
+
+  it('één pagina: telt de items, GET met account_id en limit', async () => {
+    fake.antwoord('GET', '/api/v1/users/invite/sent', {
+      status: 200,
+      body: { object: 'InvitationList', items: invitaties(3), cursor: null },
+    });
+    const uit = await maakClient().telVerstuurdeInvites({
+      accountId: 'acc-1',
+      paginaGrootte: 250,
+      maxPaginas: 2,
+    });
+    assert.deepEqual(uit, { aantal: 3, volledig: true, paginas: 1 });
+    assert.equal(fake.aanroepen.length, 1);
+    assert.equal(fake.aanroepen[0]?.method, 'GET');
+    assert.match(fake.aanroepen[0]!.path, /account_id=acc-1/);
+    assert.match(fake.aanroepen[0]!.path, /limit=250/);
+  });
+
+  it('volgt de cursor tot maxPaginas', async () => {
+    let pagina = 0;
+    fake.antwoord('GET', '/api/v1/users/invite/sent', () => {
+      pagina++;
+      return {
+        status: 200,
+        body: {
+          object: 'InvitationList',
+          items: invitaties(2, pagina * 10),
+          cursor: pagina === 1 ? 'c2' : null,
+        },
+      };
+    });
+    const uit = await maakClient().telVerstuurdeInvites({
+      accountId: 'acc-1',
+      paginaGrootte: 2,
+      maxPaginas: 3,
+    });
+    assert.deepEqual(uit, { aantal: 4, volledig: true, paginas: 2 });
+    assert.match(fake.aanroepen[1]!.path, /cursor=c2/);
+  });
+
+  it('stopt na maxPaginas en meldt onvolledig', async () => {
+    fake.antwoord('GET', '/api/v1/users/invite/sent', {
+      status: 200,
+      body: { object: 'InvitationList', items: invitaties(2), cursor: 'nog-meer' },
+    });
+    const uit = await maakClient().telVerstuurdeInvites({
+      accountId: 'acc-1',
+      paginaGrootte: 2,
+      maxPaginas: 2,
+    });
+    assert.deepEqual(uit, { aantal: 4, volledig: false, paginas: 2 });
+    assert.equal(fake.aanroepen.length, 2);
+  });
+
+  it('vertaalt 429 naar UnipileTijdelijkeFout', async () => {
+    fake.antwoord('GET', '/api/v1/users/invite/sent', { status: 429, body: {} });
+    await assert.rejects(
+      maakClient().telVerstuurdeInvites({ accountId: 'acc-1', paginaGrootte: 250, maxPaginas: 2 }),
+      (err: unknown) => err instanceof UnipileTijdelijkeFout && err.status === 429,
+    );
+  });
+
+  it('vertaalt een trage Unipile naar UnipileTimeoutFout', async () => {
+    fake.antwoord('GET', '/api/v1/users/invite/sent', {
+      status: 200,
+      delayMs: 300,
+      body: { object: 'InvitationList', items: [], cursor: null },
+    });
+    await assert.rejects(
+      maakClient({ timeoutMs: 100 }).telVerstuurdeInvites({
+        accountId: 'acc-1',
+        paginaGrootte: 250,
+        maxPaginas: 2,
+      }),
+      UnipileTimeoutFout,
+    );
+  });
+});
+
 describe('UnipileClient — maakWebhook', () => {
   it('stuurt request_url, source, events, name, format, enabled en headers als key/value', async () => {
     fake.antwoord('POST', '/api/v1/webhooks', {

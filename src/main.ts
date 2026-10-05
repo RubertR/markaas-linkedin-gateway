@@ -11,6 +11,7 @@ import { serve } from '@hono/node-server';
 
 import { systeemKlok } from './budget/klok.ts';
 import { laadLimieten } from './budget/limits.ts';
+import { verwerkVerzoekenSyncTick } from './budget/verzoekensync.ts';
 import { EnvFout, leesEnv, type Env } from './config/env.ts';
 import { postgresBackend } from './db/postgres-backend.ts';
 import { maakLogger, type Logger } from './log/logger.ts';
@@ -108,6 +109,10 @@ async function main(): Promise<void> {
     pauzeKiezer: systeemRandom,
     logger,
     tick: async () => {
+      // Eerst de teller gelijkzetten, zodat de budgetmotor met verse cijfers werkt.
+      const verzoeken = await verwerkVerzoekenSyncTick({ db, unipile, limieten, klok });
+      logVerzoekenSync(logger, verzoeken);
+      if (verzoeken.gatewayGestopt) return { gatewayGestopt: true };
       const sequenties = await verwerkSequentieTick({
         db,
         klok,
@@ -141,6 +146,23 @@ async function main(): Promise<void> {
   };
   process.on('SIGTERM', () => void stop('SIGTERM'));
   process.on('SIGINT', () => void stop('SIGINT'));
+}
+
+function logVerzoekenSync(
+  logger: Logger,
+  uitkomst: Awaited<ReturnType<typeof verwerkVerzoekenSyncTick>>,
+): void {
+  for (const r of uitkomst.resultaten) {
+    const velden = {
+      account_id: r.accountId,
+      resultaat: r.resultaat,
+      voor: r.voor,
+      werkelijk: r.werkelijk,
+      reden: r.reden,
+    };
+    if (r.resultaat === 'gelijkgezet') logger.info('Openstaande verzoeken gesynct', velden);
+    else logger.warn('Sync openstaande verzoeken mislukt', velden);
+  }
 }
 
 function logTick(

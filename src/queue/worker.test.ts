@@ -413,3 +413,91 @@ describe('worker — ongekoppeld account', () => {
     assert.match(uitkomst.reden!, /koppel|unipile_account_id/i);
   });
 });
+
+describe('worker — openstaande_verzoeken', () => {
+  async function openstaand(): Promise<number | undefined> {
+    return (await vindAccount(db, accountId))?.openstaandeVerzoeken;
+  }
+
+  function inviteLukt(id = 'inv-1'): void {
+    fake.antwoord('POST', '/api/v1/users/invite', {
+      status: 200,
+      body: { object: 'UserInvitationSent', invitation_id: id },
+    });
+  }
+
+  it('invite op "done" verhoogt de teller met 1', async () => {
+    await db.query('update accounts set openstaande_verzoeken = 4 where id = $1', [accountId]);
+    inviteLukt();
+    const actie = await maakReservedeActie({ type: 'invite', payload: { providerId: 'ACo-o1' } });
+    await voerActieUit(basisContext(), actie);
+    assert.equal(await openstaand(), 5);
+  });
+
+  it('zes verstuurde invites → teller 6', async () => {
+    inviteLukt();
+    for (let i = 0; i < 6; i++) {
+      const actie = await maakReservedeActie({ type: 'invite', payload: { providerId: `ACo-z${i}` } });
+      await voerActieUit(basisContext(), actie);
+    }
+    assert.equal(await openstaand(), 6);
+  });
+
+  it('invite op "onzeker" (time-out) verhoogt de teller ook (veilige kant)', async () => {
+    fake.antwoord('POST', '/api/v1/users/invite', {
+      status: 200,
+      delayMs: 400,
+      body: { object: 'UserInvitationSent', invitation_id: 'nooit' },
+    });
+    const actie = await maakReservedeActie({ type: 'invite', payload: { providerId: 'ACo-o2' } });
+    const uitkomst = await voerActieUit(basisContext(), actie);
+    assert.equal(uitkomst.status, 'onzeker');
+    assert.equal(await openstaand(), 1);
+  });
+
+  it('onzeker → opnieuw goedgekeurd → done telt maar één keer', async () => {
+    fake.antwoord('POST', '/api/v1/users/invite', {
+      status: 200,
+      delayMs: 400,
+      body: { object: 'UserInvitationSent', invitation_id: 'nooit' },
+    });
+    const actie = await maakReservedeActie({ type: 'invite', payload: { providerId: 'ACo-o3' } });
+    await voerActieUit(basisContext(), actie);
+    assert.equal(await openstaand(), 1);
+
+    fake.reset();
+    inviteLukt('inv-o3');
+    await db.query(`update actions set status = 'running'::action_status where id = $1`, [actie.id]);
+    const opnieuw = await voerActieUit(basisContext(), (await vindActie(db, actie.id))!);
+    assert.equal(opnieuw.status, 'done');
+    assert.equal(await openstaand(), 1);
+  });
+
+  it('message en inmail raken de teller niet', async () => {
+    fake.antwoord('POST', /\/api\/v1\/chats\/.+\/messages/, {
+      status: 200,
+      body: { object: 'MessageSent', message_id: 'm-1' },
+    });
+    const actie = await maakReservedeActie({
+      type: 'message',
+      payload: { chatId: 'chat-1', tekst: 'hoi' },
+    });
+    await voerActieUit(basisContext(), actie);
+    assert.equal(await openstaand(), 0);
+  });
+
+  it('429, 422 en failed laten de teller ongemoeid', async () => {
+    fake.antwoord('POST', '/api/v1/users/invite', { status: 429, body: { error: 'rate_limited' } });
+    const a = await maakReservedeActie({ type: 'invite', payload: { providerId: 'ACo-o4' } });
+    assert.equal((await voerActieUit(basisContext(), a)).status, 'queued');
+
+    fake.reset();
+    fake.antwoord('POST', '/api/v1/users/invite', {
+      status: 422,
+      body: { error: 'already_connected' },
+    });
+    const b = await maakReservedeActie({ type: 'invite', payload: { providerId: 'ACo-o5' } });
+    assert.equal((await voerActieUit(basisContext(), b)).status, 'failed');
+    assert.equal(await openstaand(), 0);
+  });
+});

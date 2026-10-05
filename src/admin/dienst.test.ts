@@ -61,6 +61,14 @@ beforeEach(async () => {
   await markeerAccountGekoppeld(db, accountId, 'uni-rub');
 });
 
+async function openstaandeVerzoeken(): Promise<number | undefined> {
+  const rijen = await db.query<{ openstaande_verzoeken: number }>(
+    'select openstaande_verzoeken from accounts where id = $1',
+    [accountId],
+  );
+  return rijen[0]?.openstaande_verzoeken;
+}
+
 function ontvangerVelden(
   overschrijf: Partial<Record<string, unknown>> = {},
 ): Record<string, unknown> {
@@ -420,6 +428,24 @@ describe('markeerOnzekerAlsDone / herapproveOnzeker', () => {
     const r = await markeerOnzekerAlsDone(db, d.id, klok);
     assert.equal(r.status, 'done');
     assert.equal(r.uitgevoerdOp?.toISOString(), NU.toISOString());
+  });
+
+  it('done na onzeker verhoogt openstaande_verzoeken niet opnieuw als de worker al telde', async () => {
+    const d = await maakOnzekerActie();
+    await db.query(
+      `insert into events(bron, type, extern_id, account_id, payload)
+       values ('gateway', 'invite_openstaand', $1, $2, '{}'::jsonb)`,
+      [`invite_openstaand:${d.id}`, accountId],
+    );
+    await db.query('update accounts set openstaande_verzoeken = 1 where id = $1', [accountId]);
+    await markeerOnzekerAlsDone(db, d.id, klok);
+    assert.equal(await openstaandeVerzoeken(), 1);
+  });
+
+  it('done na een oude onzeker-actie (van vóór de teller) telt alsnog één keer', async () => {
+    const d = await maakOnzekerActie();
+    await markeerOnzekerAlsDone(db, d.id, klok);
+    assert.equal(await openstaandeVerzoeken(), 1);
   });
 
   it('weigert done te zetten als de status niet onzeker is', async () => {

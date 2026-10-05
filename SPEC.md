@@ -84,6 +84,40 @@ Normen: zie `docs/limieten.md`. Normen staan in configuratie, niet in code.
 **Opbouw:** nieuw of stil account start op 0.5; elke week +0.2 zolang acceptatie van
 verzoeken ≥ 30%; maximaal 1.0.
 
+## 5a. Openstaande verzoeken
+
+`accounts.openstaande_verzoeken` voedt de grens "openstaand < 500" voor invites (controle 3).
+
+- **Omhoog:** +1 in dezelfde transactie waarin een invite op `done` gaat. Ook bij
+  `onzeker` (time-out tijdens verzenden): LinkedIn kan de invite wél hebben ontvangen, dus
+  de veilige kant is meetellen. Per actie telt dit één keer (gateway-event
+  `invite_openstaand:<actie-id>`): onzeker → handmatig `done`, of onzeker → opnieuw
+  goedgekeurd → `done`, verhoogt niet nog eens. Blijkt een onzeker-invite niet verstuurd en
+  komt hij er ook later niet door, dan corrigeert de dagelijkse sync de teller.
+- **Omlaag:** −1 bij acceptatie (zie §8a.3, Acceptatiesignalen), één keer per
+  account+attendee; nooit onder 0.
+- **Dagelijkse sync (bron van waarheid):** één keer per werkdag per account zet de gateway
+  de teller gelijk aan het aantal openstaande invites volgens Unipile
+  (`GET /api/v1/users/invite/sent`, zie `docs/unipile-notities.md`). Die lijst bevat alleen
+  nog openstaande invites, dus verlopen, ingetrokken en buiten de gateway verstuurde invites
+  tellen vanzelf goed mee.
+  - Alleen voor accounts met status `OK`/`RECONNECTED`, buiten afkoeling, op een werkdag
+    binnen het tijdvenster in de tijdzone van het account (§5 controle 5).
+  - Moment: per account en dag een vast maar willekeurig moment binnen het venster (§8: geen
+    polling op vaste tijden). Draait mee in de planner-tick, vóór de planner.
+  - Eén GET per account per dag (pagina's van 250; een tweede GET alleen bij meer dan 250
+    openstaand). Grootte en maximum aantal pagina's in `config/limits.json`
+    (`verzoeken_sync`). Is de lijst na het maximum nog niet op, dan wordt de teller het
+    getelde aantal (een ondergrens ≥ 500, dus invites blijven tegengehouden).
+  - Eén poging per dag, ook bij een fout; de teller blijft dan staan. HTTP 429 → afkoeling
+    (§5 controle 6). Time-out of serverfout → volgende werkdag opnieuw. Sessie verlopen →
+    account op `CREDENTIALS`. Gateway-sleutel geweigerd → planner stopt.
+  - Elke poging staat als gateway-event `verzoeken_sync` (per account per dag) met voor,
+    werkelijk en resultaat.
+- **Eenmalig gelijkzetten:** `npm run verzoeken:sync` (standaard dry-run die alleen leest;
+  `--uitvoeren` om te schrijven). Wacht niet op het moment van de dag, maar blijft binnen
+  werkdag en tijdvenster. Telt bij `--uitvoeren` als de sync van die dag.
+
 ## 6. Koppelen van accounts
 
 1. Rubert maakt via de MCP-tool of CLI een koppellink: Unipile hosted auth, `type: create`,
@@ -233,7 +267,8 @@ dry-run, schrijven alleen met `--uitvoeren`.
 
 1. `new_relation` (Unipile detecteert dit periodiek; kan uren later komen).
 2. Het eerste eigen bericht (`message_received` met `is_sender=true`) in een gesprek met
-   een attendee naar wie we een invite verstuurden (`actions.status = 'done'`). Bij
+   een attendee naar wie we een invite verstuurden (`actions.status` is `done` of `onzeker`;
+   beide tellen mee in `openstaande_verzoeken`, zie §5a). Bij
    acceptatie zet LinkedIn de uitnodigingsnotitie als eerste bericht in het nieuwe gesprek.
    De ontvanger komt uit `attendees` (zonder de afzender).
 

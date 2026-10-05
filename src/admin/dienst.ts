@@ -1,6 +1,7 @@
 import type { Klok } from '../budget/klok.ts';
 import { telGebruikOpDag, telGebruikOverDagen } from '../budget/gebruik.ts';
 import type { AbonnementLimieten, ActieType, Limieten } from '../budget/limits.ts';
+import { telInviteAlsOpenstaand } from '../budget/openstaand.ts';
 import { geschaaldeNorm, weekBudgetMetBonus } from '../budget/opbouw.ts';
 import { dagenInMaand, lokaleDag, lokaleDagen } from '../budget/tijdvenster.ts';
 import type { Backend } from '../db/backend.ts';
@@ -296,9 +297,14 @@ export async function markeerOnzekerAlsDone(
     );
   }
   const nu = klok?.nu() ?? new Date();
-  return await zetActieStatus(db, actieId, 'done', {
-    reden: 'Handmatig op done gezet door Rubert na controle in LinkedIn.',
-    uitgevoerdOp: nu,
+  return await db.transaction(async (tx) => {
+    const klaar = await zetActieStatus(tx, actieId, 'done', {
+      reden: 'Handmatig op done gezet door Rubert na controle in LinkedIn.',
+      uitgevoerdOp: nu,
+    });
+    // Telde normaal al mee bij 'onzeker'; alleen oude onzeker-acties tellen nu.
+    if (klaar.type === 'invite') await telInviteAlsOpenstaand(tx, klaar);
+    return klaar;
   });
 }
 

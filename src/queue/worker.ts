@@ -2,6 +2,7 @@ import type { Backend } from '../db/backend.ts';
 import { startAfkoeling } from '../budget/afkoeling.ts';
 import type { Klok } from '../budget/klok.ts';
 import type { Limieten } from '../budget/limits.ts';
+import { telInviteAlsOpenstaand } from '../budget/openstaand.ts';
 import { verlagingNaUnipileSignaal } from '../budget/opbouw.ts';
 import { vindAccount, werkAccountStatusBij } from '../register/accounts.ts';
 import type { Account } from '../register/accounts.ts';
@@ -39,10 +40,11 @@ import {
  *   zou dubbele verzending naar dezelfde persoon betekenen. Een event
  *   komt in de events-tabel zodat Rubert handmatig in LinkedIn kan
  *   controleren en de actie op `done` of opnieuw `approved` zet. Budget
- *   blijft verbruikt.
+ *   blijft verbruikt en een invite telt mee in `openstaande_verzoeken`.
  * - Timeout bij `search`/`profile` → `queued` + 5 minuten; herhaaldelijk
  *   lezen is onschadelijk.
- * - Succes → `done`, antwoord in `unipile_response`; Unipile-usage-signaal
+ * - Succes → `done`, antwoord in `unipile_response`; een invite verhoogt in
+ *   dezelfde transactie `openstaande_verzoeken`. Unipile-usage-signaal
  *   ≥ 75% verlaagt opbouw_factor en vraagt de planner dit actietype vandaag
  *   te stoppen.
  */
@@ -135,7 +137,7 @@ export async function voerActieUit(ctx: WorkerContext, actie: Actie): Promise<Wo
         basis.typeDagStop = true;
       }
     }
-    await persisteer(ctx.db, actie.id, 'done', {
+    await persisteerVerzonden(ctx.db, actie, 'done', {
       reden: null,
       uitgevoerdOp: ctx.klok.nu(),
       unipileResponse: basis.response ?? null,
@@ -273,7 +275,7 @@ async function verwerkFout(
     if (VERZEND_TYPES.has(actie.type)) {
       const reden =
         'Time-out: mogelijk verzonden. Controleer in LinkedIn en zet handmatig op done of opnieuw approved.';
-      await persisteer(ctx.db, actie.id, 'onzeker', { reden });
+      await persisteerVerzonden(ctx.db, actie, 'onzeker', { reden });
       await bewaarOnzekerEvent(ctx.db, actie, reden, ctx.klok.nu());
       return { status: 'onzeker', reden };
     }
@@ -330,6 +332,24 @@ async function persisteer(
   },
 ): Promise<void> {
   await zetActieStatus(db, actieId, status, opties);
+}
+
+/**
+ * `done` of `onzeker`: de actie is (mogelijk) verzonden. Bij een invite gaat
+ * `openstaande_verzoeken` in dezelfde transactie omhoog (SPEC §5a); bij
+ * `onzeker` ook, want LinkedIn kan hem wél hebben ontvangen (veilige kant).
+ */
+async function persisteerVerzonden(
+  db: Backend,
+  actie: Actie,
+  status: Extract<ActieStatus, 'done' | 'onzeker'>,
+  opties: Parameters<typeof persisteer>[3],
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    await zetActieStatus(tx, actie.id, status, opties);
+    if (actie.type === 'invite') await telInviteAlsOpenstaand(tx, actie);
+    return true;
+  });
 }
 
 /**

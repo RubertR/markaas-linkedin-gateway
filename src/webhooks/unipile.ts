@@ -260,11 +260,12 @@ async function verwerkEigenBericht(
     return geenAcceptatie('Geen ontvanger in de payload.');
   }
 
+  // 'onzeker' telt mee: zo'n invite verhoogde openstaande_verzoeken ook.
   const uitgenodigd = await db.query<{ provider_id: string }>(
     `select payload ->> 'providerId' as provider_id from actions
      where account_id = $1
        and type = 'invite'
-       and status = 'done'
+       and status in ('done', 'onzeker')
        and payload ->> 'providerId' = any($2::text[])
      order by uitgevoerd_op desc nulls last
      limit 1`,

@@ -87,6 +87,32 @@ is `public_identifier` vaak `null`; gebruik `id` (provider-id) als sleutel.
   `connection_limit_reached`: account in afkoeling (SPEC §5).
 - **Budget:** 1 verzoek (werknorm 20/dag, 100/week Sales Navigator).
 
+## Verstuurde invites (openstaand)
+
+*Opgezocht 5 okt 2026 in de v1-API-referentie (developer.unipile.com,
+`userscontroller_listalluserinvitationssent`); nog niet op een echt account getest.*
+
+`GET /api/v1/users/invite/sent?account_id=…&limit=1..250&cursor=…`
+
+- Antwoord: `{ "object": "InvitationList", "items": [...], "cursor": string|null }`.
+- Per item (`InvitationSent`): `id`, `invited_user`, `invited_user_id` (provider-id),
+  `invited_user_public_id`, `invited_user_description`, `date`, `parsed_datetime`,
+  `invitation_text`, `inviter{…}`, `specifics{provider: LINKEDIN, shared_secret}`.
+- Geen totaal-veld: tellen = items over alle pagina's optellen.
+- Foutcodes volgens de referentie: 401, 403, 429, 500, 501, 503, 504.
+- De lijst bevat alleen nog **openstaande** invites: geaccepteerde, verlopen en ingetrokken
+  verdwijnen eruit (Unipile-gids "Detecting accepted invitations"). Daarom bron van waarheid
+  voor `openstaande_verzoeken` (SPEC §5a).
+- Unipile-advies uit dezelfde gids: zo'n lijst maar enkele keren per dag opvragen, op
+  willekeurige momenten, niet op vaste tijden. De gateway doet het één keer per werkdag.
+- **Let op v2:** in de v2-API is dit endpoint verwijderd; vervanger is
+  `GET /v2/:account_id/users/me/relation-requests` met `type=sent` (objecten `RelationRequest`
+  met o.a. `id`, `user`, `created_at`, `message`). Meenemen als we naar v2 gaan (SPEC §11).
+- **Nog te bevestigen op Ruberts account** (eerste `npm run verzoeken:sync` als dry-run):
+  dat het aantal klopt met "Verzonden uitnodigingen" in LinkedIn, en of de GET merkbaar
+  telt als LinkedIn-verkeer.
+- **Budget:** telt niet als actie in de budgetmotor; wel lichte LinkedIn-aanroep(en).
+
 ## Bericht aan connectie
 
 *Getest 30 sep 2026, v1, 1 bericht in een bestaand gesprek (na acceptatie), na akkoord.*

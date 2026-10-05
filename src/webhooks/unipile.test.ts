@@ -361,6 +361,42 @@ describe('acceptatie via het eerste eigen bericht in een gesprek', () => {
     assert.equal(await openstaand(), 3);
   });
 
+  it('invite met status onzeker (telde mee) wordt ook verlaagd bij het eerste eigen bericht', async () => {
+    await inviteVerstuurd(LEAD, 'onzeker');
+    const uitkomst = await verwerkUnipileWebhook(db, unipile, KOPPEL_OPTIES, eigenBericht());
+    assert.equal(uitkomst.verwerkt, true);
+    assert.equal(await openstaand(), 2);
+  });
+
+  it('twee new_relation-leveringen met verschillende timestamp verlagen maar één keer', async () => {
+    await inviteVerstuurd(LEAD);
+    for (const timestamp of ['2026-10-01T09:00:00Z', '2026-10-01T15:00:00Z']) {
+      await verwerkUnipileWebhook(db, unipile, KOPPEL_OPTIES, {
+        event: 'new_relation',
+        account_id: UNIPILE_ACCOUNT_ID,
+        attendee_provider_id: LEAD,
+        timestamp,
+      });
+    }
+    assert.equal(await openstaand(), 2);
+    assert.equal(await tel("events where type='acceptatie'"), 1);
+  });
+
+  it('new_relation en eigen bericht tegelijk binnen: één acceptatie, één verlaging', async () => {
+    await inviteVerstuurd(LEAD);
+    await Promise.all([
+      verwerkUnipileWebhook(db, unipile, KOPPEL_OPTIES, {
+        event: 'new_relation',
+        account_id: UNIPILE_ACCOUNT_ID,
+        attendee_provider_id: LEAD,
+        timestamp: '2026-10-01T10:00:01Z',
+      }),
+      verwerkUnipileWebhook(db, unipile, KOPPEL_OPTIES, eigenBericht()),
+    ]);
+    assert.equal(await openstaand(), 2);
+    assert.equal(await tel("events where type='acceptatie'"), 1);
+  });
+
   it('onbekend account: eigen bericht opgeslagen, geen crash', async () => {
     const uitkomst = await verwerkUnipileWebhook(db, unipile, KOPPEL_OPTIES, {
       ...eigenBericht(),

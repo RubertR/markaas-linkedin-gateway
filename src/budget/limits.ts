@@ -119,6 +119,14 @@ export interface SequentieLimieten {
   stop_redenen: SequentieStopRedenen;
 }
 
+/** Dagelijkse sync van openstaande_verzoeken met Unipile (SPEC §5a). */
+export interface VerzoekenSync {
+  /** Items per GET; Unipile staat 1–250 toe. */
+  pagina_grootte: number;
+  /** Maximaal aantal GET's per account per dag. */
+  max_paginas: number;
+}
+
 export interface Limieten {
   opbouw: Opbouw;
   afkoeling: Afkoeling;
@@ -126,6 +134,7 @@ export interface Limieten {
   tekst_max_tekens: TekstMaxTekens;
   sequenties: SequentieLimieten;
   unipile_usage_signaal: UnipileSignaal;
+  verzoeken_sync: VerzoekenSync;
   abonnementen: Record<Abonnement, AbonnementLimieten>;
 }
 
@@ -164,6 +173,7 @@ export function limietenUitObject(obj: unknown): Limieten {
   const tekst_max_tekens = parseTekstMax(obj['tekst_max_tekens']);
   const sequenties = parseSequenties(obj['sequenties']);
   const unipile_usage_signaal = parseUnipileSignaal(obj['unipile_usage_signaal']);
+  const verzoeken_sync = parseVerzoekenSync(obj['verzoeken_sync']);
 
   const bronAbonnementen = obj['abonnementen'];
   if (!isRecord(bronAbonnementen)) {
@@ -187,8 +197,21 @@ export function limietenUitObject(obj: unknown): Limieten {
     tekst_max_tekens,
     sequenties,
     unipile_usage_signaal,
+    verzoeken_sync,
     abonnementen,
   };
+}
+
+function parseVerzoekenSync(raw: unknown): VerzoekenSync {
+  if (!isRecord(raw)) {
+    throw new Error('Veld "verzoeken_sync" ontbreekt in limieten-configuratie.');
+  }
+  const paginaGrootte = getalInBereik(raw, 'pagina_grootte', 1, 250);
+  const maxPaginas = positiefGetal(raw, 'max_paginas');
+  if (!Number.isInteger(paginaGrootte) || !Number.isInteger(maxPaginas)) {
+    throw new Error('Velden "verzoeken_sync.pagina_grootte" en "max_paginas" moeten gehele getallen zijn.');
+  }
+  return { pagina_grootte: paginaGrootte, max_paginas: maxPaginas };
 }
 
 function parseSequenties(raw: unknown): SequentieLimieten {

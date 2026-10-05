@@ -89,6 +89,22 @@ export interface InviteAntwoord {
   usage?: UsageSignaal;
 }
 
+export interface VerstuurdeInvitesAanvraag {
+  accountId: string;
+  /** Items per pagina; Unipile staat 1–250 toe. */
+  paginaGrootte: number;
+  /** Stopt na zoveel GET's, ook als er nog een cursor is. */
+  maxPaginas: number;
+}
+
+export interface VerstuurdeInvitesTelling {
+  /** Aantal openstaande verstuurde invites in de opgehaalde pagina's. */
+  aantal: number;
+  /** `false` als er na `maxPaginas` nog een cursor was: `aantal` is dan een ondergrens. */
+  volledig: boolean;
+  paginas: number;
+}
+
 export interface BerichtAanvraag {
   accountId: string;
   chatId: string;
@@ -144,6 +160,11 @@ export interface UnipileClient {
   haalProfiel(aanvraag: ProfielAanvraag): Promise<UnipileProfiel>;
   zoekPersonen(aanvraag: ZoekAanvraag): Promise<ZoekResultaat>;
   stuurInvite(aanvraag: InviteAanvraag): Promise<InviteAntwoord>;
+  /**
+   * Telt de nog openstaande verstuurde invites (`GET /api/v1/users/invite/sent`).
+   * Alleen lezen; geaccepteerde, verlopen en ingetrokken invites staan niet in de lijst.
+   */
+  telVerstuurdeInvites(aanvraag: VerstuurdeInvitesAanvraag): Promise<VerstuurdeInvitesTelling>;
   stuurBericht(aanvraag: BerichtAanvraag): Promise<BerichtAntwoord>;
   startGesprek(aanvraag: GesprekAanvraag): Promise<GesprekAntwoord>;
 }
@@ -371,6 +392,29 @@ export function maakUnipileClient(opties: UnipileOpties): UnipileClient {
         invitationId: parsed.invitation_id,
         ...(usage ? { usage } : {}),
       };
+    },
+
+    async telVerstuurdeInvites(aanvraag) {
+      const endpoint = '/api/v1/users/invite/sent';
+      let aantal = 0;
+      let paginas = 0;
+      let cursor: string | undefined;
+      do {
+        const query = new URLSearchParams({
+          account_id: aanvraag.accountId,
+          limit: String(aanvraag.paginaGrootte),
+        });
+        if (cursor) query.set('cursor', cursor);
+        const pad = `${endpoint}?${query.toString()}`;
+        const res = await verzoek('GET', pad);
+        const body = await ontleed<{ items?: unknown[]; cursor?: unknown }>(res, pad, {
+          accountId: aanvraag.accountId,
+        });
+        paginas++;
+        aantal += Array.isArray(body.items) ? body.items.length : 0;
+        cursor = typeof body.cursor === 'string' && body.cursor !== '' ? body.cursor : undefined;
+      } while (cursor && paginas < aanvraag.maxPaginas);
+      return { aantal, volledig: cursor === undefined, paginas };
     },
 
     async stuurBericht(aanvraag) {
