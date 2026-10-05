@@ -137,3 +137,19 @@ export function dagenInMaand(datum: Date, tijdzone: string): string[] {
   }
   return reeks;
 }
+
+const KORTE_MAANDEN = [
+  'jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec',
+] as const;
+
+/**
+ * Leesbare datum en tijd in de tijdzone van het account, voor meldingen aan
+ * skills en gebruikers: "7 okt 2026 08:00" (korte maand zonder punt, zoals op
+ * de goedkeuringspagina, plus jaartal; 24-uursnotatie).
+ */
+export function formatteerLokaal(datum: Date, tijdzone: string): string {
+  const { jaar, maand, dag, uur, minuut } = lokaleDelen(datum, tijdzone);
+  const hh = String(uur).padStart(2, '0');
+  const mm = String(minuut).padStart(2, '0');
+  return `${dag} ${KORTE_MAANDEN[maand - 1]} ${jaar} ${hh}:${mm}`;
+}

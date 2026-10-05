@@ -7,7 +7,7 @@ import type {
   Limieten,
 } from '../budget/limits.ts';
 import { geschaaldeNorm, weekBudgetMetBonus } from '../budget/opbouw.ts';
-import { dagenInMaand, lokaleDag, lokaleDagen } from '../budget/tijdvenster.ts';
+import { dagenInMaand, formatteerLokaal, lokaleDag, lokaleDagen } from '../budget/tijdvenster.ts';
 import type { Backend } from '../db/backend.ts';
 import { maakActie, type ActieStatus } from '../queue/acties.ts';
 import type { PauzeKiezer } from '../queue/pauze.ts';
@@ -289,7 +289,7 @@ async function getBudget(deps: McpToolsDeps, args: Record<string, unknown>) {
     afkoelingTot: afkoeling ? afkoelingTot!.toISOString() : null,
     ...(afkoeling
       ? {
-          reden: `Account staat in afkoeling tot ${afkoelingTot!.toISOString()} (na 429, captcha of waarschuwing); tot dan gaat er niets naar LinkedIn. Plan pas na die tijd nieuwe acties in.`,
+          reden: `Account staat in afkoeling tot ${formatteerLokaal(afkoelingTot!, rij.tijdzone)} (${rij.tijdzone}), na 429, captcha of waarschuwing; tot dan gaat er niets naar LinkedIn. Plan pas na die tijd nieuwe acties in.`,
         }
       : {}),
     openstaandeVerzoeken: rij.openstaande_verzoeken,

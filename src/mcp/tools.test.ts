@@ -187,7 +187,9 @@ describe('get_budget', () => {
     };
     assert.equal(resultaat.afkoelingTot, '2026-10-07T10:00:00.000Z');
     assert.match(resultaat.reden ?? '', /afkoeling/i);
-    assert.match(resultaat.reden ?? '', /2026-10-07/);
+    // Reden in de tijdzone van het account (Europe/Amsterdam: 10:00Z = 12:00), niet ISO.
+    assert.match(resultaat.reden ?? '', /7 okt 2026 12:00/);
+    assert.doesNotMatch(resultaat.reden ?? '', /2026-10-07T/);
     for (const type of ['invite', 'message', 'profile', 'search']) {
       assert.equal(resultaat.budget[type]!.dag!.norm, 0, `${type} dag-norm`);
       assert.equal(resultaat.budget[type]!.dag!.resterend, 0, `${type} dag-resterend`);
@@ -199,6 +201,20 @@ describe('get_budget', () => {
     }
     assert.equal(resultaat.budget['inmail']!.maand!.norm, 0);
     assert.equal(resultaat.budget['inmail']!.maand!.resterend, 0);
+  });
+
+  it('afkoelingsreden gebruikt de tijdzone van het account; afkoelingTot blijft ISO', async () => {
+    await db.query(`update accounts set afkoeling_tot = $2, tijdzone = $3 where id = $1`, [
+      accountId,
+      '2026-10-07T10:00:00.000Z',
+      'America/New_York',
+    ]);
+    const resultaat = (await voerTool(deps, 'get_budget', { accountId })) as {
+      afkoelingTot: string | null;
+      reden?: string;
+    };
+    assert.equal(resultaat.afkoelingTot, '2026-10-07T10:00:00.000Z');
+    assert.match(resultaat.reden ?? '', /7 okt 2026 06:00/);
   });
 
   it('na afloop van de afkoeling gelden de normale normen weer', async () => {

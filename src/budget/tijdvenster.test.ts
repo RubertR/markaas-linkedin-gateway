@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import {
   binnenWerkuren,
   dagenInMaand,
+  formatteerLokaal,
   isWerkdag,
   lokaleDag,
   lokaleDagen,
@@ -139,5 +140,27 @@ describe('dagenInMaand', () => {
     const nu = new Date('2026-11-01T12:00:00Z');
     const reeks = dagenInMaand(nu, AMS);
     assert.deepEqual(reeks, ['2026-11-01']);
+  });
+});
+
+describe('formatteerLokaal', () => {
+  it('toont dag, korte maand zonder punt, jaar en tijd in de tijdzone van het account', () => {
+    // 10:00 UTC = 12:00 in Amsterdam (zomertijd) = 06:00 in New York (EDT).
+    const d = new Date('2026-10-07T10:00:00Z');
+    assert.equal(formatteerLokaal(d, AMS), '7 okt 2026 12:00');
+    assert.equal(formatteerLokaal(d, NY), '7 okt 2026 06:00');
+  });
+
+  it('volgt de wintertijd', () => {
+    assert.equal(formatteerLokaal(new Date('2026-11-03T08:00:00Z'), AMS), '3 nov 2026 09:00');
+  });
+
+  it('24-uursnotatie met voorloopnul: middernacht is 00:00, niet 24:00', () => {
+    assert.equal(formatteerLokaal(new Date('2026-10-06T22:00:00Z'), AMS), '7 okt 2026 00:00');
+    assert.equal(formatteerLokaal(new Date('2026-10-07T06:05:00Z'), AMS), '7 okt 2026 08:05');
+  });
+
+  it('jaargrens volgt de lokale datum', () => {
+    assert.equal(formatteerLokaal(new Date('2026-12-31T23:30:00Z'), AMS), '1 jan 2027 00:30');
   });
 });
