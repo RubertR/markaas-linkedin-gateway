@@ -48,7 +48,8 @@
     "stop_redenen": {
       "reactie": "lead heeft gereageerd",
       "niet_geaccepteerd": "verzoek niet geaccepteerd",
-      "voltooid": "sequentie voltooid"
+      "voltooid": "sequentie voltooid",
+      "afgewezen": "afgewezen bij goedkeuring"
     }
   },
 

@@ -185,14 +185,15 @@ Status-enum (`sequence_status`, zie §4):
   stopt en openstaande `draft`/`queued`-stappen worden `rejected` met reden
   "lead heeft gereageerd".
 - `gestopt` — eindigt zonder reactie. Redenen vastgelegd in `sequences.stop_reden`:
-  "verzoek niet geaccepteerd" (na 21 dagen zonder `new_relation`) of "sequentie
-  voltooid" (opvolging is verstuurd).
+  "verzoek niet geaccepteerd" (na 21 dagen zonder `new_relation`), "sequentie
+  voltooid" (opvolging is verstuurd) of "afgewezen bij goedkeuring: <reden>" (zie
+  hieronder).
 - `mislukt` — gereserveerd voor onvoorziene fouten; nog niet actief gebruikt.
 
 ### 8a.3 Pauze versus stoppen
 
-De sequentie **stopt** alleen bij een reactie of bij 21 dagen zonder acceptatie. Alle
-andere obstakels zijn **pauzes** die vanzelf voorbijgaan:
+De sequentie **stopt** bij een reactie, bij 21 dagen zonder acceptatie of bij afwijzing
+van een stap. Alle andere obstakels zijn **pauzes** die vanzelf voorbijgaan:
 
 - Account `CREDENTIALS`, `ERROR`, `STOPPED` of in afkoeling → de tick maakt geen
   nieuwe `draft`-stap zolang de account niet weer `OK`/`RECONNECTED` is. Status
@@ -200,6 +201,23 @@ andere obstakels zijn **pauzes** die vanzelf voorbijgaan:
 - Dubbele `new_relation` of dubbel `message_received` binnen tien minuten → de
   bestaande events-dedup (uniek `extern_id`) telt het slechts één keer; de
   sequentie-overgang gebeurt dus ook één keer.
+
+**Afwijzen van een stap.** Wordt een sequentie-stap (1, 2 of 3) afgewezen op de
+goedkeuringspagina, dan gaat de sequentie in dezelfde transactie naar `gestopt` met
+stop_reden "afgewezen bij goedkeuring: <ingevulde reden>" (voorvoegsel uit
+`sequenties.stop_redenen.afgewezen` in `config/limits.json`). Overige openstaande stappen
+(`draft`/`queued`/`approved`) van die sequentie worden met dezelfde reden afgewezen.
+
+**Opnieuw starten.** `start_sequence` voor een lead met een eerdere sequentie mag alleen
+als die eerdere sequentie `gestopt` is én een afgewezen stap heeft. Na een reactie, na
+"verzoek niet geaccepteerd" of na "sequentie voltooid" blijft opnieuw starten geweigerd.
+De database bewaakt hooguit één actieve (`lopend`/`geaccepteerd`) sequentie per
+account+lead (migratie `0003`). Let op: na afwijzing van stap 2 of 3 is de invite al
+verstuurd; een nieuwe sequentie begint toch weer met een invite.
+
+Bestaande sequenties die nog `lopend`/`geaccepteerd` staan met een afgewezen stap
+(van vóór deze regel) zet `npm run sequenties:herstel` op `gestopt`; standaard een
+dry-run, schrijven alleen met `--uitvoeren`.
 
 **Acceptatiesignalen.** Twee signalen tellen als acceptatie:
 

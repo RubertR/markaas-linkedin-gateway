@@ -220,7 +220,9 @@ export function maakAdminApp(deps: AdminDeps) {
       return c.text('CSRF-token ontbreekt of klopt niet.');
     }
     try {
-      await wijsAf(deps.db, getString(form, 'actieId'), getString(form, 'reden'));
+      await wijsAf(deps.db, getString(form, 'actieId'), getString(form, 'reden'), {
+        limieten: deps.limieten,
+      });
       zetFlash(c, deps, { soort: 'ok', tekst: 'Actie afgewezen.' });
     } catch (err) {
       zetFlash(c, deps, { soort: 'fout', tekst: (err as Error).message });

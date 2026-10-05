@@ -129,14 +129,25 @@ export async function startSequentie(
   valideerTeksten(invoer.teksten);
 
   return db.transaction(async (tx) => {
-    const bestaand = await tx.query<SequentieRij>(
-      `select ${SEQ_KOLOMMEN} from sequences
-       where account_id = $1 and lead_linkedin_url = $2`,
+    // Opnieuw starten mag alleen na een afwijzing op de goedkeuringspagina:
+    // status 'gestopt' én een afgewezen stap. Andere stops ('reactie',
+    // 'verzoek niet geaccepteerd', 'sequentie voltooid') blokkeren blijvend.
+    const blokkerend = await tx.query<SequentieRij>(
+      `select ${SEQ_KOLOMMEN} from sequences s
+       where account_id = $1 and lead_linkedin_url = $2
+         and not (
+           status = 'gestopt'
+           and exists (
+             select 1 from actions a where a.sequence_id = s.id and a.status = 'rejected'
+           )
+         )
+       order by aangemaakt_op desc
+       limit 1`,
       [invoer.accountId, invoer.lead.linkedinUrl],
     );
-    if (bestaand[0]) {
+    if (blokkerend[0]) {
       throw new Error(
-        `Er loopt al een sequentie voor deze lead op dit account (sequentie-id ${bestaand[0].id}, status ${bestaand[0].status}); start geen tweede.`,
+        `Er loopt al een sequentie voor deze lead op dit account (sequentie-id ${blokkerend[0].id}, status ${blokkerend[0].status}); start geen tweede. Opnieuw starten kan alleen nadat een stap is afgewezen op de goedkeuringspagina.`,
       );
     }
 
@@ -247,7 +258,9 @@ export async function vindSequentieBijLead(
 ): Promise<Sequentie | null> {
   const rijen = await db.query<SequentieRij>(
     `select ${SEQ_KOLOMMEN} from sequences
-     where account_id = $1 and lead_linkedin_url = $2`,
+     where account_id = $1 and lead_linkedin_url = $2
+     order by aangemaakt_op desc
+     limit 1`,
     [accountId, leadLinkedinUrl],
   );
   return rijen[0] ? mapSequentie(rijen[0]) : null;
@@ -392,6 +405,40 @@ export async function verwerkReactie(
     return true as const;
   });
   return { sequentieId: sequentie.id, nieuweStatus: 'reactie', gewijzigd: true };
+}
+
+/**
+ * Afwijzing van een sequentie-stap op de goedkeuringspagina: stop de
+ * sequentie (`gestopt`, stop_reden "afgewezen bij goedkeuring: <reden>") en
+ * wijs de overige openstaande stappen af. Roep aan binnen dezelfde transactie
+ * als het afwijzen van de actie. Geeft het sequentie-id terug, of `null` als
+ * de actie niet bij een actieve sequentie hoort.
+ */
+export async function stopSequentieNaAfwijzing(
+  db: Backend,
+  limieten: Limieten,
+  invoer: { actieId: string; reden: string },
+): Promise<string | null> {
+  const stopReden = `${limieten.sequenties.stop_redenen.afgewezen}: ${invoer.reden}`;
+  const rijen = await db.query<{ id: string }>(
+    `update sequences s
+       set status = 'gestopt', volgende_actie_op = null, stop_reden = $2
+     from actions a
+     where a.id = $1
+       and s.id = a.sequence_id
+       and s.status in ('lopend', 'geaccepteerd')
+     returning s.id`,
+    [invoer.actieId, stopReden],
+  );
+  const sequentieId = rijen[0]?.id;
+  if (!sequentieId) return null;
+  await db.query(
+    `update actions
+       set status = 'rejected'::action_status, reden = $3
+     where sequence_id = $1 and id <> $2 and status in ('draft', 'queued', 'approved')`,
+    [sequentieId, invoer.actieId, stopReden],
+  );
+  return sequentieId;
 }
 
 async function vindLopendeSequentieBijLead(

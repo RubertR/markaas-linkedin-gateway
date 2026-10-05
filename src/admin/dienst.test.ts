@@ -265,21 +265,141 @@ describe('goedkeurBatch', () => {
 describe('wijsAf', () => {
   it('zet een draft op rejected met reden', async () => {
     const d = await maakDraft('message', { chatId: 'C-1', tekst: 'oud' });
-    const r = await wijsAf(db, d.id, 'niet relevant');
+    const r = await wijsAf(db, d.id, 'niet relevant', { limieten });
     assert.equal(r.status, 'rejected');
     assert.equal(r.reden, 'niet relevant');
   });
 
   it('vereist een niet-lege reden', async () => {
     const d = await maakDraft('invite', { providerId: 'A' });
-    await assert.rejects(() => wijsAf(db, d.id, '   '), /verplicht/i);
+    await assert.rejects(() => wijsAf(db, d.id, '   ', { limieten }), /verplicht/i);
   });
 
   it('weigert afwijzen van een al afgeronde actie', async () => {
     const d = await maakDraft('invite', { providerId: 'A' });
     await goedkeur(db, d.id, { klok });
     await db.query(`update actions set status = 'done'::action_status where id = $1`, [d.id]);
-    await assert.rejects(() => wijsAf(db, d.id, 'reden'), /status "done"/);
+    await assert.rejects(() => wijsAf(db, d.id, 'reden', { limieten }), /status "done"/);
+  });
+});
+
+describe('wijsAf van een sequentie-stap', () => {
+  const LEAD = {
+    providerId: 'ACo-nina',
+    naam: 'Nina Jansen',
+    functie: 'Marketing manager',
+    bedrijf: 'Acme NV',
+    linkedinUrl: 'https://www.linkedin.com/in/nina-jansen/',
+    waarom: 'Lead uit zoekactie.',
+  };
+  const TEKSTEN = { invite: 'Hoi Nina', bericht: 'Dank voor de connectie', opvolging: 'Reminder' };
+
+  async function sequentie(id: string) {
+    const rijen = await db.query<{
+      status: string;
+      stop_reden: string | null;
+      volgende_actie_op: unknown;
+    }>(
+      `select status::text as status, stop_reden, volgende_actie_op from sequences where id = $1`,
+      [id],
+    );
+    return rijen[0];
+  }
+
+  it('stap 1 afwijzen stopt de sequentie met de reden', async () => {
+    const uit = await startSequentie(db, { accountId, lead: LEAD, teksten: TEKSTEN });
+    await wijsAf(db, uit.invite.id, 'toon te formeel', { limieten });
+    const seq = await sequentie(uit.sequentie.id);
+    assert.equal(seq?.status, 'gestopt');
+    assert.equal(seq?.stop_reden, 'afgewezen bij goedkeuring: toon te formeel');
+    assert.equal(seq?.volgende_actie_op, null);
+  });
+
+  it('stap 2 afwijzen stopt een geaccepteerde sequentie', async () => {
+    const uit = await startSequentie(db, { accountId, lead: LEAD, teksten: TEKSTEN });
+    await db.query(`update actions set status = 'done' where id = $1`, [uit.invite.id]);
+    await db.query(
+      `update sequences set status = 'geaccepteerd', stap = 2, volgende_actie_op = now() where id = $1`,
+      [uit.sequentie.id],
+    );
+    const stap2 = await maakActie(db, {
+      accountId,
+      type: 'message',
+      payload: { ...ontvangerVelden(), chatId: 'C-1', tekst: 'Dank voor de connectie' },
+    });
+    await db.query(
+      `update actions set sequence_id = $2, sequence_stap = 2 where id = $1`,
+      [stap2.id, uit.sequentie.id],
+    );
+
+    await wijsAf(db, stap2.id, 'te lang', { limieten });
+    const seq = await sequentie(uit.sequentie.id);
+    assert.equal(seq?.status, 'gestopt');
+    assert.equal(seq?.stop_reden, 'afgewezen bij goedkeuring: te lang');
+    assert.equal(seq?.volgende_actie_op, null);
+    // De al verstuurde invite blijft wat hij was.
+    assert.equal((await vindActie(db, uit.invite.id))?.status, 'done');
+  });
+
+  it('wijst andere openstaande stappen van dezelfde sequentie mee af', async () => {
+    const uit = await startSequentie(db, { accountId, lead: LEAD, teksten: TEKSTEN });
+    const extra = await maakActie(db, {
+      accountId,
+      type: 'message',
+      payload: { ...ontvangerVelden(), chatId: 'C-1', tekst: 'x' },
+    });
+    await db.query(
+      `update actions set sequence_id = $2, sequence_stap = 2 where id = $1`,
+      [extra.id, uit.sequentie.id],
+    );
+    await wijsAf(db, uit.invite.id, 'andere invalshoek', { limieten });
+    const na = await vindActie(db, extra.id);
+    assert.equal(na?.status, 'rejected');
+    assert.equal(na?.reden, 'afgewezen bij goedkeuring: andere invalshoek');
+  });
+
+  it('na afwijzen kan een nieuwe sequentie voor dezelfde lead starten', async () => {
+    const eerste = await startSequentie(db, { accountId, lead: LEAD, teksten: TEKSTEN });
+    await wijsAf(db, eerste.invite.id, 'tekst verbeteren', { limieten });
+
+    const tweede = await startSequentie(db, {
+      accountId,
+      lead: LEAD,
+      teksten: { ...TEKSTEN, invite: 'Hoi Nina, verbeterde tekst' },
+    });
+    assert.notEqual(tweede.sequentie.id, eerste.sequentie.id);
+    assert.equal(tweede.sequentie.status, 'lopend');
+    assert.equal(tweede.invite.status, 'draft');
+    assert.equal(tweede.invite.payload['message'], 'Hoi Nina, verbeterde tekst');
+    assert.equal((await sequentie(eerste.sequentie.id))?.status, 'gestopt');
+  });
+
+  it('na stap-2-afwijzing kan ook opnieuw gestart worden', async () => {
+    const eerste = await startSequentie(db, { accountId, lead: LEAD, teksten: TEKSTEN });
+    await db.query(`update actions set status = 'done' where id = $1`, [eerste.invite.id]);
+    await db.query(
+      `update sequences set status = 'geaccepteerd', stap = 2 where id = $1`,
+      [eerste.sequentie.id],
+    );
+    const stap2 = await maakActie(db, {
+      accountId,
+      type: 'message',
+      payload: { ...ontvangerVelden(), chatId: 'C-1', tekst: 'x' },
+    });
+    await db.query(
+      `update actions set sequence_id = $2, sequence_stap = 2 where id = $1`,
+      [stap2.id, eerste.sequentie.id],
+    );
+    await wijsAf(db, stap2.id, 'te lang', { limieten });
+    const tweede = await startSequentie(db, { accountId, lead: LEAD, teksten: TEKSTEN });
+    assert.equal(tweede.sequentie.status, 'lopend');
+  });
+
+  it('actie zonder sequentie: geen sequentie geraakt', async () => {
+    const uit = await startSequentie(db, { accountId, lead: LEAD, teksten: TEKSTEN });
+    const los = await maakDraft('message', { chatId: 'C-9', tekst: 'los' });
+    await wijsAf(db, los.id, 'niet nodig', { limieten });
+    assert.equal((await sequentie(uit.sequentie.id))?.status, 'lopend');
   });
 });
 

@@ -15,6 +15,7 @@ import { verseDatabaseMetMigraties } from '../../test/helpers/pglite.ts';
 
 import {
   startSequentie,
+  stopSequentieNaAfwijzing,
   verwerkAcceptatie,
   verwerkReactie,
   verwerkSequentieTick,
@@ -112,6 +113,50 @@ describe('startSequentie', () => {
           teksten: basisTeksten(),
         }),
       /Er loopt al een sequentie/,
+    );
+  });
+
+  it('weigert opnieuw starten nadat de lead reageerde', async () => {
+    const uit = await startSequentie(db, { accountId, lead: basisLead(), teksten: basisTeksten() });
+    await db.query(`update sequences set status = 'reactie' where id = $1`, [uit.sequentie.id]);
+    await assert.rejects(
+      () => startSequentie(db, { accountId, lead: basisLead(), teksten: basisTeksten() }),
+      /al een sequentie/,
+    );
+  });
+
+  it('weigert opnieuw starten na "verzoek niet geaccepteerd" of "voltooid"', async () => {
+    const uit = await startSequentie(db, { accountId, lead: basisLead(), teksten: basisTeksten() });
+    await db.query(
+      `update sequences set status = 'gestopt', stop_reden = 'verzoek niet geaccepteerd' where id = $1`,
+      [uit.sequentie.id],
+    );
+    await assert.rejects(
+      () => startSequentie(db, { accountId, lead: basisLead(), teksten: basisTeksten() }),
+      /al een sequentie/,
+    );
+  });
+
+  it('staat opnieuw starten toe na afwijzing, maar niet een derde parallel', async () => {
+    const eerste = await startSequentie(db, { accountId, lead: basisLead(), teksten: basisTeksten() });
+    await zetActieStatus(db, eerste.invite.id, 'rejected', { reden: 'tekst' });
+    await stopSequentieNaAfwijzing(db, limieten, { actieId: eerste.invite.id, reden: 'tekst' });
+    await startSequentie(db, { accountId, lead: basisLead(), teksten: basisTeksten() });
+    await assert.rejects(
+      () => startSequentie(db, { accountId, lead: basisLead(), teksten: basisTeksten() }),
+      /Er loopt al een sequentie/,
+    );
+  });
+
+  it('de database staat geen twee actieve sequenties voor dezelfde lead toe', async () => {
+    const uit = await startSequentie(db, { accountId, lead: basisLead(), teksten: basisTeksten() });
+    await assert.rejects(
+      () =>
+        db.query(
+          `insert into sequences(account_id, lead_linkedin_url, status) values ($1, $2, 'geaccepteerd')`,
+          [accountId, uit.sequentie.leadLinkedinUrl],
+        ),
+      /duplicate|unique/i,
     );
   });
 

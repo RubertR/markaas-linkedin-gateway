@@ -12,6 +12,7 @@ import {
   type ActieStatus,
 } from '../queue/acties.ts';
 import type { Abonnement } from '../register/accounts.ts';
+import { stopSequentieNaAfwijzing } from '../sequences/motor.ts';
 
 /**
  * Dienstlaag voor de goedkeuringspagina (SPEC §12).
@@ -253,7 +254,17 @@ export async function goedkeurBatch(
   return resultaat;
 }
 
-export async function wijsAf(db: Backend, actieId: string, reden: string): Promise<Actie> {
+/**
+ * Wijst een actie af. Hoort de actie bij een sequentie, dan stopt die
+ * sequentie in dezelfde transactie (SPEC §8a), zodat de lead daarna met een
+ * verbeterde tekst opnieuw gestart kan worden.
+ */
+export async function wijsAf(
+  db: Backend,
+  actieId: string,
+  reden: string,
+  opts: { limieten: Limieten },
+): Promise<Actie> {
   const schoongemaakt = reden.trim();
   if (!schoongemaakt) {
     throw new Error('Reden voor afwijzen is verplicht.');
@@ -265,7 +276,11 @@ export async function wijsAf(db: Backend, actieId: string, reden: string): Promi
       `Actie ${actieId} kan niet worden afgewezen vanuit status "${actie.status}".`,
     );
   }
-  return await zetActieStatus(db, actieId, 'rejected', { reden: schoongemaakt });
+  return await db.transaction(async (tx) => {
+    const afgewezen = await zetActieStatus(tx, actieId, 'rejected', { reden: schoongemaakt });
+    await stopSequentieNaAfwijzing(tx, opts.limieten, { actieId, reden: schoongemaakt });
+    return afgewezen;
+  });
 }
 
 export async function markeerOnzekerAlsDone(

@@ -15,7 +15,7 @@ const VERWACHTE_TABELLEN = [
   'usage',
 ];
 
-const ALLE_MIGRATIES = ['0001_init.sql', '0002_sequences.sql'];
+const ALLE_MIGRATIES = ['0001_init.sql', '0002_sequences.sql', '0003_sequenties_herstart.sql'];
 
 describe('0001_init.sql', () => {
   it('past de migratie schoon toe op een verse PGlite', async () => {

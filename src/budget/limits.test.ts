@@ -51,6 +51,10 @@ describe('laadLimieten', () => {
       limieten.sequenties.stop_redenen.voltooid,
       'sequentie voltooid',
     );
+    assert.equal(
+      limieten.sequenties.stop_redenen.afgewezen,
+      'afgewezen bij goedkeuring',
+    );
 
     for (const abonnement of [
       'free',
@@ -97,6 +101,7 @@ describe('limietenUitObject', () => {
           reactie: 'lead heeft gereageerd',
           niet_geaccepteerd: 'verzoek niet geaccepteerd',
           voltooid: 'sequentie voltooid',
+          afgewezen: 'afgewezen bij goedkeuring',
         },
       },
       unipile_usage_signaal: { afremmen_bij_percentage: 75, nieuwe_factor_bij_afremmen: 0.5 },
@@ -176,6 +181,7 @@ function basisConfig(): Record<string, Record<string, unknown>> & {
         reactie: 'lead heeft gereageerd',
         niet_geaccepteerd: 'verzoek niet geaccepteerd',
         voltooid: 'sequentie voltooid',
+        afgewezen: 'afgewezen bij goedkeuring',
       },
     },
     unipile_usage_signaal: {

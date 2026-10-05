@@ -106,6 +106,8 @@ export interface SequentieStopRedenen {
   reactie: string;
   niet_geaccepteerd: string;
   voltooid: string;
+  /** Voorvoegsel; de reden uit de goedkeuringspagina komt erachter. */
+  afgewezen: string;
 }
 
 export interface SequentieLimieten {
@@ -224,6 +226,7 @@ function parseSequenties(raw: unknown): SequentieLimieten {
       reactie: tekst(stop, 'reactie'),
       niet_geaccepteerd: tekst(stop, 'niet_geaccepteerd'),
       voltooid: tekst(stop, 'voltooid'),
+      afgewezen: tekst(stop, 'afgewezen'),
     },
   };
 }
