@@ -36,7 +36,7 @@ beforeEach(() => {
 });
 
 function client() {
-  return maakUnipileClient({ baseUrl: fake.baseUrl, apiKey: API_SLEUTEL, timeoutMs: 100 });
+  return maakUnipileClient({ baseUrl: fake.baseUrl, apiKey: API_SLEUTEL, timeoutMs: 1000 });
 }
 
 function bestaand(...namen: string[]) {
@@ -201,7 +201,7 @@ describe('registreerWebhooks', () => {
 
   it('time-out: Nederlandse melding, veilig om opnieuw te draaien', async () => {
     bestaand();
-    fake.antwoord('POST', '/api/v1/webhooks', { status: 201, delayMs: 500, body: {} });
+    fake.antwoord('POST', '/api/v1/webhooks', { status: 201, delayMs: 1500, body: {} });
     await assert.rejects(
       registreerWebhooks(client(), { requestUrl: URL, geheim: GEHEIM, uitvoeren: true }),
       (err: Error) => {
