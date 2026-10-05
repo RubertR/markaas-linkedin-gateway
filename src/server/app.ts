@@ -80,6 +80,7 @@ export function maakGatewayApp(deps: GatewayDeps) {
         klok: deps.klok,
         werkdagen: deps.werkdagen,
       },
+      logger,
     }),
   );
 

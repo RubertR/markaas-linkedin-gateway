@@ -8,6 +8,7 @@ import { maakUnipileClient, type UnipileClient } from '../unipile/client.ts';
 import { maakClient } from '../register/clients.ts';
 import { markeerAccountGekoppeld, registreerAccount, vindAccount } from '../register/accounts.ts';
 import type { KoppelflowOpties } from '../register/koppelflow.ts';
+import { maakLogger } from '../log/logger.ts';
 
 import { WEBHOOK_SECRET_HEADER, koppelSleutel } from './geheim.ts';
 import { maakWebhookApp } from './server.ts';
@@ -25,6 +26,7 @@ let fake: FakeUnipile;
 let unipile: UnipileClient;
 let accountId: string;
 let app: ReturnType<typeof maakWebhookApp>;
+let logregels: string[] = [];
 
 before(async () => {
   const opgezet = await verseDatabaseMetMigraties();
@@ -54,13 +56,21 @@ beforeEach(async () => {
   accountId = a.id;
   await markeerAccountGekoppeld(db, accountId, UNIPILE_ACCOUNT_ID);
 
+  logregels = [];
   app = maakWebhookApp({
     db,
     unipile,
     webhookSecret: SECRET,
     koppelOpties: KOPPEL_OPTIES,
+    logger: maakLogger({ niveau: 'info', schrijf: (r) => logregels.push(r) }),
   });
 });
+
+function webhookLogregels(): Array<Record<string, unknown>> {
+  return logregels
+    .map((r) => JSON.parse(r) as Record<string, unknown>)
+    .filter((r) => r.bericht === 'Webhook ontvangen');
+}
 
 async function verzoek(pad: string, opties: {
   method?: string;
@@ -226,6 +236,80 @@ describe('POST /webhooks/koppel met sleutel in de querystring (hosted auth)', ()
       body: { event: 'ok', account_id: UNIPILE_ACCOUNT_ID },
     });
     assert.equal(res.status, 401);
+  });
+});
+
+describe('logregel per webhook', () => {
+  it('één info-regel met event en uitkomst, zonder payload-inhoud of persoonsgegevens', async () => {
+    const res = await verzoek('/webhooks/unipile', {
+      secret: SECRET,
+      body: {
+        event: 'message_received',
+        account_id: UNIPILE_ACCOUNT_ID,
+        chat_id: 'chat-geheim-77',
+        message_id: 'msg-geheim-88',
+        is_sender: false,
+        message: 'Hallo, dit is privé',
+        sender: { attendee_provider_id: 'ACo-persoon-99', attendee_name: 'Jan Jansen' },
+        attendees: [{ attendee_provider_id: 'ACo-persoon-99', attendee_name: 'Jan Jansen' }],
+      },
+    });
+    assert.equal(res.status, 200);
+    const regels = webhookLogregels();
+    assert.equal(regels.length, 1);
+    const regel = regels[0]!;
+    assert.equal(regel.niveau, 'info');
+    assert.equal(regel.route, 'unipile');
+    assert.equal(regel.event, 'message_received');
+    assert.equal(regel.verwerkt, true);
+    const tekst = logregels.join('\n');
+    assert.doesNotMatch(tekst, /privé|Jan Jansen|ACo-persoon-99|chat-geheim-77|msg-geheim-88/);
+  });
+
+  it('logt de reden als een webhook niet verwerkt is', async () => {
+    await verzoek('/webhooks/unipile', {
+      secret: SECRET,
+      body: {
+        event: 'message_received',
+        account_id: UNIPILE_ACCOUNT_ID,
+        chat_id: 'chat-1',
+        message_id: 'msg-eigen',
+        is_sender: true,
+        sender: { attendee_provider_id: 'ACo-onszelf' },
+      },
+    });
+    const regels = webhookLogregels();
+    assert.equal(regels.length, 1);
+    assert.equal(regels[0]!.verwerkt, false);
+    assert.match(String(regels[0]!.reden), /eigen bericht/i);
+  });
+
+  it('laat waarden uit de payload weg uit de gelogde reden', async () => {
+    await verzoek('/webhooks/unipile', {
+      secret: SECRET,
+      body: { event: 'credentials', account_id: 'onbekend-acc-55', timestamp: 't1' },
+    });
+    const regels = webhookLogregels();
+    assert.equal(regels[0]!.verwerkt, false);
+    assert.match(String(regels[0]!.reden), /onbekend/i);
+    assert.doesNotMatch(logregels.join('\n'), /onbekend-acc-55/);
+  });
+
+  it('logt ook de koppel-callback met de status als event', async () => {
+    await verzoek('/webhooks/koppel', {
+      secret: SECRET,
+      body: { status: 'RECONNECTED', account_id: UNIPILE_ACCOUNT_ID },
+    });
+    const regels = webhookLogregels();
+    assert.equal(regels.length, 1);
+    assert.equal(regels[0]!.route, 'koppel');
+    assert.equal(regels[0]!.event, 'RECONNECTED');
+    assert.equal(regels[0]!.verwerkt, true);
+  });
+
+  it('geen logregel voor geweigerde webhooks (401)', async () => {
+    await verzoek('/webhooks/unipile', { secret: 'fout', body: { event: 'ok' } });
+    assert.equal(webhookLogregels().length, 0);
   });
 });
 

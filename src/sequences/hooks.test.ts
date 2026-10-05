@@ -215,3 +215,84 @@ describe('Unipile-webhook met sequentie-hook', () => {
     assert.equal(seq?.status, 'lopend');
   });
 });
+
+describe('acceptatie via het eerste eigen bericht (sequentie-hook)', () => {
+  const HOOK = () => ({
+    db,
+    limieten,
+    klok: vasteKlok(new Date('2026-10-05T09:00:00Z')),
+    werkdagen: vasteWerkdagen(2),
+  });
+
+  function eigenBericht(messageId: string) {
+    return {
+      event: 'message_received',
+      account_id: UNIPILE_ID,
+      chat_id: 'C-nieuw',
+      message_id: messageId,
+      is_sender: true,
+      sender: { attendee_provider_id: 'ACo-onszelf' },
+      attendees: [
+        { attendee_provider_id: 'ACo-onszelf' },
+        { attendee_provider_id: 'ACo-sven' },
+      ],
+    };
+  }
+
+  async function sequentieMetVerstuurdeInvite() {
+    const uit = await startSequentie(db, {
+      accountId,
+      lead: {
+        providerId: 'ACo-sven',
+        naam: 'Sven',
+        functie: 'CTO',
+        bedrijf: 'Flux',
+        linkedinUrl: 'https://www.linkedin.com/in/sven/',
+        waarom: 'Lead',
+      },
+      teksten: { invite: 'Hoi', bericht: 'Dank', opvolging: 'Reminder' },
+    });
+    await db.query(
+      `update actions set status = 'done' where sequence_id = $1 and type = 'invite'`,
+      [uit.sequentie.id],
+    );
+    return uit.sequentie.id;
+  }
+
+  it('eerste eigen bericht zet de sequentie op geaccepteerd', async () => {
+    const id = await sequentieMetVerstuurdeInvite();
+    await verwerkUnipileWebhook(db, unipile, KOPPEL, eigenBericht('M-1'), HOOK());
+    const seq = await vindSequentie(db, id);
+    assert.equal(seq?.status, 'geaccepteerd');
+    assert.equal(seq?.stap, 1);
+  });
+
+  it('latere new_relation verschuift de planning van stap 2 niet', async () => {
+    const id = await sequentieMetVerstuurdeInvite();
+    await verwerkUnipileWebhook(db, unipile, KOPPEL, eigenBericht('M-1'), HOOK());
+    const voor = await vindSequentie(db, id);
+    await verwerkUnipileWebhook(
+      db,
+      unipile,
+      KOPPEL,
+      {
+        event: 'new_relation',
+        account_id: UNIPILE_ID,
+        attendee_provider_id: 'ACo-sven',
+        timestamp: '2026-10-05T12:00:00Z',
+      },
+      { ...HOOK(), klok: vasteKlok(new Date('2026-10-07T09:00:00Z')), werkdagen: vasteWerkdagen(5) },
+    );
+    const na = await vindSequentie(db, id);
+    assert.equal(na?.status, 'geaccepteerd');
+    assert.deepEqual(na?.volgendeActieOp, voor?.volgendeActieOp);
+  });
+
+  it('eigen berichten stoppen de sequentie nooit', async () => {
+    const id = await sequentieMetVerstuurdeInvite();
+    await verwerkUnipileWebhook(db, unipile, KOPPEL, eigenBericht('M-1'), HOOK());
+    await verwerkUnipileWebhook(db, unipile, KOPPEL, eigenBericht('M-2'), HOOK());
+    const seq = await vindSequentie(db, id);
+    assert.equal(seq?.status, 'geaccepteerd');
+  });
+});

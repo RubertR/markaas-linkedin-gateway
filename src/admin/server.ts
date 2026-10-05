@@ -67,6 +67,9 @@ export function maakAdminApp(deps: AdminDeps) {
 
   const app = new Hono<AdminEnv>();
 
+  // Hono is strikt met slashes: zonder deze route geeft /admin een 404.
+  app.get('/admin', (c) => c.redirect('/admin/', 301));
+
   // -- login --------------------------------------------------------------
 
   app.get('/admin/login', (c) => {

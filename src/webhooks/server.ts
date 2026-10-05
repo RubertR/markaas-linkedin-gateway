@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 
 import type { Backend } from '../db/backend.ts';
+import type { Logger } from '../log/logger.ts';
 import { verwerkKoppelCallback, type KoppelflowOpties } from '../register/koppelflow.ts';
 import type { SequentieHookDeps } from '../sequences/hooks.ts';
 import type { UnipileClient } from '../unipile/client.ts';
@@ -20,6 +21,8 @@ export interface WebhookDeps {
   koppelOpties: KoppelflowOpties;
   /** Koppelt new_relation/message_received aan de sequentie-motor (SPEC §8a). */
   sequentieHook?: SequentieHookDeps;
+  /** Eén info-regel per webhook met event en uitkomst. */
+  logger?: Logger;
 }
 
 const WEIGER_TEKST = 'Webhook geweigerd: geheim ontbreekt of klopt niet.';
@@ -59,6 +62,7 @@ export function maakWebhookApp(deps: WebhookDeps) {
       payload as Record<string, unknown>,
       deps.sequentieHook,
     );
+    logUitkomst('unipile', (payload as { event?: unknown }).event, uitkomst);
     return c.json(uitkomst, 200);
   });
 
@@ -77,8 +81,31 @@ export function maakWebhookApp(deps: WebhookDeps) {
       account_id: string;
       name?: string;
     });
+    logUitkomst('koppel', (payload as { status?: unknown }).status, uitkomst);
     return c.json(uitkomst, 200);
   });
 
+  /**
+   * Eén info-regel per verwerkte webhook: route, eventnaam en uitkomst. Geen
+   * payload-velden; waarden tussen aanhalingstekens in de reden (account-id's,
+   * namen) worden weggelaten.
+   */
+  function logUitkomst(
+    route: 'unipile' | 'koppel',
+    event: unknown,
+    uitkomst: { verwerkt: boolean; reden?: string },
+  ): void {
+    deps.logger?.info('Webhook ontvangen', {
+      route,
+      event: typeof event === 'string' ? event.slice(0, 64) : null,
+      verwerkt: uitkomst.verwerkt,
+      ...(uitkomst.reden ? { reden: zonderWaarden(uitkomst.reden) } : {}),
+    });
+  }
+
   return app;
+}
+
+function zonderWaarden(reden: string): string {
+  return reden.replace(/"[^"]*"/g, '"…"');
 }

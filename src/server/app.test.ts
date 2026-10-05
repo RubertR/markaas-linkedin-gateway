@@ -133,6 +133,13 @@ describe('maakGatewayApp', () => {
     assert.equal(admin.headers.get('location'), '/admin/login');
   });
 
+  it('/admin zonder slash stuurt door naar /admin/', async () => {
+    const app = maakApp(leesEnv(GEHEIMEN));
+    const res = await app.request('/admin');
+    assert.equal(res.status, 301);
+    assert.equal(res.headers.get('location'), '/admin/');
+  });
+
   it('zet cookies met Secure in productie', async () => {
     const app = maakApp(leesEnv({ ...GEHEIMEN, NODE_ENV: 'production' }));
     const res = await app.request('/admin/login');

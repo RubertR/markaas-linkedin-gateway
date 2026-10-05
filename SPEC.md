@@ -179,8 +179,8 @@ als §5 controle 5). Willekeurige keuze is uniform binnen de bandbreedte, met é
 Status-enum (`sequence_status`, zie §4):
 
 - `lopend` — invite is `draft`/`queued`/`approved`, nog geen `new_relation` ontvangen.
-- `geaccepteerd` — `new_relation` ontvangen; wacht op (of heeft al) een `draft`-message
-  voor stap 2 of 3.
+- `geaccepteerd` — acceptatie ontvangen (`new_relation` of het eerste eigen bericht in een
+  nieuw gesprek, zie hieronder); wacht op (of heeft al) een `draft`-message voor stap 2 of 3.
 - `reactie` — lead stuurde een bericht (`message_received`, `is_sender=false`); sequentie
   stopt en openstaande `draft`/`queued`-stappen worden `rejected` met reden
   "lead heeft gereageerd".
@@ -200,6 +200,20 @@ andere obstakels zijn **pauzes** die vanzelf voorbijgaan:
 - Dubbele `new_relation` of dubbel `message_received` binnen tien minuten → de
   bestaande events-dedup (uniek `extern_id`) telt het slechts één keer; de
   sequentie-overgang gebeurt dus ook één keer.
+
+**Acceptatiesignalen.** Twee signalen tellen als acceptatie:
+
+1. `new_relation` (Unipile detecteert dit periodiek; kan uren later komen).
+2. Het eerste eigen bericht (`message_received` met `is_sender=true`) in een gesprek met
+   een attendee naar wie we een invite verstuurden (`actions.status = 'done'`). Bij
+   acceptatie zet LinkedIn de uitnodigingsnotitie als eerste bericht in het nieuwe gesprek.
+   De ontvanger komt uit `attendees` (zonder de afzender).
+
+Per account+attendee telt maar één acceptatie: een gateway-event `acceptatie` met
+`extern_id = acceptatie:<unipile_account_id>:<attendee_provider_id>` ontdubbelt. Alleen de
+eerste verlaagt `openstaande_verzoeken` en zet de sequentie op `geaccepteerd`. Eigen
+berichten worden opgeslagen als event `message_sent_self`; ze tellen nooit als reactie en
+stoppen nooit een sequentie.
 
 Verzoek intrekken is **niet** onderdeel van v1; na 21 dagen zonder acceptatie wordt
 de sequentie `gestopt` zonder een intrekactie te plannen.

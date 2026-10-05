@@ -187,6 +187,19 @@ Niet geabonneerd: `creation_success`/`creation_fail` (komen via de koppel-callba
 - Koppeling lead ↔ gesprek: `sender.attendee_provider_id` = de `provider_id` uit zoeken/profiel.
 - Reactie van de ontvanger kwam 2,5 minuut na acceptatie → sequentie moet direct stoppen.
 
+**Verwerking in de gateway (5 okt 2026, zie SPEC §8a):**
+
+- Eigen berichten worden opgeslagen als event `message_sent_self`; nooit als reactie.
+- Bij een eigen bericht is `sender` het eigen account. De ontvanger halen we uit `attendees`
+  (volgens de Unipile-docs per item `attendee_id`, `attendee_name`, `attendee_provider_id`,
+  `attendee_profile_url`), minus de afzender. **Nog te bevestigen op een echte levering:**
+  in de waarneming van 30 sep is `attendees` niet genoteerd. Ontbreekt het veld, dan wordt
+  het bericht alleen opgeslagen en blijft `new_relation` het acceptatiesignaal.
+- Eerste bericht in een gesprek = geen eerder `message_received`/`message_sent_self`-event
+  met dezelfde `chat_id` voor dit account.
+- Ontdubbeling: gateway-event `acceptatie` per account+attendee; een `new_relation` erna
+  (of ervoor) beweegt teller en sequentie niet nog eens.
+
 ## Hosted auth (koppelen en opnieuw koppelen)
 
 *Getest 30 sep 2026, v1: twee links aangemaakt, niet gebruikt.*

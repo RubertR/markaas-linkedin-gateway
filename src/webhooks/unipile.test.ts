@@ -37,6 +37,8 @@ after(async () => {
 });
 
 beforeEach(async () => {
+  await db.query('delete from actions');
+  await db.query('delete from sequences');
   await db.query('delete from events');
   await db.query('delete from accounts');
   await db.query('delete from clients');
@@ -180,7 +182,7 @@ describe('messaging.message_received webhook', () => {
     assert.equal(await tel("events where type='message_received'"), 1);
   });
 
-  it('eigen bericht (is_sender=true): overgeslagen, géén event opgeslagen', async () => {
+  it('eigen bericht (is_sender=true): opgeslagen als message_sent_self, telt niet als reactie', async () => {
     const uitkomst = await verwerkUnipileWebhook(db, unipile, KOPPEL_OPTIES, {
       event: 'message_received',
       account_id: UNIPILE_ACCOUNT_ID,
@@ -193,6 +195,16 @@ describe('messaging.message_received webhook', () => {
     assert.equal(uitkomst.verwerkt, false);
     assert.match(uitkomst.reden ?? '', /eigen bericht/i);
     assert.equal(await tel("events where type='message_received'"), 0);
+    assert.equal(await tel("events where type='message_sent_self'"), 1);
+  });
+
+  it('eigen bericht tweemaal geleverd levert één message_sent_self op', async () => {
+    const payload = eigenBericht({ messageId: 'msg-eigen-dubbel' });
+    await verwerkUnipileWebhook(db, unipile, KOPPEL_OPTIES, payload);
+    const tweede = await verwerkUnipileWebhook(db, unipile, KOPPEL_OPTIES, payload);
+    assert.equal(tweede.verwerkt, false);
+    assert.match(tweede.reden ?? '', /dubbel|al verwerkt/i);
+    assert.equal(await tel("events where type='message_sent_self'"), 1);
   });
 
   it('idempotent: dezelfde message_id tweemaal levert één event op', async () => {
@@ -210,5 +222,151 @@ describe('messaging.message_received webhook', () => {
     assert.equal(tweede.verwerkt, false);
     assert.match(tweede.reden ?? '', /dubbel|al verwerkt/i);
     assert.equal(await tel("events where type='message_received'"), 1);
+  });
+});
+
+const ONSZELF = 'ACo-onszelf';
+const LEAD = 'ACo-lead-1';
+
+function eigenBericht(opties: {
+  chatId?: string;
+  messageId?: string;
+  attendees?: string[] | null;
+} = {}): Record<string, unknown> {
+  const attendees = opties.attendees === undefined ? [ONSZELF, LEAD] : opties.attendees;
+  return {
+    event: 'message_received',
+    account_id: UNIPILE_ACCOUNT_ID,
+    chat_id: opties.chatId ?? 'chat-acc-1',
+    message_id: opties.messageId ?? 'msg-eigen-1',
+    is_sender: true,
+    sender: { attendee_provider_id: ONSZELF },
+    ...(attendees ? { attendees: attendees.map((id) => ({ attendee_provider_id: id })) } : {}),
+    timestamp: '2026-10-01T10:00:00Z',
+  };
+}
+
+async function inviteVerstuurd(providerId: string, status = 'done'): Promise<void> {
+  await db.query(
+    `insert into actions(account_id, type, payload, status)
+     values ($1, 'invite', $2::jsonb, $3::action_status)`,
+    [accountId, JSON.stringify({ providerId }), status],
+  );
+}
+
+async function openstaand(): Promise<number | undefined> {
+  return (await vindAccount(db, accountId))?.openstaandeVerzoeken;
+}
+
+describe('acceptatie via het eerste eigen bericht in een gesprek', () => {
+  beforeEach(async () => {
+    await db.query('update accounts set openstaande_verzoeken = 3 where id=$1', [accountId]);
+  });
+
+  it('eerste eigen bericht naar iemand met een verstuurde invite telt als acceptatie', async () => {
+    await inviteVerstuurd(LEAD);
+    const uitkomst = await verwerkUnipileWebhook(db, unipile, KOPPEL_OPTIES, eigenBericht());
+    assert.equal(uitkomst.verwerkt, true);
+    assert.match(uitkomst.reden ?? '', /acceptatie/i);
+    assert.equal(await openstaand(), 2);
+    assert.equal(await tel("events where type='message_sent_self'"), 1);
+    assert.equal(await tel("events where type='acceptatie'"), 1);
+    assert.equal(await tel("events where type='message_received'"), 0);
+  });
+
+  it('geen acceptatie als de invite nog niet verstuurd is (status queued)', async () => {
+    await inviteVerstuurd(LEAD, 'queued');
+    const uitkomst = await verwerkUnipileWebhook(db, unipile, KOPPEL_OPTIES, eigenBericht());
+    assert.equal(uitkomst.verwerkt, false);
+    assert.equal(await openstaand(), 3);
+    assert.equal(await tel("events where type='acceptatie'"), 0);
+  });
+
+  it('geen acceptatie zonder invite naar deze persoon', async () => {
+    await inviteVerstuurd('ACo-iemand-anders');
+    await verwerkUnipileWebhook(db, unipile, KOPPEL_OPTIES, eigenBericht());
+    assert.equal(await openstaand(), 3);
+  });
+
+  it('geen acceptatie als het niet het eerste bericht in het gesprek is', async () => {
+    await inviteVerstuurd(LEAD);
+    await verwerkUnipileWebhook(db, unipile, KOPPEL_OPTIES, {
+      event: 'message_received',
+      account_id: UNIPILE_ACCOUNT_ID,
+      chat_id: 'chat-acc-1',
+      message_id: 'msg-van-lead',
+      is_sender: false,
+      sender: { attendee_provider_id: LEAD },
+    });
+    const uitkomst = await verwerkUnipileWebhook(db, unipile, KOPPEL_OPTIES, eigenBericht());
+    assert.equal(uitkomst.verwerkt, false);
+    assert.equal(await openstaand(), 3);
+  });
+
+  it('tweede eigen bericht in hetzelfde gesprek telt niet opnieuw', async () => {
+    await inviteVerstuurd(LEAD);
+    await verwerkUnipileWebhook(db, unipile, KOPPEL_OPTIES, eigenBericht());
+    await verwerkUnipileWebhook(db, unipile, KOPPEL_OPTIES, eigenBericht({ messageId: 'msg-eigen-2' }));
+    assert.equal(await openstaand(), 2);
+    assert.equal(await tel("events where type='message_sent_self'"), 2);
+  });
+
+  it('zonder attendees in de payload: opgeslagen, geen acceptatie', async () => {
+    await inviteVerstuurd(LEAD);
+    const uitkomst = await verwerkUnipileWebhook(
+      db, unipile, KOPPEL_OPTIES, eigenBericht({ attendees: null }),
+    );
+    assert.equal(uitkomst.verwerkt, false);
+    assert.equal(await openstaand(), 3);
+    assert.equal(await tel("events where type='message_sent_self'"), 1);
+  });
+
+  it('latere new_relation voor dezelfde persoon verlaagt de teller niet nog eens', async () => {
+    await inviteVerstuurd(LEAD);
+    await verwerkUnipileWebhook(db, unipile, KOPPEL_OPTIES, eigenBericht());
+    const relatie = await verwerkUnipileWebhook(db, unipile, KOPPEL_OPTIES, {
+      event: 'new_relation',
+      account_id: UNIPILE_ACCOUNT_ID,
+      attendee_provider_id: LEAD,
+      timestamp: '2026-10-01T13:00:00Z',
+    });
+    assert.equal(relatie.verwerkt, false);
+    assert.match(relatie.reden ?? '', /al geregistreerd/i);
+    assert.equal(await openstaand(), 2);
+    assert.equal(await tel("events where type='new_relation'"), 1);
+  });
+
+  it('eerdere new_relation: eerste eigen bericht verlaagt de teller niet nog eens', async () => {
+    await inviteVerstuurd(LEAD);
+    await verwerkUnipileWebhook(db, unipile, KOPPEL_OPTIES, {
+      event: 'new_relation',
+      account_id: UNIPILE_ACCOUNT_ID,
+      attendee_provider_id: LEAD,
+      timestamp: '2026-10-01T09:00:00Z',
+    });
+    assert.equal(await openstaand(), 2);
+    const uitkomst = await verwerkUnipileWebhook(db, unipile, KOPPEL_OPTIES, eigenBericht());
+    assert.equal(uitkomst.verwerkt, false);
+    assert.equal(await openstaand(), 2);
+  });
+
+  it('new_relation van vóór deze ontdubbeling (zonder acceptatie-event) telt ook als geregistreerd', async () => {
+    await inviteVerstuurd(LEAD);
+    await db.query(
+      `insert into events(bron, type, extern_id, account_id, payload)
+       values ('unipile', 'new_relation', 'oud-1', $1, $2::jsonb)`,
+      [accountId, JSON.stringify({ event: 'new_relation', attendee_provider_id: LEAD })],
+    );
+    await verwerkUnipileWebhook(db, unipile, KOPPEL_OPTIES, eigenBericht());
+    assert.equal(await openstaand(), 3);
+  });
+
+  it('onbekend account: eigen bericht opgeslagen, geen crash', async () => {
+    const uitkomst = await verwerkUnipileWebhook(db, unipile, KOPPEL_OPTIES, {
+      ...eigenBericht(),
+      account_id: 'onbekend-unipile-id',
+    });
+    assert.equal(uitkomst.verwerkt, false);
+    assert.equal(await tel("events where type='message_sent_self'"), 1);
   });
 });

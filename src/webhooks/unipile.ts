@@ -14,6 +14,7 @@ export interface UnipileWebhookPayload {
   is_sender?: boolean;
   attendee_provider_id?: string;
   sender?: { attendee_provider_id?: string };
+  attendees?: Array<{ attendee_provider_id?: string }>;
   [key: string]: unknown;
 }
 
@@ -151,20 +152,152 @@ async function verwerkNewRelation(
     };
   }
 
+  const attendeeProviderId = payload.attendee_provider_id ?? payload.sender?.attendee_provider_id;
+  if (attendeeProviderId) {
+    const nieuw = await registreerAcceptatie(db, account.id, unipileAccountId, attendeeProviderId, 'new_relation');
+    if (!nieuw) {
+      return {
+        verwerkt: false,
+        reden: 'Acceptatie al geregistreerd (eerder signaal); teller en sequentie niet opnieuw bijgewerkt.',
+      };
+    }
+  }
+  await verwerkAcceptatieGevolgen(db, account.id, unipileAccountId, attendeeProviderId, sequentieHook);
+  return { verwerkt: true };
+}
+
+/**
+ * Eén acceptatie per account+attendee, ongeacht het signaal (new_relation of
+ * het eerste eigen bericht in een nieuw gesprek). De unieke extern_id in de
+ * events-tabel is de ontdubbeling. Geeft `false` als ze er al was.
+ */
+async function registreerAcceptatie(
+  db: Backend,
+  accountId: string,
+  unipileAccountId: string,
+  attendeeProviderId: string,
+  signaal: 'new_relation' | 'eerste_eigen_bericht',
+): Promise<boolean> {
+  return await bewaarEvent(
+    db,
+    'acceptatie',
+    `acceptatie:${unipileAccountId}:${attendeeProviderId}`,
+    { attendee_provider_id: attendeeProviderId, signaal },
+    accountId,
+    'gateway',
+  );
+}
+
+async function verwerkAcceptatieGevolgen(
+  db: Backend,
+  accountId: string,
+  unipileAccountId: string,
+  attendeeProviderId: string | undefined,
+  sequentieHook?: SequentieHookDeps,
+): Promise<void> {
   await db.query(
     `update accounts
      set openstaande_verzoeken = greatest(openstaande_verzoeken - 1, 0)
      where id = $1`,
-    [account.id],
+    [accountId],
   );
   if (sequentieHook) {
-    await opNewRelation(sequentieHook, {
-      unipileAccountId,
-      attendeeProviderId:
-        payload.attendee_provider_id ?? payload.sender?.attendee_provider_id,
-    });
+    await opNewRelation(sequentieHook, { unipileAccountId, attendeeProviderId });
   }
-  return { verwerkt: true };
+}
+
+/**
+ * Eigen bericht (`is_sender: true`). Telt nooit als reactie en stopt nooit
+ * een sequentie. Wel het snelste acceptatiesignaal: bij acceptatie zet
+ * LinkedIn de uitnodigingsnotitie als eerste bericht in een nieuw gesprek
+ * (docs/unipile-notities.md, waarnemingen 30 sep 2026).
+ */
+async function verwerkEigenBericht(
+  db: Backend,
+  payload: UnipileWebhookPayload,
+  sequentieHook?: SequentieHookDeps,
+): Promise<WebhookUitkomst> {
+  const unipileAccountId = payload.account_id?.toString();
+  const messageId = payload.message_id?.toString();
+  const chatId = payload.chat_id?.toString();
+  if (!messageId || !chatId) {
+    return { verwerkt: false, reden: 'Eigen bericht zonder chat_id of message_id.' };
+  }
+  const account = unipileAccountId
+    ? await vindAccountBijUnipileId(db, unipileAccountId)
+    : null;
+
+  const externId = `webhook:message_sent_self:${chatId}:${messageId}`;
+  const opgeslagen = await bewaarEvent(db, 'message_sent_self', externId, payload, account?.id ?? null);
+  if (!opgeslagen) {
+    return { verwerkt: false, reden: 'Webhook is al eerder verwerkt (dubbele levering).' };
+  }
+  const geenAcceptatie = (waarom: string): WebhookUitkomst => ({
+    verwerkt: false,
+    reden: `Eigen bericht opgeslagen; telt niet als reactie. ${waarom}`,
+  });
+  if (!account || !unipileAccountId) {
+    return geenAcceptatie('Onbekend account.');
+  }
+
+  const eerdere = await db.query<{ aantal: string }>(
+    `select count(*)::text as aantal from events
+     where account_id = $1
+       and type in ('message_received', 'message_sent_self')
+       and payload ->> 'chat_id' = $2
+       and extern_id <> $3`,
+    [account.id, chatId, externId],
+  );
+  if (Number(eerdere[0]?.aantal ?? '0') > 0) {
+    return geenAcceptatie('Niet het eerste bericht in dit gesprek.');
+  }
+
+  const eigen = payload.sender?.attendee_provider_id;
+  const ontvangers = (Array.isArray(payload.attendees) ? payload.attendees : [])
+    .map((a) => a?.attendee_provider_id)
+    .filter((id): id is string => typeof id === 'string' && id !== '' && id !== eigen);
+  if (ontvangers.length === 0) {
+    return geenAcceptatie('Geen ontvanger in de payload.');
+  }
+
+  const uitgenodigd = await db.query<{ provider_id: string }>(
+    `select payload ->> 'providerId' as provider_id from actions
+     where account_id = $1
+       and type = 'invite'
+       and status = 'done'
+       and payload ->> 'providerId' = any($2::text[])
+     order by uitgevoerd_op desc nulls last
+     limit 1`,
+    [account.id, ontvangers],
+  );
+  const attendeeProviderId = uitgenodigd[0]?.provider_id;
+  if (!attendeeProviderId) {
+    return geenAcceptatie('Geen verstuurde invite naar de ontvanger.');
+  }
+
+  // new_relation's van vóór de acceptatie-ontdubbeling hebben geen
+  // acceptatie-event; die tellen ook als al geregistreerd.
+  const oudeRelatie = await db.query<{ aantal: string }>(
+    `select count(*)::text as aantal from events
+     where account_id = $1
+       and type = 'new_relation'
+       and coalesce(payload ->> 'attendee_provider_id', payload -> 'sender' ->> 'attendee_provider_id') = $2`,
+    [account.id, attendeeProviderId],
+  );
+  if (Number(oudeRelatie[0]?.aantal ?? '0') > 0) {
+    return geenAcceptatie('Acceptatie al geregistreerd via new_relation.');
+  }
+  const nieuw = await registreerAcceptatie(
+    db, account.id, unipileAccountId, attendeeProviderId, 'eerste_eigen_bericht',
+  );
+  if (!nieuw) {
+    return geenAcceptatie('Acceptatie al geregistreerd.');
+  }
+  await verwerkAcceptatieGevolgen(db, account.id, unipileAccountId, attendeeProviderId, sequentieHook);
+  return {
+    verwerkt: true,
+    reden: 'Eerste eigen bericht in een nieuw gesprek na verstuurde invite; geregistreerd als acceptatie.',
+  };
 }
 
 async function verwerkMessageReceived(
@@ -173,10 +306,7 @@ async function verwerkMessageReceived(
   sequentieHook?: SequentieHookDeps,
 ): Promise<WebhookUitkomst> {
   if (payload.is_sender === true) {
-    return {
-      verwerkt: false,
-      reden: 'Eigen bericht (is_sender=true); overgeslagen — telt niet als reactie.',
-    };
+    return await verwerkEigenBericht(db, payload, sequentieHook);
   }
   const unipileAccountId = payload.account_id?.toString();
   const messageId = payload.message_id?.toString();
@@ -217,12 +347,13 @@ async function bewaarEvent(
   externId: string,
   payload: unknown,
   accountId: string | null,
+  bron: 'unipile' | 'gateway' = 'unipile',
 ): Promise<boolean> {
   try {
     await db.query(
       `insert into events(bron, type, extern_id, account_id, payload)
-       values ('unipile', $1, $2, $3, $4::jsonb)`,
-      [type, externId, accountId, JSON.stringify(payload)],
+       values ($5::event_source, $1, $2, $3, $4::jsonb)`,
+      [type, externId, accountId, JSON.stringify(payload), bron],
     );
     return true;
   } catch (err) {
