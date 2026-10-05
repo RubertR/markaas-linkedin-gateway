@@ -524,9 +524,20 @@ async function startSequenceTool(deps: McpToolsDeps, args: Record<string, unknow
       lead: leadObj,
       teksten: tekstenObj,
     });
+    if (!uit.invite) {
+      return {
+        sequentieId: uit.sequentie.id,
+        status: uit.sequentie.status,
+        beginStap: uit.beginStap,
+        invite: null,
+        bericht:
+          'Sequentie gestart bij stap 2: de lead heeft de invite van de vorige sequentie al geaccepteerd, dus er komt geen nieuwe invite. De tick maakt het concept voor stap 2 (eerste bericht) bij de eerstvolgende ronde; stap 3 volgt na de wachttijd uit config/limits.json. Alle stappen vereisen goedkeuring via de goedkeuringspagina.',
+      };
+    }
     return {
       sequentieId: uit.sequentie.id,
       status: uit.sequentie.status,
+      beginStap: uit.beginStap,
       invite: {
         actieId: uit.invite.id,
         status: uit.invite.status satisfies ActieStatus,

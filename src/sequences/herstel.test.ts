@@ -54,7 +54,7 @@ async function sequentieMetAfgewezenInvite(slug: string, reden: string) {
     teksten: { invite: 'Hoi', bericht: 'Dank', opvolging: 'Reminder' },
   });
   // Oude situatie: invite afgewezen, sequentie bleef 'lopend'.
-  await zetActieStatus(db, uit.invite.id, 'rejected', { reden });
+  await zetActieStatus(db, uit.invite!.id, 'rejected', { reden });
   return uit.sequentie.id;
 }
 

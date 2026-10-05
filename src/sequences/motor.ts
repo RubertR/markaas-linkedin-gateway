@@ -113,13 +113,17 @@ export interface StartSequentieInvoer {
 
 export interface StartSequentieResultaat {
   sequentie: Sequentie;
-  invite: Actie;
+  /** `null` als de sequentie bij stap 2 begint (lead is al connectie). */
+  invite: Actie | null;
+  beginStap: 1 | 2;
 }
 
 /**
  * Start een sequentie en maak meteen de `draft`-invite voor stap 1.
  * Idempotent per (account_id, lead_linkedin_url): dubbel starten gooit
- * een NL-fout zodat skills weten dat er al een sequentie loopt.
+ * een NL-fout zodat skills weten dat er al een sequentie loopt. Bij een
+ * herstart na afwijzing waarbij de invite al geaccepteerd is, begint de
+ * sequentie bij stap 2 zonder nieuwe invite (SPEC §8a).
  */
 export async function startSequentie(
   db: Backend,
@@ -151,14 +155,28 @@ export async function startSequentie(
       );
     }
 
+    // Herstart na afwijzing: is de invite van een vorige sequentie al
+    // verstuurd, dan nooit een tweede invite. Geaccepteerd → meteen naar
+    // stap 2; nog niet geaccepteerd → weigeren.
+    const vorige = await vorigeInviteStand(tx, invoer);
+    if (vorige.verstuurd && !vorige.geaccepteerd) {
+      throw new Error(
+        'De invite van de vorige sequentie voor deze lead is al verstuurd maar nog niet geaccepteerd. Een nieuwe sequentie zou een tweede invite sturen; daarom start ik er geen. Wacht tot de lead accepteert (dan begint een nieuwe sequentie meteen bij stap 2) of tot het verzoek verloopt.',
+      );
+    }
+    const beginStap: 1 | 2 = vorige.geaccepteerd ? 2 : 1;
+
+    // Bij stap 2: status 'geaccepteerd', stap 1, volgende_actie_op nu. De
+    // tick maakt dan het stap-2-concept (met de account-pauzeregels van §8a.3).
     const seqRijen = await tx.query<SequentieRij>(
       `insert into sequences(
          account_id, lead_linkedin_url, lead_provider_id,
          lead_naam, lead_functie, lead_bedrijf, waarom,
          tekst_invite, tekst_bericht, tekst_opvolging,
-         stap, status
+         stap, status, volgende_actie_op
        )
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, 'lopend')
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+               ${beginStap === 2 ? `1, 'geaccepteerd', now()` : `0, 'lopend', null`})
        returning ${SEQ_KOLOMMEN}`,
       [
         invoer.accountId,
@@ -176,6 +194,9 @@ export async function startSequentie(
     const seqRij = seqRijen[0];
     if (!seqRij) throw new Error('Sequentie aanmaken gaf geen rij terug.');
     const sequentie = mapSequentie(seqRij);
+    if (beginStap === 2) {
+      return { sequentie, invite: null, beginStap };
+    }
 
     const invite = await maakActie(tx, {
       accountId: invoer.accountId,
@@ -195,8 +216,43 @@ export async function startSequentie(
     });
     await koppelActieAanSequentie(tx, invite.id, sequentie.id, 1);
 
-    return { sequentie, invite };
+    return { sequentie, invite, beginStap };
   });
+}
+
+/**
+ * Stand van de invite uit eerdere (gestopte) sequenties voor deze lead.
+ * Verstuurd = invite `done` of `onzeker`. Geaccepteerd = een eerdere
+ * sequentie kwam voorbij stap 0, of er is een acceptatie-signaal
+ * (`acceptatie`/`new_relation`) voor deze provider-id op dit account.
+ */
+async function vorigeInviteStand(
+  db: Backend,
+  invoer: StartSequentieInvoer,
+): Promise<{ verstuurd: boolean; geaccepteerd: boolean }> {
+  const rijen = await db.query<{ verstuurd: boolean; voorbij_stap_0: boolean; signaal: boolean }>(
+    `select
+       exists (
+         select 1 from actions a join sequences s on s.id = a.sequence_id
+         where s.account_id = $1 and s.lead_linkedin_url = $2
+           and a.type = 'invite' and a.status in ('done', 'onzeker')
+       ) as verstuurd,
+       exists (
+         select 1 from sequences s
+         where s.account_id = $1 and s.lead_linkedin_url = $2 and s.stap >= 1
+       ) as voorbij_stap_0,
+       exists (
+         select 1 from events e
+         where e.account_id = $1
+           and e.type in ('acceptatie', 'new_relation')
+           and coalesce(e.payload ->> 'attendee_provider_id',
+                        e.payload -> 'sender' ->> 'attendee_provider_id') = $3
+       ) as signaal`,
+    [invoer.accountId, invoer.lead.linkedinUrl, invoer.lead.providerId],
+  );
+  const r = rijen[0];
+  const geaccepteerd = Boolean(r?.verstuurd) && (Boolean(r?.voorbij_stap_0) || Boolean(r?.signaal));
+  return { verstuurd: Boolean(r?.verstuurd), geaccepteerd };
 }
 
 async function koppelActieAanSequentie(
@@ -675,5 +731,19 @@ async function vindChatIdVoorSequentie(
      limit 1`,
     [sequentie.id],
   );
-  return rijen[0]?.chat_id ?? null;
+  if (rijen[0]?.chat_id) return rijen[0].chat_id;
+
+  // Herstart bij stap 2: het gesprek bestaat al uit de vorige sequentie.
+  const eerder = await db.query<{ chat_id: string }>(
+    `select a.payload ->> 'chatId' as chat_id
+     from actions a
+     join sequences s on s.id = a.sequence_id
+     where s.account_id = $1 and s.lead_linkedin_url = $2 and s.id <> $3
+       and a.payload ->> 'chatId' is not null
+       and a.payload ->> 'chatId' not like 'pending:%'
+     order by a.aangemaakt_op desc
+     limit 1`,
+    [sequentie.accountId, sequentie.leadLinkedinUrl, sequentie.id],
+  );
+  return eerder[0]?.chat_id ?? null;
 }

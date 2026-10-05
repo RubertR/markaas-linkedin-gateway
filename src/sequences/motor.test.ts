@@ -86,7 +86,7 @@ describe('startSequentie', () => {
     assert.equal(uit.sequentie.status, 'lopend');
     assert.equal(uit.sequentie.leadNaam, 'Nina Jansen');
 
-    const actie = await vindActie(db, uit.invite.id);
+    const actie = await vindActie(db, uit.invite!.id);
     assert.equal(actie?.type, 'invite');
     assert.equal(actie?.status, 'draft', 'invite hoort als draft te starten');
     assert.equal(actie?.goedgekeurdDoor, null);
@@ -139,13 +139,111 @@ describe('startSequentie', () => {
 
   it('staat opnieuw starten toe na afwijzing, maar niet een derde parallel', async () => {
     const eerste = await startSequentie(db, { accountId, lead: basisLead(), teksten: basisTeksten() });
-    await zetActieStatus(db, eerste.invite.id, 'rejected', { reden: 'tekst' });
-    await stopSequentieNaAfwijzing(db, limieten, { actieId: eerste.invite.id, reden: 'tekst' });
+    await zetActieStatus(db, eerste.invite!.id, 'rejected', { reden: 'tekst' });
+    await stopSequentieNaAfwijzing(db, limieten, { actieId: eerste.invite!.id, reden: 'tekst' });
     await startSequentie(db, { accountId, lead: basisLead(), teksten: basisTeksten() });
     await assert.rejects(
       () => startSequentie(db, { accountId, lead: basisLead(), teksten: basisTeksten() }),
       /Er loopt al een sequentie/,
     );
+  });
+
+  describe('opnieuw starten nadat de invite al verstuurd is', () => {
+    /** Vorige sequentie: invite done, stap `afgewezenStap` afgewezen, gestopt. */
+    async function vorigeSequentie(opties: { stap: number; afgewezenStap: 2 | 3 }) {
+      const uit = await startSequentie(db, { accountId, lead: basisLead(), teksten: basisTeksten() });
+      await zetActieStatus(db, uit.invite!.id, 'done');
+      await db.query(
+        `update sequences set stap = $2, status = 'gestopt',
+           stop_reden = 'afgewezen bij goedkeuring: te lang'
+         where id = $1`,
+        [uit.sequentie.id, opties.stap],
+      );
+      await db.query(
+        `insert into actions(account_id, type, payload, status, sequence_id, sequence_stap)
+         values ($1, 'message', '{"chatId":"C-oud","tekst":"oud"}', 'rejected', $2, $3)`,
+        [accountId, uit.sequentie.id, opties.afgewezenStap],
+      );
+      return uit.sequentie.id;
+    }
+
+    it('invite geaccepteerd (stap 2 afgewezen): nieuwe sequentie begint bij stap 2', async () => {
+      const vorige = await vorigeSequentie({ stap: 2, afgewezenStap: 2 });
+      const uit = await startSequentie(db, {
+        accountId,
+        lead: basisLead(),
+        teksten: { ...basisTeksten(), bericht: 'Dag Nina, verbeterd bericht.' },
+      });
+      assert.notEqual(uit.sequentie.id, vorige);
+      assert.equal(uit.beginStap, 2);
+      assert.equal(uit.invite, null);
+      assert.equal(uit.sequentie.status, 'geaccepteerd');
+      assert.equal(uit.sequentie.stap, 1);
+      assert.ok(uit.sequentie.volgendeActieOp instanceof Date);
+
+      const acties = await db.query<{ type: string }>(
+        `select type::text as type from actions where sequence_id = $1`,
+        [uit.sequentie.id],
+      );
+      assert.equal(acties.length, 0, 'geen nieuwe invite');
+
+      // De tick maakt stap 2 met de nieuwe tekst en de chat van de vorige sequentie.
+      const r = await verwerkSequentieTick({
+        db,
+        klok: vasteKlok(new Date(Date.now() + 60_000)),
+        limieten,
+        werkdagen: vasteWerkdagen(5),
+      });
+      assert.deepEqual(r.stap2Aangemaakt, [uit.sequentie.id]);
+      const stap2 = await db.query<{ payload: Record<string, unknown> }>(
+        `select payload from actions where sequence_id = $1 and sequence_stap = 2`,
+        [uit.sequentie.id],
+      );
+      assert.equal(stap2[0]?.payload['tekst'], 'Dag Nina, verbeterd bericht.');
+      assert.equal(stap2[0]?.payload['chatId'], 'C-oud');
+    });
+
+    it('stap 3 afgewezen: nieuwe sequentie begint ook bij stap 2', async () => {
+      await vorigeSequentie({ stap: 3, afgewezenStap: 3 });
+      const uit = await startSequentie(db, { accountId, lead: basisLead(), teksten: basisTeksten() });
+      assert.equal(uit.beginStap, 2);
+      assert.equal(uit.invite, null);
+    });
+
+    it('acceptatie alleen bekend uit een event: ook bij stap 2 beginnen', async () => {
+      await vorigeSequentie({ stap: 0, afgewezenStap: 2 });
+      await db.query(
+        `insert into events(bron, type, extern_id, account_id, payload)
+         values ('gateway', 'acceptatie', 'acceptatie:uni-rubert:ACo-nina', $1,
+                 '{"attendee_provider_id":"ACo-nina"}')`,
+        [accountId],
+      );
+      const uit = await startSequentie(db, { accountId, lead: basisLead(), teksten: basisTeksten() });
+      assert.equal(uit.beginStap, 2);
+    });
+
+    it('invite verstuurd maar nog niet geaccepteerd: weigert met duidelijke melding', async () => {
+      await vorigeSequentie({ stap: 0, afgewezenStap: 2 });
+      await assert.rejects(
+        () => startSequentie(db, { accountId, lead: basisLead(), teksten: basisTeksten() }),
+        /invite.*al verstuurd.*nog niet geaccepteerd/i,
+      );
+      const aantal = await db.query<{ n: string }>(
+        `select count(*)::text as n from sequences where account_id = $1`,
+        [accountId],
+      );
+      assert.equal(aantal[0]?.n, '1', 'geen nieuwe sequentie aangemaakt');
+    });
+
+    it('stap 1 afgewezen (invite nooit verstuurd): begint gewoon bij stap 1', async () => {
+      const eerste = await startSequentie(db, { accountId, lead: basisLead(), teksten: basisTeksten() });
+      await zetActieStatus(db, eerste.invite!.id, 'rejected', { reden: 'tekst' });
+      await stopSequentieNaAfwijzing(db, limieten, { actieId: eerste.invite!.id, reden: 'tekst' });
+      const uit = await startSequentie(db, { accountId, lead: basisLead(), teksten: basisTeksten() });
+      assert.equal(uit.beginStap, 1);
+      assert.equal(uit.invite?.status, 'draft');
+      assert.equal(uit.sequentie.status, 'lopend');
+    });
   });
 
   it('de database staat geen twee actieve sequenties voor dezelfde lead toe', async () => {
@@ -270,7 +368,7 @@ describe('verwerkReactie (message_received)', () => {
     assert.equal(seq?.status, 'reactie');
     assert.equal(seq?.stopReden, 'lead heeft gereageerd');
 
-    const invite = await vindActie(db, uit.invite.id);
+    const invite = await vindActie(db, uit.invite!.id);
     assert.equal(invite?.status, 'rejected');
     assert.match(invite?.reden ?? '', /gereageerd/);
   });

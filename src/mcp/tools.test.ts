@@ -548,6 +548,38 @@ describe('start_sequence', () => {
     );
   });
 
+  it('na afwijzing van stap 2 begint een nieuwe sequentie bij stap 2, zonder invite', async () => {
+    const eerste = (await voerTool(deps, 'start_sequence', basisArgs())) as { sequentieId: string };
+    // Vorige sequentie: invite verstuurd, geaccepteerd, stap 2 afgewezen.
+    await db.query(
+      `update actions set status = 'done' where sequence_id = $1 and sequence_stap = 1`,
+      [eerste.sequentieId],
+    );
+    await db.query(
+      `update sequences set status = 'gestopt', stap = 2, stop_reden = 'afgewezen bij goedkeuring: te lang'
+       where id = $1`,
+      [eerste.sequentieId],
+    );
+    await db.query(
+      `insert into actions(account_id, type, payload, status, sequence_id, sequence_stap)
+       values ($1, 'message', '{"chatId":"C-1","tekst":"oud"}', 'rejected', $2, 2)`,
+      [accountId, eerste.sequentieId],
+    );
+
+    const tweede = (await voerTool(deps, 'start_sequence', basisArgs())) as {
+      sequentieId: string;
+      status: string;
+      beginStap: number;
+      invite: unknown;
+      bericht: string;
+    };
+    assert.equal(tweede.status, 'geaccepteerd');
+    assert.equal(tweede.beginStap, 2);
+    assert.equal(tweede.invite, null);
+    assert.match(tweede.bericht, /stap 2/i);
+    assert.match(tweede.bericht, /geen nieuwe invite/i);
+  });
+
   it('weigert een invite-tekst boven de maximum-tekenlimiet', async () => {
     const lang = 'x'.repeat(limieten.tekst_max_tekens.invite + 1);
     const args = basisArgs();

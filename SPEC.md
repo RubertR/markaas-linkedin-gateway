@@ -212,8 +212,18 @@ stop_reden "afgewezen bij goedkeuring: <ingevulde reden>" (voorvoegsel uit
 als die eerdere sequentie `gestopt` is én een afgewezen stap heeft. Na een reactie, na
 "verzoek niet geaccepteerd" of na "sequentie voltooid" blijft opnieuw starten geweigerd.
 De database bewaakt hooguit één actieve (`lopend`/`geaccepteerd`) sequentie per
-account+lead (migratie `0003`). Let op: na afwijzing van stap 2 of 3 is de invite al
-verstuurd; een nieuwe sequentie begint toch weer met een invite.
+account+lead (migratie `0003`). Er gaat nooit een tweede invite naar dezelfde lead:
+
+- Invite van een vorige sequentie **niet verstuurd** (stap 1 afgewezen) → de nieuwe
+  sequentie begint gewoon bij stap 1 met een `draft`-invite.
+- Invite **verstuurd en geaccepteerd** (vorige sequentie kwam voorbij stap 0, of er is een
+  `acceptatie`/`new_relation`-event voor deze lead) → de nieuwe sequentie begint bij
+  stap 2: status `geaccepteerd`, `volgende_actie_op` = nu, geen invite. De tick maakt het
+  stap-2-concept met de nieuwe tekst en neemt de `chatId` over uit de vorige sequentie.
+- Invite **verstuurd maar nog niet geaccepteerd** → `start_sequence` weigert met een
+  NL-melding: wachten op acceptatie of op het verlopen van het verzoek.
+
+"Verstuurd" betekent dat de invite de status `done` of `onzeker` heeft.
 
 Bestaande sequenties die nog `lopend`/`geaccepteerd` staan met een afgewezen stap
 (van vóór deze regel) zet `npm run sequenties:herstel` op `gestopt`; standaard een

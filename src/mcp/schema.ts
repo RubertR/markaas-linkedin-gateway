@@ -154,7 +154,7 @@ export const TOOL_DEFINITIES: readonly ToolDefinitie[] = [
   {
     name: 'start_sequence',
     description:
-      'Start een drie-staps-sequentie (verzoek → eerste bericht → opvolging) voor één lead op één account. Maakt uitsluitend het CONCEPT voor stap 1 (invite); stap 2 en 3 worden pas later door de sequentie-tick aangemaakt en lopen ook via de goedkeuringspagina. Deze tool keurt niets goed en verstuurt niets.',
+      'Start een drie-staps-sequentie (verzoek → eerste bericht → opvolging) voor één lead op één account. Maakt uitsluitend het CONCEPT voor stap 1 (invite); stap 2 en 3 worden pas later door de sequentie-tick aangemaakt en lopen ook via de goedkeuringspagina. Opnieuw starten kan alleen nadat een stap is afgewezen; had de lead de vorige invite al geaccepteerd, dan begint de nieuwe sequentie bij stap 2 zonder invite (beginStap 2, invite null). Deze tool keurt niets goed en verstuurt niets.',
     inputSchema: {
       type: 'object',
       properties: {

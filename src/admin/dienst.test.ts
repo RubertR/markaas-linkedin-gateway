@@ -154,7 +154,7 @@ describe('lijstDrafts', () => {
       },
     });
     const drafts = await lijstDrafts(db, { limieten, klok });
-    const d = drafts.find((x) => x.actieId === seq.invite.id)!;
+    const d = drafts.find((x) => x.actieId === seq.invite!.id)!;
     assert.ok(d.sequentie, 'draft uit een sequentie heeft een sequentie-blok');
     assert.equal(d.sequentie!.sequentieId, seq.sequentie.id);
     assert.equal(d.sequentie!.stap, 1);
@@ -308,7 +308,7 @@ describe('wijsAf van een sequentie-stap', () => {
 
   it('stap 1 afwijzen stopt de sequentie met de reden', async () => {
     const uit = await startSequentie(db, { accountId, lead: LEAD, teksten: TEKSTEN });
-    await wijsAf(db, uit.invite.id, 'toon te formeel', { limieten });
+    await wijsAf(db, uit.invite!.id, 'toon te formeel', { limieten });
     const seq = await sequentie(uit.sequentie.id);
     assert.equal(seq?.status, 'gestopt');
     assert.equal(seq?.stop_reden, 'afgewezen bij goedkeuring: toon te formeel');
@@ -317,7 +317,7 @@ describe('wijsAf van een sequentie-stap', () => {
 
   it('stap 2 afwijzen stopt een geaccepteerde sequentie', async () => {
     const uit = await startSequentie(db, { accountId, lead: LEAD, teksten: TEKSTEN });
-    await db.query(`update actions set status = 'done' where id = $1`, [uit.invite.id]);
+    await db.query(`update actions set status = 'done' where id = $1`, [uit.invite!.id]);
     await db.query(
       `update sequences set status = 'geaccepteerd', stap = 2, volgende_actie_op = now() where id = $1`,
       [uit.sequentie.id],
@@ -338,7 +338,7 @@ describe('wijsAf van een sequentie-stap', () => {
     assert.equal(seq?.stop_reden, 'afgewezen bij goedkeuring: te lang');
     assert.equal(seq?.volgende_actie_op, null);
     // De al verstuurde invite blijft wat hij was.
-    assert.equal((await vindActie(db, uit.invite.id))?.status, 'done');
+    assert.equal((await vindActie(db, uit.invite!.id))?.status, 'done');
   });
 
   it('wijst andere openstaande stappen van dezelfde sequentie mee af', async () => {
@@ -352,7 +352,7 @@ describe('wijsAf van een sequentie-stap', () => {
       `update actions set sequence_id = $2, sequence_stap = 2 where id = $1`,
       [extra.id, uit.sequentie.id],
     );
-    await wijsAf(db, uit.invite.id, 'andere invalshoek', { limieten });
+    await wijsAf(db, uit.invite!.id, 'andere invalshoek', { limieten });
     const na = await vindActie(db, extra.id);
     assert.equal(na?.status, 'rejected');
     assert.equal(na?.reden, 'afgewezen bij goedkeuring: andere invalshoek');
@@ -360,7 +360,7 @@ describe('wijsAf van een sequentie-stap', () => {
 
   it('na afwijzen kan een nieuwe sequentie voor dezelfde lead starten', async () => {
     const eerste = await startSequentie(db, { accountId, lead: LEAD, teksten: TEKSTEN });
-    await wijsAf(db, eerste.invite.id, 'tekst verbeteren', { limieten });
+    await wijsAf(db, eerste.invite!.id, 'tekst verbeteren', { limieten });
 
     const tweede = await startSequentie(db, {
       accountId,
@@ -369,14 +369,14 @@ describe('wijsAf van een sequentie-stap', () => {
     });
     assert.notEqual(tweede.sequentie.id, eerste.sequentie.id);
     assert.equal(tweede.sequentie.status, 'lopend');
-    assert.equal(tweede.invite.status, 'draft');
-    assert.equal(tweede.invite.payload['message'], 'Hoi Nina, verbeterde tekst');
+    assert.equal(tweede.invite?.status, 'draft');
+    assert.equal(tweede.invite?.payload['message'], 'Hoi Nina, verbeterde tekst');
     assert.equal((await sequentie(eerste.sequentie.id))?.status, 'gestopt');
   });
 
-  it('na stap-2-afwijzing kan ook opnieuw gestart worden', async () => {
+  it('na stap-2-afwijzing start een nieuwe sequentie bij stap 2, zonder invite', async () => {
     const eerste = await startSequentie(db, { accountId, lead: LEAD, teksten: TEKSTEN });
-    await db.query(`update actions set status = 'done' where id = $1`, [eerste.invite.id]);
+    await db.query(`update actions set status = 'done' where id = $1`, [eerste.invite!.id]);
     await db.query(
       `update sequences set status = 'geaccepteerd', stap = 2 where id = $1`,
       [eerste.sequentie.id],
@@ -392,7 +392,9 @@ describe('wijsAf van een sequentie-stap', () => {
     );
     await wijsAf(db, stap2.id, 'te lang', { limieten });
     const tweede = await startSequentie(db, { accountId, lead: LEAD, teksten: TEKSTEN });
-    assert.equal(tweede.sequentie.status, 'lopend');
+    assert.equal(tweede.beginStap, 2);
+    assert.equal(tweede.invite, null);
+    assert.equal(tweede.sequentie.status, 'geaccepteerd');
   });
 
   it('actie zonder sequentie: geen sequentie geraakt', async () => {
