@@ -156,6 +156,63 @@ describe('get_budget', () => {
     assert.equal(resultaat.budget['search']!.dag!.norm, 1);
     assert.equal(resultaat.budget['search']!.dag!.resterend, 1);
   });
+
+  it('opbouwfactor geldt niet voor InMail: salesnav_core met factor 0.5 → 50/maand', async () => {
+    const resultaat = (await voerTool(deps, 'get_budget', { accountId })) as {
+      opbouwFactor: number;
+      budget: Record<string, { maand?: { norm: number; resterend: number } }>;
+    };
+    assert.equal(resultaat.opbouwFactor, 0.5);
+    assert.equal(resultaat.budget['inmail']!.maand!.norm, 50);
+    assert.equal(resultaat.budget['inmail']!.maand!.resterend, 50);
+  });
+
+  it('buiten afkoeling: afkoelingTot is null en er is geen reden', async () => {
+    const resultaat = (await voerTool(deps, 'get_budget', { accountId })) as Record<string, unknown>;
+    assert.equal(resultaat['afkoelingTot'], null);
+    assert.equal(resultaat['reden'], undefined);
+  });
+
+  it('tijdens afkoeling: alle normen en resterend 0, met afkoelingTot en NL-reden', async () => {
+    // Vaste klok staat op 2026-10-06T10:00Z; afkoeling loopt tot de volgende dag.
+    await db.query(`update accounts set afkoeling_tot = $2 where id = $1`, [
+      accountId,
+      '2026-10-07T10:00:00.000Z',
+    ]);
+    type Teller = { gebruikt: number; norm: number; resterend: number };
+    const resultaat = (await voerTool(deps, 'get_budget', { accountId })) as {
+      afkoelingTot: string | null;
+      reden?: string;
+      budget: Record<string, { dag?: Teller; week?: Teller | null; maand?: Teller }>;
+    };
+    assert.equal(resultaat.afkoelingTot, '2026-10-07T10:00:00.000Z');
+    assert.match(resultaat.reden ?? '', /afkoeling/i);
+    assert.match(resultaat.reden ?? '', /2026-10-07/);
+    for (const type of ['invite', 'message', 'profile', 'search']) {
+      assert.equal(resultaat.budget[type]!.dag!.norm, 0, `${type} dag-norm`);
+      assert.equal(resultaat.budget[type]!.dag!.resterend, 0, `${type} dag-resterend`);
+      const week = resultaat.budget[type]!.week;
+      if (week) {
+        assert.equal(week.norm, 0, `${type} week-norm`);
+        assert.equal(week.resterend, 0, `${type} week-resterend`);
+      }
+    }
+    assert.equal(resultaat.budget['inmail']!.maand!.norm, 0);
+    assert.equal(resultaat.budget['inmail']!.maand!.resterend, 0);
+  });
+
+  it('na afloop van de afkoeling gelden de normale normen weer', async () => {
+    await db.query(`update accounts set afkoeling_tot = $2 where id = $1`, [
+      accountId,
+      '2026-10-06T09:00:00.000Z',
+    ]);
+    const resultaat = (await voerTool(deps, 'get_budget', { accountId })) as {
+      afkoelingTot: string | null;
+      budget: Record<string, { dag?: { norm: number } }>;
+    };
+    assert.equal(resultaat.afkoelingTot, null);
+    assert.equal(resultaat.budget['invite']!.dag!.norm, 10);
+  });
 });
 
 function volledigeInvitePayload(overschrijf: Record<string, unknown> = {}): Record<string, unknown> {
@@ -394,12 +451,14 @@ describe('search_people', () => {
       body: { items: [], paging: { total_count: 0 } },
     });
     await voerTool(deps, 'search_people', { accountId, keywords: 'eerste' });
-    // Eerste run een uur terugzetten (zelfde lokale dag), zodat de minimale
-    // pauze niet meer telt en alleen de dagnorm de tweede run tegenhoudt.
+    // De eerste run uitvoeren 10 minuten vóór de vaste klok (12:00 lokaal) zetten:
+    // ruim boven de maximale search-pauze van 8 minuten, zodat alleen de dagnorm
+    // de tweede run tegenhoudt. Expliciet afgeleid van deps.klok, niet van de
+    // wandklok: zo blijft het altijd dezelfde lokale dag, ook rond middernacht.
+    const tienMinutenEerder = new Date(deps.klok.nu().getTime() - 10 * 60 * 1000);
     await db.query(
-      `update actions set uitgevoerd_op = uitgevoerd_op - interval '1 hour'
-       where account_id = $1 and type = 'search'`,
-      [accountId],
+      `update actions set uitgevoerd_op = $2 where account_id = $1 and type = 'search'`,
+      [accountId, tienMinutenEerder.toISOString()],
     );
     await assert.rejects(
       () => voerTool(deps, 'search_people', { accountId, keywords: 'tweede' }),

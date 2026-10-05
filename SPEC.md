@@ -71,6 +71,9 @@ wachtrij (tijdelijk) of wordt ze geweigerd met reden (structureel).
    Geschaalde normen worden naar beneden afgerond, maar komen nooit onder 1 als de
    ongeschaalde norm ≥ 1 is (anders blokkeert bijv. `search.runs_per_dag` = 1 tijdens de
    opbouw volledig). Afkoeling blijft een aparte stop: dan gaat er niets door.
+
+   De opbouw_factor geldt **niet voor InMail**: InMail-tegoed is betaald maandtegoed en blijft
+   op de volle abonnementsnorm per kalendermaand.
 5. **Tijdvenster** — werkdag, 08:30–17:30 in de tijdzone van het account; 2–8 minuten
    willekeurig tussen twee acties op hetzelfde account.
 6. **Afkoeling** — na HTTP 429, captcha of waarschuwing: 48 uur pauze, daarna 7 dagen
@@ -96,7 +99,7 @@ verzoeken ≥ 30%; maximaal 1.0.
 | --- | --- | --- |
 | `list_accounts` | Accounts per klant met status, abonnement, opbouw | nee |
 | `account_health` | Sessiestatus, laatste fout, afkoeling | nee |
-| `get_budget` | Resterend budget per actie, vandaag en deze week | nee |
+| `get_budget` | Resterend budget per actie, vandaag en deze week; tijdens afkoeling overal 0 met `afkoelingTot` en reden | nee |
 | `search_people` | LinkedIn- of Sales Navigator-zoekopdracht | ja |
 | `get_profile` | Eén profiel | ja |
 | `queue_action` | Verzoek, bericht of InMail als **concept** (status `draft`) | ja, bij uitvoering |

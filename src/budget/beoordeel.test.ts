@@ -166,6 +166,14 @@ describe('beoordeel — controle 3: dagbudget', () => {
     assert.match(uitslag.reden!, /1\/1/);
   });
 
+  it('opbouwfactor geldt niet voor InMail: salesnav_core met factor 0.5 houdt 50/maand', async () => {
+    const basis = { actieType: 'inmail' as const, opbouwFactor: 0.5 };
+    assert.equal(beoordeel(await invoerVoor({ ...basis, gebruikMaand: 49 })).status, 'toegestaan');
+    const vol = geblokkeerd(beoordeel(await invoerVoor({ ...basis, gebruikMaand: 50 })));
+    assert.equal(vol.controle, 'dagbudget');
+    assert.match(vol.reden!, /50\/50/);
+  });
+
   it('search tijdens afkoeling blijft geblokkeerd, ook met de ondergrens van 1', async () => {
     const invoer = await invoerVoor({
       actieType: 'search',

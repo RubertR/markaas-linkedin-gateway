@@ -1,3 +1,4 @@
+import { inAfkoeling } from '../budget/afkoeling.ts';
 import type { Klok } from '../budget/klok.ts';
 import { telGebruikOpDag, telGebruikOverDagen } from '../budget/gebruik.ts';
 import type {
@@ -204,6 +205,7 @@ interface BudgetRij {
   id: string;
   abonnement: string;
   opbouw_factor: string | number;
+  afkoeling_tot: string | Date | null;
   tijdzone: string;
   openstaande_verzoeken: number;
 }
@@ -211,7 +213,8 @@ interface BudgetRij {
 async function getBudget(deps: McpToolsDeps, args: Record<string, unknown>) {
   const accountId = vereistString(args, 'accountId');
   const rijen = await deps.db.query<BudgetRij>(
-    `select id, abonnement::text as abonnement, opbouw_factor, tijdzone, openstaande_verzoeken
+    `select id, abonnement::text as abonnement, opbouw_factor, afkoeling_tot, tijdzone,
+            openstaande_verzoeken
      from accounts where id = $1`,
     [accountId],
   );
@@ -232,6 +235,15 @@ async function getBudget(deps: McpToolsDeps, args: Record<string, unknown>) {
   const weekBereik = lokaleDagen(nu, rij.tijdzone, 7);
   const maandBereik = dagenInMaand(nu, rij.tijdzone);
   const factor = Number(rij.opbouw_factor);
+  const afkoelingTot =
+    rij.afkoeling_tot === null
+      ? null
+      : rij.afkoeling_tot instanceof Date
+        ? rij.afkoeling_tot
+        : new Date(rij.afkoeling_tot);
+  // Tijdens afkoeling laat de budgetmotor niets door (SPEC §5, controle 6);
+  // dan toont get_budget overal norm 0, zodat een skill niets inplant.
+  const afkoeling = inAfkoeling({ afkoelingTot }, nu);
 
   const typen: ActieType[] = ['invite', 'message', 'profile', 'search'];
   const perType: Record<string, unknown> = {};
@@ -239,8 +251,9 @@ async function getBudget(deps: McpToolsDeps, args: Record<string, unknown>) {
     const dagGebruikt = await telGebruikOpDag(deps.db, accountId, type, vandaag);
     const weekGebruikt =
       type === 'search' ? 0 : await telGebruikOverDagen(deps.db, accountId, type, weekBereik);
-    const dagnorm = dagnormVoor(type, abn, factor);
-    const weeknorm = weeknormVoor(type, abn, factor);
+    const dagnorm = afkoeling ? 0 : dagnormVoor(type, abn, factor);
+    const geschaaldeWeeknorm = weeknormVoor(type, abn, factor);
+    const weeknorm = afkoeling && geschaaldeWeeknorm !== null ? 0 : geschaaldeWeeknorm;
     perType[type] = {
       dag: {
         gebruikt: dagGebruikt,
@@ -258,12 +271,14 @@ async function getBudget(deps: McpToolsDeps, args: Record<string, unknown>) {
     };
   }
 
+  // InMail is betaald maandtegoed: geen opbouwfactor, alleen afkoeling zet het op 0.
   const inmailMaand = await telGebruikOverDagen(deps.db, accountId, 'inmail', maandBereik);
+  const inmailNorm = afkoeling ? 0 : abn.inmail.maand;
   perType['inmail'] = {
     maand: {
       gebruikt: inmailMaand,
-      norm: abn.inmail.maand,
-      resterend: Math.max(0, abn.inmail.maand - inmailMaand),
+      norm: inmailNorm,
+      resterend: Math.max(0, inmailNorm - inmailMaand),
     },
   };
 
@@ -271,6 +286,12 @@ async function getBudget(deps: McpToolsDeps, args: Record<string, unknown>) {
     accountId: rij.id,
     abonnement: rij.abonnement,
     opbouwFactor: factor,
+    afkoelingTot: afkoeling ? afkoelingTot!.toISOString() : null,
+    ...(afkoeling
+      ? {
+          reden: `Account staat in afkoeling tot ${afkoelingTot!.toISOString()} (na 429, captcha of waarschuwing); tot dan gaat er niets naar LinkedIn. Plan pas na die tijd nieuwe acties in.`,
+        }
+      : {}),
     openstaandeVerzoeken: rij.openstaande_verzoeken,
     openstaandMaximum: abn.invite.openstaand_maximum,
     budget: perType,

@@ -17,7 +17,10 @@ Regels:
 
 - Meerdere processen op één account delen het budget; ze tellen niet op.
 - Werkdagen 08:30–17:30 lokale tijd, 2–8 minuten willekeurig tussen acties.
-- Nieuw of stil account: start op 50%, +20% per week.
+- Nieuw of stil account: start op 50%, +20% per week. Geschaalde normen worden naar beneden
+  afgerond, maar een norm van 1 of meer wordt nooit lager dan 1 (bijv. één zoekrun per dag).
+- De opbouwfactor geldt **niet voor InMail**: InMail-tegoed is betaald maandtegoed en blijft
+  op de volle abonnementsnorm (Sales Navigator Core: 50/maand, ook bij factor 0,5).
 - Waarschuwing, captcha of 429: 48 uur stop, daarna een week op 50%.
 
 Bronnen:
