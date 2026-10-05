@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 
 import { laadLimieten } from './limits.ts';
 import {
+  geschaaldeNorm,
   nieuweOpbouwFactor,
   verlagingNaUnipileSignaal,
   weekBudgetMetBonus,
@@ -86,7 +87,39 @@ describe('verlagingNaUnipileSignaal', () => {
   });
 });
 
+describe('geschaaldeNorm', () => {
+  it('rondt naar beneden af', () => {
+    assert.equal(geschaaldeNorm(20, 0.5), 10);
+    assert.equal(geschaaldeNorm(15, 0.5), 7);
+  });
+
+  it('komt nooit onder 1 als de ongeschaalde norm ≥ 1 is', () => {
+    assert.equal(geschaaldeNorm(1, 0.5), 1);
+    assert.equal(geschaaldeNorm(1, 0.7), 1);
+    assert.equal(geschaaldeNorm(3, 0.3), 1);
+  });
+
+  it('een norm van 0 blijft 0', () => {
+    assert.equal(geschaaldeNorm(0, 0.5), 0);
+    assert.equal(geschaaldeNorm(0, 1), 0);
+  });
+
+  it('factor 0 geeft 0: de ondergrens tilt een stilgezet budget niet op', () => {
+    assert.equal(geschaaldeNorm(20, 0), 0);
+    assert.equal(geschaaldeNorm(1, 0), 0);
+  });
+});
+
 describe('weekBudgetMetBonus', () => {
+  it('ondergrens 1 geldt ook voor de invite-weeknorm', async () => {
+    const l = await limietenPromise;
+    const invite = { ...l.abonnementen.salesnav_core.invite, week: 1 };
+    assert.equal(
+      weekBudgetMetBonus({ invite, opbouwFactor: 0.5, wekenSindsStart: 0, acceptatieVerhouding: 0 }),
+      1,
+    );
+  });
+
   it('zonder bonus-config: gewone weeknorm × factor', async () => {
     const l = await limietenPromise;
     const invite = l.abonnementen.premium_business.invite;

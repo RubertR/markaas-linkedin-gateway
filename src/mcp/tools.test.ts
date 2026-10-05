@@ -148,6 +148,14 @@ describe('get_budget', () => {
     assert.equal(resultaat.budget['invite']!.dag!.resterend, 10);
     assert.equal(resultaat.budget['inmail']!.maand!.norm, 50);
   });
+
+  it('bug: search-dagnorm is 1 tijdens opbouw (salesnav_core, factor 0.5), niet 0', async () => {
+    const resultaat = (await voerTool(deps, 'get_budget', { accountId })) as {
+      budget: Record<string, { dag?: { norm: number; resterend: number } }>;
+    };
+    assert.equal(resultaat.budget['search']!.dag!.norm, 1);
+    assert.equal(resultaat.budget['search']!.dag!.resterend, 1);
+  });
 });
 
 function volledigeInvitePayload(overschrijf: Record<string, unknown> = {}): Record<string, unknown> {
@@ -359,10 +367,8 @@ describe('get_profile', () => {
 });
 
 describe('search_people', () => {
-  it('loopt via de budgetmotor en geeft resultaten terug (opbouw_factor 1.0)', async () => {
-    // De zoeknorm is 1 run/dag; met opbouw_factor 0.5 wordt dat 0. Voor deze
-    // test op volledige opbouw zetten zodat 1 run door de budgetmotor komt.
-    await db.query(`update accounts set opbouw_factor = 1.0 where id = $1`, [accountId]);
+  it('loopt via de budgetmotor en geeft resultaten terug, ook tijdens opbouw (factor 0.5)', async () => {
+    // Zoeknorm 1 run/dag × 0.5 blijft 1 dankzij de ondergrens in geschaaldeNorm.
     fake.antwoord('POST', '/api/v1/linkedin/search', {
       status: 200,
       body: {
@@ -382,13 +388,25 @@ describe('search_people', () => {
     assert.equal(actie?.type, 'search');
   });
 
-  it('zet de actie op "queued" met NL-reden wanneer het dagbudget nul is', async () => {
-    // Standaard opbouw_factor 0.5 × runs_per_dag 1 = 0 → wachtrij.
+  it('zet de tweede run op dezelfde dag in de wachtrij met NL-reden (dagnorm 1 op)', async () => {
+    fake.antwoord('POST', '/api/v1/linkedin/search', {
+      status: 200,
+      body: { items: [], paging: { total_count: 0 } },
+    });
+    await voerTool(deps, 'search_people', { accountId, keywords: 'eerste' });
+    // Eerste run een uur terugzetten (zelfde lokale dag), zodat de minimale
+    // pauze niet meer telt en alleen de dagnorm de tweede run tegenhoudt.
+    await db.query(
+      `update actions set uitgevoerd_op = uitgevoerd_op - interval '1 hour'
+       where account_id = $1 and type = 'search'`,
+      [accountId],
+    );
     await assert.rejects(
-      () => voerTool(deps, 'search_people', { accountId, keywords: 'x' }),
+      () => voerTool(deps, 'search_people', { accountId, keywords: 'tweede' }),
       (err: Error) => {
         assert.ok(err instanceof McpSynchroonFout);
         assert.equal((err as McpSynchroonFout).oorzaak, 'wachtrij');
+        assert.match(err.message, /Dagnorm/);
         return true;
       },
     );

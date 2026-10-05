@@ -154,6 +154,28 @@ describe('beoordeel — controle 3: dagbudget', () => {
     assert.equal(beoordeel(invoer).status, 'wachtrij');
   });
 
+  it('bug: search tijdens opbouw (salesnav_core, factor 0.5) — dagnorm 1 blijft 1, niet 0', async () => {
+    const invoer = await invoerVoor({ actieType: 'search', opbouwFactor: 0.5, gebruikDag: 0 });
+    assert.equal(beoordeel(invoer).status, 'toegestaan');
+  });
+
+  it('search tijdens opbouw: tweede run op dezelfde dag → wachtrij (norm 1)', async () => {
+    const invoer = await invoerVoor({ actieType: 'search', opbouwFactor: 0.5, gebruikDag: 1 });
+    const uitslag = geblokkeerd(beoordeel(invoer));
+    assert.equal(uitslag.controle, 'dagbudget');
+    assert.match(uitslag.reden!, /1\/1/);
+  });
+
+  it('search tijdens afkoeling blijft geblokkeerd, ook met de ondergrens van 1', async () => {
+    const invoer = await invoerVoor({
+      actieType: 'search',
+      opbouwFactor: 0.5,
+      afkoelingTot: new Date('2026-10-07T10:00:00Z'),
+    });
+    const uitslag = geblokkeerd(beoordeel(invoer));
+    assert.equal(uitslag.controle, 'afkoeling');
+  });
+
   it('typeDagStop (Unipile usage ≥ 75%) → wachtrij voor dit actietype vandaag', async () => {
     const invoer = await invoerVoor({ gebruikDag: 0, typeDagStop: true });
     const uitslag = beoordeel(invoer);

@@ -67,6 +67,10 @@ wachtrij (tijdelijk) of wordt ze geweigerd met reden (structureel).
    `profile` niet.
 3. **Dagbudget** — verbruik vandaag + deze actie ≤ dagnorm × opbouw_factor.
 4. **Weekbudget** — schuivend over 7 dagen, ≤ weeknorm × opbouw_factor.
+
+   Geschaalde normen worden naar beneden afgerond, maar komen nooit onder 1 als de
+   ongeschaalde norm ≥ 1 is (anders blokkeert bijv. `search.runs_per_dag` = 1 tijdens de
+   opbouw volledig). Afkoeling blijft een aparte stop: dan gaat er niets door.
 5. **Tijdvenster** — werkdag, 08:30–17:30 in de tijdzone van het account; 2–8 minuten
    willekeurig tussen twee acties op hetzelfde account.
 6. **Afkoeling** — na HTTP 429, captcha of waarschuwing: 48 uur pauze, daarna 7 dagen

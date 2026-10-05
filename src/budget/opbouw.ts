@@ -59,15 +59,20 @@ export function weekBudgetMetBonus(invoer: WeekBudgetInvoer): number {
     acceptatieVerhouding >= bonus.acceptatie_drempel
       ? bonus.week_maximum
       : basis;
-  return Math.floor(toepasbareNorm * opbouwFactor);
+  return geschaaldeNorm(toepasbareNorm, opbouwFactor);
 }
 
 /**
  * Gewone dag-/weekbudget-berekening × opbouw_factor, afgerond naar beneden
- * zodat we onder de werknorm blijven.
+ * zodat we onder de werknorm blijven. Ondergrens 1 als de ongeschaalde norm
+ * ≥ 1 is: anders wordt een norm van 1 (zoals search.runs_per_dag) tijdens de
+ * opbouw 0 en is het actietype volledig geblokkeerd. Afkoeling staat hier
+ * los van (eigen controle in beoordeel.ts); factor 0 blijft 0.
  */
 export function geschaaldeNorm(norm: number, opbouwFactor: number): number {
-  return Math.floor(norm * opbouwFactor);
+  const geschaald = Math.floor(norm * opbouwFactor);
+  if (norm >= 1 && opbouwFactor > 0) return Math.max(1, geschaald);
+  return geschaald;
 }
 
 function afronden(waarde: number): number {
