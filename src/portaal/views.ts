@@ -1,3 +1,4 @@
+import { datumTekst, type AbonnementWeergave } from '../abonnement/weergave.ts';
 import { formatteerAmsterdam } from '../admin/datum.ts';
 import type { DraftWeergave } from '../admin/dienst.ts';
 import { BASIS_CSS, h } from '../admin/views.ts';
@@ -26,6 +27,12 @@ table.weken tr.totaal td { font-weight: 600; border-top: 2px solid #c4c9cf; }
 .stand.actie { background: #fdebe8; color: #8a2a1f; }
 .alles { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; margin: 0 0 1rem; }
 .alles button { background: #197a3d; }
+.waarschuwing { max-width: 60rem; margin: 0 auto 1rem; padding: 0.6rem 0.8rem; border-radius: 4px;
+                background: #fff4d6; border: 1px solid #c99a00; color: #4a3500; }
+.waarschuwing a { color: inherit; font-weight: 600; }
+dl.abonnement { display: grid; grid-template-columns: 12rem 1fr; gap: 0.3rem 0.8rem; margin: 0.6rem 0; }
+dl.abonnement dt { font-weight: 600; color: #333; }
+dl.abonnement dd { margin: 0; }
 `;
 
 function layout(titel: string, inhoud: string): string {
@@ -50,7 +57,26 @@ function meldingBlok(m?: Melding): string {
   return m ? `<p class="melding ${m.soort}">${h(m.tekst)}</p>` : '';
 }
 
-function portaalHeader(klantNaam: string, csrfToken: string, actief: 'concepten' | 'resultaten'): string {
+export type PortaalPagina = 'concepten' | 'resultaten' | 'abonnement';
+
+/** Gedeelde velden van elke ingelogde portaalpagina. */
+export interface PortaalPaginaOpties {
+  klantNaam: string;
+  csrfToken: string;
+  melding?: Melding;
+  /** Waarschuwingsbalk bij een mislukte betaling (Stripe-status past_due). */
+  betalingMislukt?: boolean;
+}
+
+const WAARSCHUWING_PAST_DUE = `<div class="waarschuwing" role="alert">De laatste betaling van uw abonnement is mislukt.
+  Werk uw betaalgegevens bij via <a href="/portaal/abonnement">Abonnement</a>; anders stopt het versturen.</div>`;
+
+function portaalHeader(
+  klantNaam: string,
+  csrfToken: string,
+  actief: PortaalPagina,
+  betalingMislukt = false,
+): string {
   const knop = (pad: string, label: string, naam: typeof actief) =>
     `<a class="knop${actief === naam ? '' : ' secundair'}" href="${pad}"${
       actief === naam ? ' aria-current="page"' : ''
@@ -64,12 +90,13 @@ function portaalHeader(klantNaam: string, csrfToken: string, actief: 'concepten'
   <nav>
     ${knop('/portaal/', 'Concepten', 'concepten')}
     ${knop('/portaal/resultaten', 'Resultaten', 'resultaten')}
+    ${knop('/portaal/abonnement', 'Abonnement', 'abonnement')}
     <form method="post" action="/portaal/logout">
       <input type="hidden" name="csrf" value="${h(csrfToken)}">
       <button type="submit" class="secundair">Uitloggen</button>
     </form>
   </nav>
-</header>`;
+</header>${betalingMislukt ? `\n${WAARSCHUWING_PAST_DUE}` : ''}`;
 }
 
 // -- login en uitnodiging --------------------------------------------------
@@ -213,6 +240,11 @@ function conceptKaart(d: DraftWeergave, csrfToken: string): string {
   return `
 <article class="actie-kaart" data-type="${h(d.type)}">
   <h3>${h(etiket(d.type))} namens ${h(d.eigenaarNaam)}</h3>
+  ${
+    d.betaalpoortReden
+      ? '<p class="melding fout">Er is geen actief abonnement; na goedkeuring wordt dit niet verstuurd. Start eerst een abonnement via <a href="/portaal/abonnement">Abonnement</a>.</p>'
+      : ''
+  }
   ${stap}
   <div class="ontvanger">
     <div class="naam">${h(zichtbaar(o.naam) || 'Onbekende ontvanger')}</div>
@@ -240,11 +272,8 @@ function conceptKaart(d: DraftWeergave, csrfToken: string): string {
 </article>`;
 }
 
-export interface ConceptenViewOpties {
-  klantNaam: string;
-  csrfToken: string;
+export interface ConceptenViewOpties extends PortaalPaginaOpties {
   concepten: readonly DraftWeergave[];
-  melding?: Melding;
 }
 
 export function conceptenView(o: ConceptenViewOpties): string {
@@ -265,7 +294,7 @@ export function conceptenView(o: ConceptenViewOpties): string {
   return layout(
     'Concepten',
     `
-${portaalHeader(o.klantNaam, o.csrfToken, 'concepten')}
+${portaalHeader(o.klantNaam, o.csrfToken, 'concepten', o.betalingMislukt)}
 <main>
   ${meldingBlok(o.melding)}
   <h2>Concepten om goed te keuren (${o.concepten.length})</h2>
@@ -350,18 +379,15 @@ ${rijen}
 </article>`;
 }
 
-export interface ResultatenViewOpties {
-  klantNaam: string;
-  csrfToken: string;
+export interface ResultatenViewOpties extends PortaalPaginaOpties {
   accounts: readonly AccountResultaat[];
-  melding?: Melding;
 }
 
 export function resultatenView(o: ResultatenViewOpties): string {
   return layout(
     'Resultaten',
     `
-${portaalHeader(o.klantNaam, o.csrfToken, 'resultaten')}
+${portaalHeader(o.klantNaam, o.csrfToken, 'resultaten', o.betalingMislukt)}
 <main>
   ${meldingBlok(o.melding)}
   <h2>Resultaten per LinkedIn-account</h2>
@@ -372,6 +398,81 @@ ${portaalHeader(o.klantNaam, o.csrfToken, 'resultaten')}
       ? '<p class="leeg">Er zijn nog geen LinkedIn-accounts voor uw organisatie.</p>'
       : o.accounts.map((a) => accountKaart(a, o.csrfToken)).join('\n')
   }
+</main>`,
+  );
+}
+
+// -- abonnement ------------------------------------------------------------
+
+export interface AbonnementViewOpties extends PortaalPaginaOpties {
+  weergave: AbonnementWeergave;
+  /** Gekoppelde LinkedIn-accounts van de klant. */
+  aantalAccounts: number;
+  /** false = STRIPE_*-variabelen ontbreken: "Betalen is nog niet ingericht". */
+  stripeIngericht: boolean;
+  proefperiodeDagen: number;
+}
+
+export function abonnementView(o: AbonnementViewOpties): string {
+  const w = o.weergave;
+  const knop =
+    w.knop === null
+      ? ''
+      : !o.stripeIngericht
+        ? '<p class="melding fout">Betalen is nog niet ingericht. Neem contact op met MARKaaS.</p>'
+        : w.knop === 'starten'
+          ? `<form method="post" action="/portaal/abonnement/starten">
+    <input type="hidden" name="csrf" value="${h(o.csrfToken)}">
+    <button type="submit">${
+      o.proefperiodeDagen > 0 ? `Abonnement starten (${h(o.proefperiodeDagen)} dagen gratis)` : 'Abonnement starten'
+    }</button>
+  </form>
+  <p class="uitleg">U rondt het afrekenen af bij Stripe, onze betaalprovider.${
+    o.proefperiodeDagen > 0
+      ? ` De eerste ${h(o.proefperiodeDagen)} dagen zijn gratis; zegt u vóór het einde op, dan betaalt u niets.`
+      : ''
+  }</p>`
+          : `<form method="post" action="/portaal/abonnement/beheren">
+    <input type="hidden" name="csrf" value="${h(o.csrfToken)}">
+    <button type="submit">Abonnement beheren</button>
+  </form>
+  <p class="uitleg">Betaalgegevens, facturen en opzeggen regelt u in de beveiligde omgeving van Stripe.</p>`;
+  return layout(
+    'Abonnement',
+    `
+${portaalHeader(o.klantNaam, o.csrfToken, 'abonnement', o.betalingMislukt)}
+<main>
+  ${meldingBlok(o.melding)}
+  <h2>Abonnement</h2>
+  <article class="actie-kaart">
+    <h3><span class="stand ${w.soort === 'goed' ? 'goed' : w.soort}">${h(w.titel)}</span></h3>
+    <p class="uitleg">${h(w.uitleg)}</p>
+    <dl class="abonnement">
+      <dt>Volgende betaling</dt><dd>${w.volgendeBetaling ? h(datumTekst(w.volgendeBetaling)) : '—'}</dd>
+      <dt>Gekoppelde accounts</dt><dd>${h(o.aantalAccounts)}</dd>
+    </dl>
+    ${knop}
+  </article>
+</main>`,
+  );
+}
+
+export function abonnementTerugView(o: PortaalPaginaOpties & { soort: 'gelukt' | 'geannuleerd' }): string {
+  const tekst =
+    o.soort === 'gelukt'
+      ? `<h3>Dank u wel</h3>
+    <p>Uw abonnement is gestart. Het kan een minuut duren voordat de stand hieronder bijgewerkt is.</p>`
+      : `<h3>Afrekenen afgebroken</h3>
+    <p>Er is geen abonnement gestart en er is niets afgeschreven. U kunt het later opnieuw proberen.</p>`;
+  return layout(
+    o.soort === 'gelukt' ? 'Abonnement gestart' : 'Afrekenen afgebroken',
+    `
+${portaalHeader(o.klantNaam, o.csrfToken, 'abonnement', o.betalingMislukt)}
+<main>
+  <section class="actie-kaart">
+    ${tekst}
+    <p><a class="knop" href="/portaal/abonnement">Naar uw abonnement</a></p>
+  </section>
 </main>`,
   );
 }

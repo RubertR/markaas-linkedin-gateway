@@ -3,15 +3,26 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 
+import { aantalGekoppeld, betalingMisluktVoorKlant, vindAbonnement } from '../abonnement/abonnementen.ts';
+import {
+  AbonnementFout,
+  NIET_INGERICHT,
+  beheerAbonnement,
+  startAbonnement,
+  type StripeInrichting,
+} from '../abonnement/dienst.ts';
+import { beschrijfAbonnement } from '../abonnement/weergave.ts';
 import { PogingenTracker } from '../admin/pogingen.ts';
 import { maakWachtwoordHash, verifieerWachtwoord } from '../admin/wachtwoord.ts';
 import type { Klok } from '../budget/klok.ts';
 import type { Limieten } from '../budget/limits.ts';
+import type { AbonnementConfig } from '../config/abonnement.ts';
 import type { Backend } from '../db/backend.ts';
 import type { Logger } from '../log/logger.ts';
 import { KoppelflowFout, type KoppelflowOpties } from '../register/koppelflow.ts';
 import { NieuweKlantFout } from '../register/nieuweklant.ts';
 import { clientIp } from '../server/clientip.ts';
+import { StripeFout } from '../stripe/errors.ts';
 import type { UnipileClient } from '../unipile/client.ts';
 
 import {
@@ -41,6 +52,8 @@ import {
   type PortaalSessie,
 } from './sessies.ts';
 import {
+  abonnementTerugView,
+  abonnementView,
   conceptenView,
   loginView,
   nietGevondenView,
@@ -87,6 +100,16 @@ export interface PortaalDeps {
   koppeluitnodigingGeldigDagen?: number;
   pogingen?: PogingenTracker;
   logger?: Logger;
+  /**
+   * Abonnement via Stripe (SPEC §14.3, §14.4). Ontbreekt dit of is `stripe`
+   * null, dan toont /portaal/abonnement "Betalen is nog niet ingericht".
+   */
+  abonnement?: {
+    stripe: StripeInrichting | null;
+    config: AbonnementConfig;
+    /** Publieke basis-URL zonder slash aan het eind (success/cancel/return-URL's). */
+    publicBaseUrl: string;
+  };
 }
 
 type PortaalContext = Context;
@@ -228,6 +251,7 @@ export function maakPortaalApp(deps: PortaalDeps) {
       klantNaam: sessie.klantNaam,
       csrfToken: sessie.csrfToken,
       concepten,
+      betalingMislukt: await betalingMislukt(deps, sessie.clientId),
     };
     const melding = leesFlash(c);
     if (melding) opts.melding = melding;
@@ -305,6 +329,7 @@ export function maakPortaalApp(deps: PortaalDeps) {
       klantNaam: sessie.klantNaam,
       csrfToken: sessie.csrfToken,
       accounts: await resultatenVoorKlant(deps.db, sessie.clientId, deps.klok),
+      betalingMislukt: await betalingMislukt(deps, sessie.clientId),
     };
     const melding = leesFlash(c);
     if (melding) opts.melding = melding;
@@ -349,10 +374,93 @@ export function maakPortaalApp(deps: PortaalDeps) {
     }
   });
 
+  // -- abonnement (SPEC §14.3, §14.4) --------------------------------------
+
+  app.get(`${PAD}/abonnement`, async (c) => {
+    const sessie = await laadSessie(c, deps);
+    if (!sessie) return naarLogin(c);
+    const [klant] = await deps.db.query<{ abonnement_vereist: boolean }>(
+      'select abonnement_vereist from clients where id = $1',
+      [sessie.clientId],
+    );
+    const abonnement = await vindAbonnement(deps.db, sessie.clientId);
+    const opts: Parameters<typeof abonnementView>[0] = {
+      klantNaam: sessie.klantNaam,
+      csrfToken: sessie.csrfToken,
+      weergave: beschrijfAbonnement(klant?.abonnement_vereist ?? true, abonnement),
+      aantalAccounts: await aantalGekoppeld(deps.db, sessie.clientId),
+      stripeIngericht: Boolean(deps.abonnement?.stripe),
+      proefperiodeDagen: deps.abonnement?.config.proefperiode_dagen ?? 0,
+      betalingMislukt: await betalingMislukt(deps, sessie.clientId),
+    };
+    const melding = leesFlash(c);
+    if (melding) opts.melding = melding;
+    return c.html(abonnementView(opts));
+  });
+
+  for (const [actie, uitvoeren] of [
+    ['starten', (clientId: string, email: string) => startAbonnement(abonnementDeps(deps), clientId, { email })],
+    ['beheren', (clientId: string) => beheerAbonnement(abonnementDeps(deps), clientId)],
+  ] as const) {
+    app.post(`${PAD}/abonnement/${actie}`, async (c) => {
+      const sessie = await laadSessie(c, deps);
+      if (!sessie) return naarLogin(c);
+      const form = await c.req.parseBody();
+      if (!gelijk(tekst(form, 'csrf'), sessie.csrfToken)) return csrfFout(c);
+      try {
+        // Altijd de klant van de sessie; customer-id's komen nooit uit het formulier.
+        const url = await uitvoeren(sessie.clientId, sessie.email);
+        deps.logger?.info(`Klantportaal: abonnement ${actie}, door naar Stripe`, { client_id: sessie.clientId });
+        return c.redirect(url, 303);
+      } catch (err) {
+        if (err instanceof AbonnementFout) {
+          zetFlash(c, deps, { soort: 'fout', tekst: err.message });
+        } else if (err instanceof StripeFout) {
+          deps.logger?.warn(`Klantportaal: abonnement ${actie} mislukt bij Stripe`, {
+            client_id: sessie.clientId,
+            fout: err.message,
+          });
+          zetFlash(c, deps, {
+            soort: 'fout',
+            tekst: 'Stripe is op dit moment niet bereikbaar of gaf een fout. Probeer het later opnieuw of neem contact op met MARKaaS.',
+          });
+        } else {
+          throw err;
+        }
+        return c.redirect(`${PAD}/abonnement`, 303);
+      }
+    });
+  }
+
+  for (const soort of ['gelukt', 'geannuleerd'] as const) {
+    app.get(`${PAD}/abonnement/${soort}`, async (c) => {
+      const sessie = await laadSessie(c, deps);
+      if (!sessie) return naarLogin(c);
+      return c.html(
+        abonnementTerugView({
+          soort,
+          klantNaam: sessie.klantNaam,
+          csrfToken: sessie.csrfToken,
+          betalingMislukt: await betalingMislukt(deps, sessie.clientId),
+        }),
+      );
+    });
+  }
+
   return app;
 }
 
 // -- hulpjes ---------------------------------------------------------------
+
+function abonnementDeps(deps: PortaalDeps) {
+  if (!deps.abonnement) throw new AbonnementFout(NIET_INGERICHT);
+  return { db: deps.db, klok: deps.klok, ...deps.abonnement };
+}
+
+async function betalingMislukt(deps: PortaalDeps, clientId: string): Promise<boolean> {
+  if (deps.abonnement && !deps.abonnement.config.waarschuwing_past_due) return false;
+  return await betalingMisluktVoorKlant(deps.db, clientId);
+}
 
 async function laadSessie(c: PortaalContext, deps: PortaalDeps): Promise<PortaalSessie | null> {
   return await vindPortaalSessie(deps.db, getCookie(c, SESSIE_COOKIE), deps.klok);

@@ -35,6 +35,7 @@ interface Overrides {
   typeDagStop?: boolean;
   wekenSindsStart?: number;
   acceptatieVerhouding?: number;
+  betaalpoort?: BeoordelingsInvoer['betaalpoort'];
 }
 
 async function invoerVoor(over: Overrides = {}): Promise<BeoordelingsInvoer> {
@@ -61,6 +62,7 @@ async function invoerVoor(over: Overrides = {}): Promise<BeoordelingsInvoer> {
     wekenSindsStart: over.wekenSindsStart ?? 10,
     acceptatieVerhouding: over.acceptatieVerhouding ?? 0.4,
     limieten: l,
+    ...(over.betaalpoort ? { betaalpoort: over.betaalpoort } : {}),
   };
 }
 
@@ -101,6 +103,63 @@ describe('beoordeel — controle 1: account gezond', () => {
     assert.equal(uitslag.status, 'wachtrij');
     assert.equal(uitslag.controle, 'account_gezond');
     assert.match(uitslag.reden!, /koppel|CONNECTING|verbind/i);
+  });
+});
+
+describe('beoordeel — controle 1a: betaalpoort (SPEC §14.4)', () => {
+  const verzendtypen: ActieType[] = ['invite', 'message', 'inmail'];
+  const reden = 'Abonnement niet actief: de klant moet in het klantportaal een abonnement starten.';
+
+  it('zonder abonnement: invite, message en inmail structureel geweigerd met NL-reden', async () => {
+    for (const actieType of verzendtypen) {
+      const uitslag = geblokkeerd(
+        beoordeel(await invoerVoor({ actieType, betaalpoort: { vereist: true, status: null } })),
+      );
+      assert.equal(uitslag.status, 'weigering', actieType);
+      assert.equal(uitslag.controle, 'abonnement');
+      assert.equal(uitslag.reden, reden);
+    }
+  });
+
+  it('unpaid, canceled, incomplete_expired, incomplete en paused: geweigerd', async () => {
+    for (const status of ['unpaid', 'canceled', 'incomplete_expired', 'incomplete', 'paused']) {
+      const uitslag = beoordeel(await invoerVoor({ betaalpoort: { vereist: true, status } }));
+      assert.equal(uitslag.status, 'weigering', status);
+    }
+  });
+
+  it('trialing, active en past_due: normaal toegestaan', async () => {
+    for (const status of ['trialing', 'active', 'past_due']) {
+      for (const actieType of ['invite', 'message'] as ActieType[]) {
+        const uitslag = beoordeel(await invoerVoor({ actieType, betaalpoort: { vereist: true, status } }));
+        assert.equal(uitslag.status, 'toegestaan', `${status} ${actieType}`);
+      }
+    }
+  });
+
+  it('abonnement_vereist = false: nooit tegengehouden, ook niet zonder of met beëindigd abonnement', async () => {
+    for (const status of [null, 'canceled', 'unpaid']) {
+      const uitslag = beoordeel(await invoerVoor({ betaalpoort: { vereist: false, status } }));
+      assert.equal(uitslag.status, 'toegestaan', String(status));
+    }
+  });
+
+  it('search en profile blijven altijd toegestaan', async () => {
+    for (const actieType of ['search', 'profile'] as ActieType[]) {
+      const uitslag = beoordeel(await invoerVoor({ actieType, betaalpoort: { vereist: true, status: null } }));
+      assert.equal(uitslag.status, 'toegestaan', actieType);
+    }
+  });
+
+  it('volgorde: een ongezond account gaat vóór de betaalpoort, de betaalpoort vóór goedkeuring', async () => {
+    const ongezond = geblokkeerd(
+      beoordeel(await invoerVoor({ status: 'CREDENTIALS', betaalpoort: { vereist: true, status: null } })),
+    );
+    assert.equal(ongezond.controle, 'account_gezond');
+    const nietGoedgekeurd = geblokkeerd(
+      beoordeel(await invoerVoor({ goedgekeurd: false, betaalpoort: { vereist: true, status: null } })),
+    );
+    assert.equal(nietGoedgekeurd.controle, 'abonnement');
   });
 });
 

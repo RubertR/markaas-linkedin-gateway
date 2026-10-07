@@ -1,0 +1,6 @@
+{
+  "$toelichting": "Abonnement via Stripe (SPEC §14.4). Prijs en valuta staan in Stripe (STRIPE_PRICE_ID), niet hier. proefperiode_dagen = gratis proefperiode bij Stripe Checkout (opzeggen vóór het einde = geen betaling). prijs_per: \"account\" = aantal in Checkout is het aantal gekoppelde LinkedIn-accounts van de klant (minimaal 1); \"klant\" = altijd 1. waarschuwing_past_due: toon bij een mislukte betaling (Stripe-status past_due) een waarschuwingsbalk op alle portaalpagina's.",
+  "proefperiode_dagen": 30,
+  "prijs_per": "account",
+  "waarschuwing_past_due": true
+}

@@ -1,3 +1,8 @@
+import {
+  REDEN_NIET_ACTIEF,
+  betaalpoortVoorAccount,
+  verzendenToegestaan,
+} from '../abonnement/abonnementen.ts';
 import { inAfkoeling } from '../budget/afkoeling.ts';
 import type { Klok } from '../budget/klok.ts';
 import { telGebruikOpDag, telGebruikOverDagen } from '../budget/gebruik.ts';
@@ -244,6 +249,12 @@ async function getBudget(deps: McpToolsDeps, args: Record<string, unknown>) {
   // Tijdens afkoeling laat de budgetmotor niets door (SPEC §5, controle 6);
   // dan toont get_budget overal norm 0, zodat een skill niets inplant.
   const afkoeling = inAfkoeling({ afkoelingTot }, nu);
+  // Betaalpoort (SPEC §14.4): zonder actief abonnement gaat er geen invite,
+  // message of inmail weg; zoeken en profielen wel. Dan norm 0 voor verzending.
+  const betaalpoort = (await betaalpoortVoorAccount(deps.db, accountId)) ?? { vereist: false, status: null };
+  const verzenden = verzendenToegestaan(betaalpoort);
+  const geblokkeerd = (type: ActieType) =>
+    afkoeling || (!verzenden && (type === 'invite' || type === 'message' || type === 'inmail'));
 
   const typen: ActieType[] = ['invite', 'message', 'profile', 'search'];
   const perType: Record<string, unknown> = {};
@@ -251,9 +262,9 @@ async function getBudget(deps: McpToolsDeps, args: Record<string, unknown>) {
     const dagGebruikt = await telGebruikOpDag(deps.db, accountId, type, vandaag);
     const weekGebruikt =
       type === 'search' ? 0 : await telGebruikOverDagen(deps.db, accountId, type, weekBereik);
-    const dagnorm = afkoeling ? 0 : dagnormVoor(type, abn, factor);
+    const dagnorm = geblokkeerd(type) ? 0 : dagnormVoor(type, abn, factor);
     const geschaaldeWeeknorm = weeknormVoor(type, abn, factor);
-    const weeknorm = afkoeling && geschaaldeWeeknorm !== null ? 0 : geschaaldeWeeknorm;
+    const weeknorm = geblokkeerd(type) && geschaaldeWeeknorm !== null ? 0 : geschaaldeWeeknorm;
     perType[type] = {
       dag: {
         gebruikt: dagGebruikt,
@@ -273,7 +284,7 @@ async function getBudget(deps: McpToolsDeps, args: Record<string, unknown>) {
 
   // InMail is betaald maandtegoed: geen opbouwfactor, alleen afkoeling zet het op 0.
   const inmailMaand = await telGebruikOverDagen(deps.db, accountId, 'inmail', maandBereik);
-  const inmailNorm = afkoeling ? 0 : abn.inmail.maand;
+  const inmailNorm = geblokkeerd('inmail') ? 0 : abn.inmail.maand;
   perType['inmail'] = {
     maand: {
       gebruikt: inmailMaand,
@@ -291,7 +302,15 @@ async function getBudget(deps: McpToolsDeps, args: Record<string, unknown>) {
       ? {
           reden: `Account staat in afkoeling tot ${formatteerLokaal(afkoelingTot!, rij.tijdzone)} (${rij.tijdzone}), na 429, captcha of waarschuwing; tot dan gaat er niets naar LinkedIn. Plan pas na die tijd nieuwe acties in.`,
         }
-      : {}),
+      : !verzenden
+        ? { reden: `${REDEN_NIET_ACTIEF} Zoeken en profielen bekijken kan wel; zet nog geen berichten klaar.` }
+        : {}),
+    // Betaalpoort (SPEC §14.4); `abonnement` hierboven is het LinkedIn-abonnement.
+    klantAbonnement: {
+      vereist: betaalpoort.vereist,
+      status: betaalpoort.status,
+      verzendenToegestaan: verzenden,
+    },
     openstaandeVerzoeken: rij.openstaande_verzoeken,
     openstaandMaximum: abn.invite.openstaand_maximum,
     budget: perType,

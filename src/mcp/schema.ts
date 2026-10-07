@@ -60,7 +60,7 @@ export const TOOL_DEFINITIES: readonly ToolDefinitie[] = [
   {
     name: 'get_budget',
     description:
-      'Resterend LinkedIn-budget per actietype voor dit account (vandaag en deze week, en maand voor InMail). Tijdens afkoeling zijn alle normen 0, met afkoelingTot en een reden. Verbruikt geen budget.',
+      'Resterend LinkedIn-budget per actietype voor dit account (vandaag en deze week, en maand voor InMail). Tijdens afkoeling zijn alle normen 0, met afkoelingTot en een reden. Zonder actief abonnement van de klant (veld klantAbonnement.verzendenToegestaan = false) zijn invite, message en inmail 0, met een reden; zoeken en profielen blijven mogelijk. Verbruikt geen budget.',
     inputSchema: {
       type: 'object',
       properties: {

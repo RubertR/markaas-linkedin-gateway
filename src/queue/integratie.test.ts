@@ -44,7 +44,7 @@ beforeEach(async () => {
   await db.query('delete from clients');
   fake.reset();
 
-  const client = await maakClient(db, { naam: 'Test', slug: 'test' });
+  const client = await maakClient(db, { naam: 'Test', slug: 'test', abonnementVereist: false });
   const account = await registreerAccount(db, {
     clientId: client.id,
     eigenaarNaam: 'Rubert',

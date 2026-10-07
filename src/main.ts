@@ -12,6 +12,7 @@ import { serve } from '@hono/node-server';
 import { systeemKlok } from './budget/klok.ts';
 import { laadLimieten } from './budget/limits.ts';
 import { verwerkVerzoekenSyncTick } from './budget/verzoekensync.ts';
+import { laadAbonnementConfig } from './config/abonnement.ts';
 import { EnvFout, leesEnv, type Env } from './config/env.ts';
 import { laadJuridisch } from './config/juridisch.ts';
 import { postgresBackend } from './db/postgres-backend.ts';
@@ -35,6 +36,7 @@ function geheimenUit(env: Env): string[] {
     env.mcpToken,
     env.adminPasswordHash,
     env.databaseUrl,
+    ...(env.stripe ? [env.stripe.secretKey, env.stripe.webhookSecret] : []),
   ];
 }
 
@@ -67,6 +69,7 @@ async function main(): Promise<void> {
   const versie = leesVersie();
   const limieten = await laadLimieten();
   const juridisch = await laadJuridisch();
+  const abonnement = await laadAbonnementConfig();
   const db = postgresBackend({ databaseUrl: env.databaseUrl });
   const baseUrl = unipileBaseUrl(env.unipileDsn);
   const unipile = maakUnipileClient({ baseUrl, apiKey: env.unipileApiKey });
@@ -83,6 +86,7 @@ async function main(): Promise<void> {
     werkdagen: systeemWerkdagenKiezer,
     logger,
     versie,
+    abonnement,
   });
 
   const server = serve({ fetch: app.fetch, port: env.port }, (info) => {
@@ -92,7 +96,13 @@ async function main(): Promise<void> {
       omgeving: env.nodeEnv,
       planner: env.plannerEnabled ? 'aan' : 'uit',
       publieke_url: env.publicBaseUrl,
+      stripe: env.stripe ? 'aan' : 'uit',
     });
+    if (env.stripeOntbrekend.length > 0) {
+      logger.warn(
+        `Stripe staat uit: ${env.stripeOntbrekend.join(', ')} ontbreekt. Zet alle drie de STRIPE_*-variabelen (zie README, "Stripe inrichten").`,
+      );
+    }
     if (env.nodeEnv === 'production' && env.publicBaseUrl.startsWith('http://localhost')) {
       logger.warn(
         'Geen publieke URL bekend: koppellinks krijgen een localhost-notify_url. Zet PUBLIC_BASE_URL of genereer een Railway-domein.',
@@ -201,6 +211,8 @@ main().catch((err: unknown) => {
     process.env['MCP_TOKEN'],
     process.env['ADMIN_PASSWORD_HASH'],
     process.env['DATABASE_URL'],
+    process.env['STRIPE_SECRET_KEY'],
+    process.env['STRIPE_WEBHOOK_SECRET'],
   ];
   const veilig = maakLogger({
     niveau: 'error',

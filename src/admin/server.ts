@@ -3,6 +3,8 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 
+import { vindAbonnement, zetAbonnementVereist } from '../abonnement/abonnementen.ts';
+import { beschrijfAbonnement } from '../abonnement/weergave.ts';
 import type { Klok } from '../budget/klok.ts';
 import type { Limieten } from '../budget/limits.ts';
 import type { Backend } from '../db/backend.ts';
@@ -88,6 +90,8 @@ export interface AdminDeps {
   publicBaseUrl?: string;
   /** Geldigheid van koppeluitnodigingen (config/juridisch.json). Standaard 7. */
   koppeluitnodigingGeldigDagen?: number;
+  /** Stripe-variabelen gezet (SPEC §14.4); anders "Betalen is nog niet ingericht". */
+  stripeIngericht?: boolean;
   /** Standaard: in-memory stores. Tests kunnen eigen instances meegeven. */
   sessies?: SessieStore;
   pogingen?: PogingenTracker;
@@ -404,6 +408,14 @@ export function maakAdminApp(deps: AdminDeps) {
       csrfToken: sessie.csrfToken,
       klant,
       gebruikers: await lijstGebruikers(deps.db, klant.id, deps.klok),
+      abonnement: await (async () => {
+        const abonnement = await vindAbonnement(deps.db, klant.id);
+        return {
+          abonnement,
+          weergave: beschrijfAbonnement(klant.abonnementVereist, abonnement),
+          stripeIngericht: deps.stripeIngericht ?? false,
+        };
+      })(),
     };
     if (extra.melding) opts.melding = extra.melding;
     if (extra.waarden) opts.waarden = extra.waarden;
@@ -516,6 +528,31 @@ export function maakAdminApp(deps: AdminDeps) {
       if (!(err instanceof PortaalGebruikerFout)) throw err;
       zetFlash(c, deps, { soort: 'fout', tekst: err.message });
     }
+    return c.redirect(`/admin/klanten/${encodeURIComponent(slug)}`, 303);
+  });
+
+  app.post('/admin/klanten/:slug/abonnement-vereist', async (c) => {
+    const sessie = laadSessie(c, sessies);
+    if (!sessie) return c.redirect('/admin/login', 303);
+    const form = await c.req.parseBody();
+    if (!csrfConstanteTijdGelijk(getString(form, 'csrf'), sessie.csrfToken)) {
+      c.status(403);
+      return c.text('CSRF-token ontbreekt of klopt niet.');
+    }
+    const slug = c.req.param('slug');
+    const klant = await vindKlant(slug);
+    if (!klant) {
+      c.status(404);
+      return c.text('Onbekende klant.');
+    }
+    const vereist = getString(form, 'vereist') === 'ja';
+    await zetAbonnementVereist(deps.db, klant.id, vereist);
+    zetFlash(c, deps, {
+      soort: 'ok',
+      tekst: vereist
+        ? `${klant.naam}: abonnement is nu vereist. Zonder actief abonnement worden verzoeken en berichten geweigerd.`
+        : `${klant.naam}: geen abonnement nodig. Verzenden wordt nooit tegengehouden op abonnement.`,
+    });
     return c.redirect(`/admin/klanten/${encodeURIComponent(slug)}`, 303);
   });
 

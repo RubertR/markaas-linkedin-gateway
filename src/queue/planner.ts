@@ -234,6 +234,8 @@ function standaardWachtMinuten(controle: ControleNaam): number {
       return 60;
     case 'account_gezond':
       return 2;
+    case 'abonnement':
+      return 60;
     case 'goedgekeurd':
       return 60;
   }

@@ -20,7 +20,23 @@ export interface Env {
    * en daarna op `http://localhost:<PORT>`.
    */
   publicBaseUrl: string;
+  /**
+   * Stripe (SPEC §14.4). `null` = betalen is nog niet ingericht: portaal en
+   * admin tonen dan een melding en de Stripe-webhook antwoordt 503.
+   */
+  stripe: StripeEnv | null;
+  /** Namen van Stripe-variabelen die ontbreken terwijl andere wél gezet zijn. */
+  stripeOntbrekend: string[];
 }
+
+export interface StripeEnv {
+  secretKey: string;
+  webhookSecret: string;
+  priceId: string;
+}
+
+/** Optioneel; alleen samen actief (alle drie gezet). */
+export const STRIPE_VARIABELEN = ['STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET', 'STRIPE_PRICE_ID'] as const;
 
 /** Variabelen zonder standaardwaarde; de gateway start niet zonder. */
 export const VERPLICHTE_VARIABELEN = [
@@ -82,6 +98,13 @@ export function leesEnv(bron: Bron = process.env): Env {
 
   if (meldingen.length > 0) throw new EnvFout(meldingen);
 
+  const stripeWaarden = STRIPE_VARIABELEN.map((naam) => bron[naam]?.trim() ?? '');
+  const stripeOntbrekend = STRIPE_VARIABELEN.filter((_, i) => stripeWaarden[i] === '');
+  const stripe: StripeEnv | null =
+    stripeOntbrekend.length === 0
+      ? { secretKey: stripeWaarden[0]!, webhookSecret: stripeWaarden[1]!, priceId: stripeWaarden[2]! }
+      : null;
+
   return {
     unipileDsn: verplicht.UNIPILE_DSN,
     unipileApiKey: verplicht.UNIPILE_API_KEY,
@@ -95,6 +118,9 @@ export function leesEnv(bron: Bron = process.env): Env {
     nodeEnv,
     plannerEnabled,
     publicBaseUrl,
+    stripe,
+    stripeOntbrekend:
+      stripeOntbrekend.length === STRIPE_VARIABELEN.length ? [] : [...stripeOntbrekend],
   };
 }
 

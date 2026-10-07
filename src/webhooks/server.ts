@@ -12,6 +12,7 @@ import {
   koppelSleutel,
   vergelijkGeheim,
 } from './geheim.ts';
+import { STRIPE_WEBHOOK_PAD } from './stripe.ts';
 import { verwerkUnipileWebhook } from './unipile.ts';
 
 export interface WebhookDeps {
@@ -35,6 +36,8 @@ export function maakWebhookApp(deps: WebhookDeps) {
   // /webhooks/koppel: header óf de afgeleide sleutel in ?k= (hosted auth kan
   // geen headers meesturen). Alle andere webhooks: alleen de header.
   app.use('/webhooks/*', async (c, next) => {
+    // Stripe heeft een eigen handtekening (src/webhooks/stripe.ts), geen Unipile-geheim.
+    if (c.req.path === STRIPE_WEBHOOK_PAD) return await next();
     const viaHeader = vergelijkGeheim(c.req.header(WEBHOOK_SECRET_HEADER), deps.webhookSecret);
     const viaSleutel =
       c.req.path === '/webhooks/koppel' &&

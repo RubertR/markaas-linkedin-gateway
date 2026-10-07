@@ -3,14 +3,17 @@ import assert from 'node:assert/strict';
 
 import { vasteKlok } from '../budget/klok.ts';
 import { laadLimieten, type Limieten } from '../budget/limits.ts';
+import { laadAbonnementConfig, type AbonnementConfig } from '../config/abonnement.ts';
 import { leesEnv, type Env } from '../config/env.ts';
 import { laadJuridisch, type Juridisch } from '../config/juridisch.ts';
 import type { Backend } from '../db/backend.ts';
 import { maakLogger } from '../log/logger.ts';
 import { vastePauze } from '../queue/pauze.ts';
 import { vasteWerkdagen } from '../sequences/wachttijd.ts';
+import { maakStripeClient, type StripeClient } from '../stripe/client.ts';
 import { maakUnipileClient } from '../unipile/client.ts';
 import { koppelSleutel } from '../webhooks/geheim.ts';
+import { maakStripeEvent, ondertekendVerzoek } from '../../test/fake-stripe/webhook.ts';
 import { verseDatabaseMetMigraties } from '../../test/helpers/pglite.ts';
 
 import { maakGatewayApp, maskeerPad, unipileBaseUrl } from './app.ts';
@@ -30,18 +33,20 @@ let db: Backend;
 let close: () => Promise<void>;
 let limieten: Limieten;
 let juridisch: Juridisch;
+let abonnement: AbonnementConfig;
 
 before(async () => {
   ({ db, close } = await verseDatabaseMetMigraties());
   limieten = await laadLimieten();
   juridisch = await laadJuridisch();
+  abonnement = await laadAbonnementConfig();
 });
 
 after(async () => {
   await close();
 });
 
-function maakApp(env: Env, opties: { db?: Backend; regels?: string[] } = {}) {
+function maakApp(env: Env, opties: { db?: Backend; regels?: string[]; stripe?: StripeClient } = {}) {
   return maakGatewayApp({
     env,
     db: opties.db ?? db,
@@ -58,6 +63,8 @@ function maakApp(env: Env, opties: { db?: Backend; regels?: string[] } = {}) {
       schrijf: (r) => opties.regels?.push(r),
     }),
     versie: leesVersie(),
+    abonnement,
+    ...(opties.stripe ? { stripe: opties.stripe } : {}),
   });
 }
 
@@ -248,5 +255,80 @@ describe('unipileBaseUrl', () => {
   it('maakt een https-URL van de DSN', () => {
     assert.equal(unipileBaseUrl('api68.unipile.com:19841'), 'https://api68.unipile.com:19841');
     assert.equal(unipileBaseUrl('https://api68.unipile.com:19841/'), 'https://api68.unipile.com:19841');
+  });
+});
+
+describe('Stripe-webhook in de gateway (SPEC §14.4)', () => {
+  const STRIPE = {
+    STRIPE_SECRET_KEY: 'sk_test_zeer_geheim',
+    STRIPE_WEBHOOK_SECRET: 'whsec_zeer_geheim',
+    STRIPE_PRICE_ID: 'price_maand',
+  };
+  const NU_S = Math.floor(new Date('2026-10-01T08:00:00Z').getTime() / 1000);
+
+  it('Stripe uit: /webhooks/stripe antwoordt 503 en slaat niets op', async () => {
+    const app = maakApp(leesEnv(GEHEIMEN));
+    const { body, headers } = ondertekendVerzoek(maakStripeEvent('invoice.paid', { id: 'in_1' }, { id: 'evt_uit' }), STRIPE.STRIPE_WEBHOOK_SECRET, NU_S);
+    const r = await app.request('/webhooks/stripe', { method: 'POST', headers, body });
+    assert.equal(r.status, 503);
+    assert.match(await r.text(), /nog niet ingericht/);
+    const rijen = await db.query("select 1 from events where extern_id = 'stripe:evt_uit'");
+    assert.equal(rijen.length, 0);
+  });
+
+  it('niet achter het Unipile-geheim; geldige Stripe-handtekening → 200 en opgeslagen', async () => {
+    const app = maakApp(leesEnv({ ...GEHEIMEN, ...STRIPE }), {
+      stripe: maakStripeClient({ secretKey: STRIPE.STRIPE_SECRET_KEY, baseUrl: 'http://127.0.0.1:9', timeoutMs: 200 }),
+    });
+    const { body, headers } = ondertekendVerzoek(
+      maakStripeEvent('customer.created', { id: 'cus_1', object: 'customer' }, { id: 'evt_app_ok', created: NU_S }),
+      STRIPE.STRIPE_WEBHOOK_SECRET,
+      NU_S,
+    );
+    const r = await app.request('/webhooks/stripe', { method: 'POST', headers, body });
+    assert.equal(r.status, 200);
+    const rijen = await db.query<{ type: string }>("select type from events where extern_id = 'stripe:evt_app_ok'");
+    assert.deepEqual(rijen, [{ type: 'customer.created' }]);
+    // Tweede levering: ook 200, niets dubbel.
+    const r2 = await app.request('/webhooks/stripe', { method: 'POST', headers, body });
+    assert.equal(r2.status, 200);
+    assert.equal(((await r2.json()) as { dubbel?: boolean }).dubbel, true);
+  });
+
+  it('ongeldige of verlopen handtekening → 400, niets opgeslagen', async () => {
+    const app = maakApp(leesEnv({ ...GEHEIMEN, ...STRIPE }));
+    const event = maakStripeEvent('invoice.paid', { id: 'in_1' }, { id: 'evt_app_fout', created: NU_S });
+    const fout = ondertekendVerzoek(event, 'whsec_ander', NU_S);
+    assert.equal((await app.request('/webhooks/stripe', { method: 'POST', headers: fout.headers, body: fout.body })).status, 400);
+    const oud = ondertekendVerzoek(event, STRIPE.STRIPE_WEBHOOK_SECRET, NU_S - 301);
+    assert.equal((await app.request('/webhooks/stripe', { method: 'POST', headers: oud.headers, body: oud.body })).status, 400);
+    const zonder = await app.request('/webhooks/stripe', { method: 'POST', body: oud.body });
+    assert.equal(zonder.status, 400);
+    // Het Unipile-geheim helpt niet.
+    const metUnipile = await app.request('/webhooks/stripe', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-webhook-secret': GEHEIMEN.WEBHOOK_SECRET },
+      body: oud.body,
+    });
+    assert.equal(metUnipile.status, 400);
+    assert.equal((await db.query("select 1 from events where extern_id = 'stripe:evt_app_fout'")).length, 0);
+  });
+
+  it('Unipile-webhooks blijven achter hun eigen geheim', async () => {
+    const app = maakApp(leesEnv({ ...GEHEIMEN, ...STRIPE }));
+    const r = await app.request('/webhooks/unipile', { method: 'POST', body: '{}' });
+    assert.equal(r.status, 401);
+  });
+
+  it('logt geen Stripe-geheimen', async () => {
+    const regels: string[] = [];
+    const env = leesEnv({ ...GEHEIMEN, ...STRIPE });
+    const app = maakApp(env, { regels });
+    const { body, headers } = ondertekendVerzoek(maakStripeEvent('x.y', { id: 'o' }), 'whsec_ander', NU_S);
+    await app.request('/webhooks/stripe', { method: 'POST', headers, body });
+    for (const r of regels) {
+      assert.ok(!r.includes(STRIPE.STRIPE_WEBHOOK_SECRET));
+      assert.ok(!r.includes(STRIPE.STRIPE_SECRET_KEY));
+    }
   });
 });

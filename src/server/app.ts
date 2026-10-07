@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { maakAdminApp } from '../admin/server.ts';
 import type { Klok } from '../budget/klok.ts';
 import type { Limieten } from '../budget/limits.ts';
+import type { AbonnementConfig } from '../config/abonnement.ts';
 import type { Env } from '../config/env.ts';
 import type { Juridisch } from '../config/juridisch.ts';
 import type { Backend } from '../db/backend.ts';
@@ -12,14 +13,17 @@ import { maakMcpApp } from '../mcp/server.ts';
 import { maakPortaalApp } from '../portaal/server.ts';
 import type { PauzeKiezer } from '../queue/pauze.ts';
 import type { WerkdagenKiezer } from '../sequences/wachttijd.ts';
+import { maakStripeClient, type StripeClient } from '../stripe/client.ts';
 import type { UnipileClient } from '../unipile/client.ts';
 import { koppelNotifyUrl } from '../webhooks/geheim.ts';
 import { maakWebhookApp } from '../webhooks/server.ts';
+import { maakStripeWebhookApp } from '../webhooks/stripe.ts';
 
 import { maakHealthApp } from './health.ts';
 
 /**
- * Stelt de complete HTTP-app samen: `/health`, `/webhooks/*`, `/mcp`,
+ * Stelt de complete HTTP-app samen: `/health`, `/webhooks/*` (incl.
+ * `/webhooks/stripe`, SPEC §14.4), `/mcp`,
  * `/admin/*`, de publieke koppelpagina `/koppelen/*` en het klantportaal
  * `/portaal/*` in één hono-server (SPEC §7, §8, §12, §14.2, §14.3). Puur samenstellen; het
  * luisteren op een poort gebeurt in `src/main.ts`.
@@ -36,6 +40,13 @@ export interface GatewayDeps {
   werkdagen: WerkdagenKiezer;
   logger: Logger;
   versie: string;
+  /** config/abonnement.json (SPEC §14.4). */
+  abonnement: AbonnementConfig;
+  /**
+   * Alleen voor tests (fake-stripe). Productie: gemaakt uit `env.stripe`.
+   * Zonder `env.stripe` staat Stripe altijd uit, ook als dit gezet is.
+   */
+  stripe?: StripeClient;
 }
 
 export function maakGatewayApp(deps: GatewayDeps) {
@@ -68,6 +79,22 @@ export function maakGatewayApp(deps: GatewayDeps) {
   });
 
   app.route('/', maakHealthApp({ db: deps.db, versie: deps.versie }));
+
+  // Stripe (SPEC §14.4): alleen aan als alle drie de STRIPE_*-variabelen gezet zijn.
+  const stripeClient = env.stripe
+    ? (deps.stripe ?? maakStripeClient({ secretKey: env.stripe.secretKey }))
+    : null;
+
+  // Vóór de Unipile-webhooks: /webhooks/stripe heeft een eigen handtekening.
+  app.route(
+    '/',
+    maakStripeWebhookApp({
+      db: deps.db,
+      klok: deps.klok,
+      stripe: stripeClient && env.stripe ? { client: stripeClient, webhookSecret: env.stripe.webhookSecret } : null,
+      logger,
+    }),
+  );
 
   app.route(
     '/',
@@ -112,6 +139,7 @@ export function maakGatewayApp(deps: GatewayDeps) {
       vertrouwProxy: productie,
       publicBaseUrl: env.publicBaseUrl,
       koppeluitnodigingGeldigDagen: deps.juridisch.koppeluitnodiging_geldig_dagen,
+      stripeIngericht: stripeClient !== null,
     }),
   );
 
@@ -149,6 +177,11 @@ export function maakGatewayApp(deps: GatewayDeps) {
       cookieSecure: productie,
       vertrouwProxy: productie,
       koppeluitnodigingGeldigDagen: deps.juridisch.koppeluitnodiging_geldig_dagen,
+      abonnement: {
+        stripe: stripeClient && env.stripe ? { client: stripeClient, priceId: env.stripe.priceId } : null,
+        config: deps.abonnement,
+        publicBaseUrl: env.publicBaseUrl,
+      },
       logger,
     }),
   );

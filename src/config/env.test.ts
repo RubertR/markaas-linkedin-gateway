@@ -174,4 +174,35 @@ describe('leesEnv', () => {
     );
     assert.throws(() => leesEnv({ ...volledig, PUBLIC_BASE_URL: 'geen url' }), /PUBLIC_BASE_URL/);
   });
+
+  describe('Stripe (optioneel, SPEC §14.4)', () => {
+    const stripe = {
+      STRIPE_SECRET_KEY: 'sk_test_geheim',
+      STRIPE_WEBHOOK_SECRET: 'whsec_geheim',
+      STRIPE_PRICE_ID: 'price_123',
+    };
+
+    it('zonder Stripe-variabelen start de gateway met Stripe uit', () => {
+      const env = leesEnv(volledig);
+      assert.equal(env.stripe, null);
+      assert.deepEqual(env.stripeOntbrekend, []);
+    });
+
+    it('met alle drie staat Stripe aan', () => {
+      const env = leesEnv({ ...volledig, ...stripe });
+      assert.deepEqual(env.stripe, {
+        secretKey: 'sk_test_geheim',
+        webhookSecret: 'whsec_geheim',
+        priceId: 'price_123',
+      });
+      assert.deepEqual(env.stripeOntbrekend, []);
+    });
+
+    it('half ingevuld: Stripe blijft uit en de ontbrekende namen worden genoemd (geen crash)', () => {
+      const env = leesEnv({ ...volledig, STRIPE_SECRET_KEY: 'sk_test_geheim', STRIPE_PRICE_ID: '  ' });
+      assert.equal(env.stripe, null);
+      assert.deepEqual(env.stripeOntbrekend, ['STRIPE_WEBHOOK_SECRET', 'STRIPE_PRICE_ID']);
+    });
+  });
 });
+

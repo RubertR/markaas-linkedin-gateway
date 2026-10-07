@@ -68,6 +68,44 @@ meestuurt.
 6. **Toegang intrekken:** **Deactiveren** logt de gebruiker direct overal uit en maakt open
    links ongeldig. **Activeren met nieuwe link** geeft weer toegang (met een nieuw wachtwoord).
 
+## Stripe inrichten (SPEC §14.4)
+
+Zolang de drie `STRIPE_*`-variabelen niet alle drie gezet zijn, staat betalen uit: het portaal
+en de admin tonen "Betalen is nog niet ingericht" en `/webhooks/stripe` antwoordt 503. Klanten
+met `abonnement_vereist = true` kunnen dan niets versturen (zoeken en profielen wel); zet het
+vinkje op `/admin/klanten/<slug>` uit voor klanten zonder abonnement (MARKaaS, IPknowledge, TAG).
+
+Doe alles eerst in **testmodus** (schakelaar "Test mode" in het Stripe-dashboard); herhaal het
+daarna in live-modus met de live-sleutels.
+
+1. **Account aanmaken** op <https://dashboard.stripe.com/register> en het bedrijf verifiëren
+   (KvK, IBAN) voordat je live gaat.
+2. **Product en maandprijs:** *Product catalog* → *Add product*, bijv. "MARKaaS LinkedIn-gateway",
+   prijs *Recurring*, *Monthly*, in EUR. Prijs per LinkedIn-account (standaard,
+   `prijs_per: "account"` in `config/abonnement.json`: aantal = gekoppelde accounts, minimaal 1)
+   of per klant (`prijs_per: "klant"`: aantal 1). De proefperiode (30 dagen) komt uit
+   `config/abonnement.json`; zet géén proefperiode op de prijs zelf.
+3. **Price ID:** open de prijs en kopieer de id (`price_…`) → `STRIPE_PRICE_ID`.
+4. **Webhook-endpoint:** *Developers* → *Webhooks* → *Add endpoint*, URL
+   `https://<domein>/webhooks/stripe`, met deze zes events:
+   `checkout.session.completed`, `customer.subscription.created`,
+   `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`,
+   `invoice.payment_failed`. Kopieer daarna de *Signing secret* (`whsec_…`) →
+   `STRIPE_WEBHOOK_SECRET`.
+5. **Geheime sleutel:** *Developers* → *API keys* → *Secret key* (`sk_test_…` / `sk_live_…`)
+   → `STRIPE_SECRET_KEY`. Een *restricted key* mag ook, met schrijfrechten op Customers,
+   Checkout Sessions en Customer portal en leesrechten op Subscriptions.
+6. **Railway:** zet de drie variabelen bij de gateway-service (*Variables*) en laat hem opnieuw
+   deployen. In de log staat bij het starten `stripe: "aan"`; ontbreekt er één, dan staat er
+   een waarschuwing met de naam.
+7. **Customer Portal activeren:** *Settings* → *Billing* → *Customer portal* → opslaan (ook in
+   testmodus apart). Zet daar aan: betaalmethode bijwerken, facturen bekijken en opzeggen
+   (aan het einde van de periode). Zonder deze stap geeft "Abonnement beheren" een foutmelding.
+8. **Proef:** log in op het portaal als testklant, *Abonnement* → *Abonnement starten*, betaal
+   met testkaart `4242 4242 4242 4242`. Na terugkeer staat de stand op "Proefperiode tot …";
+   in *Developers* → *Webhooks* zie je de leveringen met status 200. Test ook een mislukte
+   betaling (kaart `4000 0000 0000 0341`) en opzeggen via *Abonnement beheren*.
+
 ## Scripts
 
 - `npm start` — start de gateway (hono-server met `/health`, `/webhooks/*`,

@@ -64,7 +64,7 @@ Eén TypeScript-project (Node 20+), één database (Postgres, EU-regio). Geen mi
 | `actions` | id, account_id, type (`search`, `profile`, `invite`, `message`, `inmail`), payload (json), status (`draft`, `approved`, `queued`, `running`, `done`, `failed`, `rejected`), reden, goedgekeurd_door, gepland_op, uitgevoerd_op, unipile_response |
 | `usage` | account_id, type, dag, aantal |
 | `sequences` | id, account_id, lead_linkedin_url, stap, status, volgende_actie_op, laatste_gebeurtenis |
-| `events` | id, bron (`unipile`, `gateway`), type, account_id, payload, ontvangen_op |
+| `events` | id, bron (`unipile`, `gateway`, `stripe`), type, extern_id, account_id, payload, ontvangen_op |
 
 ## 5. Budgetmotor
 
@@ -72,6 +72,8 @@ Elke actie passeert zes controles, in deze volgorde. Faalt er één, dan blijft 
 wachtrij (tijdelijk) of wordt ze geweigerd met reden (structureel).
 
 1. **Account gezond** — status `OK`. Bij `CREDENTIALS`, `ERROR`, `STOPPED` stopt alles.
+   Direct daarna de **betaalpoort** (§14.4, controle 1a): zonder actief abonnement worden
+   `invite`, `message` en `inmail` structureel geweigerd bij klanten met `abonnement_vereist`.
 2. **Goedgekeurd** — `invite`, `message`, `inmail` vereisen `goedgekeurd_door`. `search` en
    `profile` niet.
 3. **Dagbudget** — verbruik vandaag + deze actie ≤ dagnorm × opbouw_factor.
@@ -423,10 +425,13 @@ Goedkeuren kan door de klant én door MARKaaS. `goedgekeurd_door` legt vast wie:
   dedup op event-id in `events`. Verwerkt `checkout.session.completed`,
   `customer.subscription.created|updated|deleted`, `invoice.paid`, `invoice.payment_failed`.
 - **Tabel `subscriptions`:** client_id, stripe_customer_id, stripe_subscription_id, status
-  (Stripe-status), proef_tot, periode_tot, bijgewerkt_op.
+  (Stripe-status), proef_tot, periode_tot, opgezegd_per_einde, stripe_event_op, bijgewerkt_op.
+  `stripe_event_op` = `created` van het laatst toegepaste event: Stripe levert niet op volgorde,
+  een ouder event overschrijft geen nieuwere stand.
 - **Betaalpoort in de budgetmotor:** voor klanten met `abonnement_vereist = true`:
   - `trialing`, `active` → normaal;
-  - `past_due` → normaal, met waarschuwing in portaal en ochtendbriefing;
+  - `past_due` → normaal, met waarschuwing in portaal en ochtendbriefing (de briefing leest
+    `klantAbonnement` uit `get_budget`);
   - `unpaid`, `canceled`, `incomplete_expired` of geen abonnement → **geen verzending**
     (`invite`, `message`, `inmail`): de budgetmotor weigert met een NL-reden
     "Abonnement niet actief". Zoeken en profielen blijven mogelijk voor MARKaaS.

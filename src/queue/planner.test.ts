@@ -46,7 +46,7 @@ beforeEach(async () => {
   await db.query('delete from clients');
   fake.reset();
 
-  const client = await maakClient(db, { naam: 'Test', slug: 'test' });
+  const client = await maakClient(db, { naam: 'Test', slug: 'test', abonnementVereist: false });
   const account = await registreerAccount(db, {
     clientId: client.id,
     eigenaarNaam: 'Rubert',
@@ -288,5 +288,21 @@ describe('planner — foutpaden via worker', () => {
       statussen.includes('approved'),
       `verwachte een onaangeraakt approved; kreeg ${JSON.stringify(statussen)}`,
     );
+  });
+});
+
+describe('planner — betaalpoort (SPEC §14.4)', () => {
+  it('klant met abonnementsplicht zonder abonnement: invite rejected met NL-reden, geen Unipile-aanroep', async () => {
+    await db.query("update clients set abonnement_vereist = true where slug = 'test'");
+    const actie = await maakGoedgekeurdeInvite({ accountId, providerId: 'ACo-x' });
+    const r = await voerPlannerTickUit(basisContext());
+    assert.equal(r.details[0]?.resultaat, 'rejected');
+    const na = await vindActie(db, actie.id);
+    assert.equal(na?.status, 'rejected');
+    assert.equal(
+      na?.reden,
+      'Abonnement niet actief: de klant moet in het klantportaal een abonnement starten.',
+    );
+    assert.equal(fake.aanroepen.length, 0);
   });
 });

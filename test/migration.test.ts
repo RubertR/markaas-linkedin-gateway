@@ -19,6 +19,7 @@ const VERWACHTE_TABELLEN = [
   'portal_sessions',
   'schema_migrations',
   'sequences',
+  'subscriptions',
   'usage',
 ];
 
@@ -28,6 +29,7 @@ const ALLE_MIGRATIES = [
   '0003_sequenties_herstart.sql',
   '0004_onboarding.sql',
   '0005_klantportaal.sql',
+  '0006_abonnementen.sql',
 ];
 
 describe('0001_init.sql', () => {
@@ -329,7 +331,7 @@ describe('0004_onboarding.sql', () => {
         "insert into clients(naam, slug) values ('MARKaaS', 'markaas'), ('Aqua', 'aqua')",
       );
       const nieuw = await draaiMigraties(db, MIGRATIE_MAP);
-      assert.deepEqual(nieuw, ['0004_onboarding.sql', '0005_klantportaal.sql']);
+      assert.deepEqual(nieuw, ['0004_onboarding.sql', '0005_klantportaal.sql', '0006_abonnementen.sql']);
       const rijen = await db.query<{ slug: string; abonnement_vereist: boolean }>(
         'select slug, abonnement_vereist from clients order by slug',
       );
@@ -466,6 +468,60 @@ describe('0005_klantportaal.sql', () => {
          where table_name = 'actions' and column_name = 'afgewezen_door'`,
       );
       assert.equal(kolommen.length, 1);
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe('0006_abonnementen.sql', () => {
+  it('één abonnement per klant, unieke Stripe-id\'s, opruimen met de klant', async () => {
+    const { db, close } = await verseDatabaseMetMigraties();
+    try {
+      const [k] = await db.query<{ id: string }>(
+        "insert into clients(naam, slug) values ('K', 'k') returning id",
+      );
+      const [l] = await db.query<{ id: string }>(
+        "insert into clients(naam, slug) values ('L', 'l') returning id",
+      );
+      await db.query(
+        `insert into subscriptions(client_id, stripe_customer_id, stripe_subscription_id, status)
+         values ($1, 'cus_1', 'sub_1', 'trialing')`,
+        [k!.id],
+      );
+      await assert.rejects(
+        db.query(`insert into subscriptions(client_id) values ($1)`, [k!.id]),
+        /duplicate|unique/i,
+      );
+      await assert.rejects(
+        db.query(`insert into subscriptions(client_id, stripe_customer_id) values ($1, 'cus_1')`, [l!.id]),
+        /duplicate|unique/i,
+      );
+      const [rij] = await db.query<{ opgezegd_per_einde: boolean }>(
+        'select opgezegd_per_einde from subscriptions where client_id = $1',
+        [k!.id],
+      );
+      assert.equal(rij!.opgezegd_per_einde, false);
+      await db.query('delete from clients where id = $1', [k!.id]);
+      const [telling] = await db.query<{ n: number }>('select count(*)::int as n from subscriptions');
+      assert.equal(telling!.n, 0);
+    } finally {
+      await close();
+    }
+  });
+
+  it('events accepteert bron stripe en ontdubbelt op extern_id', async () => {
+    const { db, close } = await verseDatabaseMetMigraties();
+    try {
+      await db.query(
+        "insert into events(bron, type, extern_id, payload) values ('stripe', 'invoice.paid', 'stripe:evt_1', '{}')",
+      );
+      await assert.rejects(
+        db.query(
+          "insert into events(bron, type, extern_id, payload) values ('stripe', 'invoice.paid', 'stripe:evt_1', '{}')",
+        ),
+        /duplicate|unique/i,
+      );
     } finally {
       await close();
     }
