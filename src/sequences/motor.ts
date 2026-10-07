@@ -245,7 +245,8 @@ async function vorigeInviteStand(
          select 1 from events e
          where e.account_id = $1
            and e.type in ('acceptatie', 'new_relation')
-           and coalesce(e.payload ->> 'attendee_provider_id',
+           and coalesce(e.payload ->> 'user_provider_id',
+                        e.payload ->> 'attendee_provider_id',
                         e.payload -> 'sender' ->> 'attendee_provider_id') = $3
        ) as signaal`,
     [invoer.accountId, invoer.lead.linkedinUrl, invoer.lead.providerId],
