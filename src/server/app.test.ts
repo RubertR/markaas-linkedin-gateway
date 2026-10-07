@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { vasteKlok } from '../budget/klok.ts';
 import { laadLimieten, type Limieten } from '../budget/limits.ts';
 import { leesEnv, type Env } from '../config/env.ts';
+import { laadJuridisch, type Juridisch } from '../config/juridisch.ts';
 import type { Backend } from '../db/backend.ts';
 import { maakLogger } from '../log/logger.ts';
 import { vastePauze } from '../queue/pauze.ts';
@@ -12,7 +13,7 @@ import { maakUnipileClient } from '../unipile/client.ts';
 import { koppelSleutel } from '../webhooks/geheim.ts';
 import { verseDatabaseMetMigraties } from '../../test/helpers/pglite.ts';
 
-import { maakGatewayApp, unipileBaseUrl } from './app.ts';
+import { maakGatewayApp, maskeerPad, unipileBaseUrl } from './app.ts';
 import { maakHealthApp } from './health.ts';
 import { leesVersie } from './versie.ts';
 
@@ -28,10 +29,12 @@ const GEHEIMEN = {
 let db: Backend;
 let close: () => Promise<void>;
 let limieten: Limieten;
+let juridisch: Juridisch;
 
 before(async () => {
   ({ db, close } = await verseDatabaseMetMigraties());
   limieten = await laadLimieten();
+  juridisch = await laadJuridisch();
 });
 
 after(async () => {
@@ -45,6 +48,7 @@ function maakApp(env: Env, opties: { db?: Backend; regels?: string[] } = {}) {
     // Wijst nergens heen: deze tests raken Unipile niet.
     unipile: maakUnipileClient({ baseUrl: 'http://127.0.0.1:9', apiKey: env.unipileApiKey }),
     limieten,
+    juridisch,
     klok: vasteKlok('2026-10-01T08:00:00Z'),
     pauzeKiezer: vastePauze(0),
     werkdagen: vasteWerkdagen(1),
@@ -189,6 +193,32 @@ describe('maakGatewayApp', () => {
     const regel = JSON.parse(regels.at(-1)!);
     assert.equal(regel.pad, '/webhooks/koppel');
     for (const r of regels) assert.ok(!r.includes(k), 'logregel bevat de koppelsleutel');
+  });
+});
+
+describe('koppelpagina in de gateway', () => {
+  it('monteert /koppelen/* publiek: onbekend token geeft 410 zonder login', async () => {
+    const app = maakApp(leesEnv(GEHEIMEN));
+    const res = await app.request('/koppelen/onbekend-token');
+    assert.equal(res.status, 410);
+    assert.equal((await app.request('/koppelen/klaar')).status, 200);
+  });
+
+  it('logt het pad van de koppelpagina zonder het token', async () => {
+    const regels: string[] = [];
+    const app = maakApp(leesEnv(GEHEIMEN), { regels });
+    const token = 'Zeer-Geheim-Token-1234567890abcdefghijklmnopq';
+    await app.request(`/koppelen/${token}`);
+    const regel = JSON.parse(regels.at(-1)!);
+    assert.equal(regel.pad, '/koppelen/…');
+    for (const r of regels) assert.ok(!r.includes(token), 'logregel bevat het koppeltoken');
+  });
+
+  it('maskeerPad laat vaste koppelpaden en andere paden staan', () => {
+    assert.equal(maskeerPad('/koppelen/klaar'), '/koppelen/klaar');
+    assert.equal(maskeerPad('/koppelen/mislukt'), '/koppelen/mislukt');
+    assert.equal(maskeerPad('/admin/klanten'), '/admin/klanten');
+    assert.equal(maskeerPad('/koppelen/abc'), '/koppelen/…');
   });
 });
 

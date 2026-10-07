@@ -13,6 +13,7 @@ export interface Account {
   id: string;
   clientId: string;
   eigenaarNaam: string;
+  eigenaarEmail: string | null;
   unipileAccountId: string | null;
   abonnement: Abonnement;
   status: AccountStatus;
@@ -27,6 +28,7 @@ export interface Account {
 export interface RegistreerAccountInvoer {
   clientId: string;
   eigenaarNaam: string;
+  eigenaarEmail?: string;
   abonnement: Abonnement;
   tijdzone?: string;
 }
@@ -35,6 +37,7 @@ interface AccountRij {
   id: string;
   client_id: string;
   eigenaar_naam: string;
+  eigenaar_email: string | null;
   unipile_account_id: string | null;
   abonnement: Abonnement;
   status: AccountStatus;
@@ -60,6 +63,7 @@ function map(rij: AccountRij): Account {
     id: rij.id,
     clientId: rij.client_id,
     eigenaarNaam: rij.eigenaar_naam,
+    eigenaarEmail: rij.eigenaar_email,
     unipileAccountId: rij.unipile_account_id,
     abonnement: rij.abonnement,
     status: rij.status,
@@ -72,7 +76,7 @@ function map(rij: AccountRij): Account {
   };
 }
 
-const KOLOMMEN = `id, client_id, eigenaar_naam, unipile_account_id, abonnement,
+const KOLOMMEN = `id, client_id, eigenaar_naam, eigenaar_email, unipile_account_id, abonnement,
     status, status_sinds, opbouw_factor, afkoeling_tot, tijdzone,
     openstaande_verzoeken, aangemaakt_op`;
 
@@ -81,10 +85,16 @@ export async function registreerAccount(
   invoer: RegistreerAccountInvoer,
 ): Promise<Account> {
   const rijen = await db.query<AccountRij>(
-    `insert into accounts(client_id, eigenaar_naam, abonnement, tijdzone)
-     values ($1, $2, $3, coalesce($4, 'Europe/Amsterdam'))
+    `insert into accounts(client_id, eigenaar_naam, eigenaar_email, abonnement, tijdzone)
+     values ($1, $2, $3, $4, coalesce($5, 'Europe/Amsterdam'))
      returning ${KOLOMMEN}`,
-    [invoer.clientId, invoer.eigenaarNaam, invoer.abonnement, invoer.tijdzone ?? null],
+    [
+      invoer.clientId,
+      invoer.eigenaarNaam,
+      invoer.eigenaarEmail ?? null,
+      invoer.abonnement,
+      invoer.tijdzone ?? null,
+    ],
   );
   const rij = rijen[0];
   if (!rij) throw new Error('Account aanmaken gaf geen rij terug.');

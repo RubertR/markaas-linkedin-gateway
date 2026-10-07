@@ -6,7 +6,8 @@ import { laadLimieten, type Limieten } from '../budget/limits.ts';
 import type { Backend } from '../db/backend.ts';
 import { maakActie, vindActie } from '../queue/acties.ts';
 import { markeerAccountGekoppeld, registreerAccount } from '../register/accounts.ts';
-import { maakClient } from '../register/clients.ts';
+import { maakClient, vindClientBijSlug } from '../register/clients.ts';
+import { vindGeldigeUitnodiging } from '../register/uitnodiging.ts';
 import { verseDatabaseMetMigraties } from '../../test/helpers/pglite.ts';
 
 import { maakAdminApp, type AdminDeps } from './server.ts';
@@ -55,6 +56,8 @@ beforeEach(async () => {
     klok: vasteKlok(NU),
     wachtwoordHash,
     cookieSecure: false, // in tests draaien we niet onder TLS
+    publicBaseUrl: 'https://gateway.test',
+    koppeluitnodigingGeldigDagen: 7,
   };
   app = maakAdminApp(deps);
 });
@@ -535,3 +538,163 @@ describe('onzeker-lijst via de UI', () => {
     assert.equal(actie?.goedgekeurdDoor, 'rubert');
   });
 });
+
+describe('klanten en koppellinks (SPEC §14.2)', () => {
+  function tokenUit(html: string): string {
+    const m = html.match(/https:\/\/gateway\.test\/koppelen\/([A-Za-z0-9_-]{43})/);
+    if (!m) throw new Error('geen koppellink in pagina');
+    return m[1]!;
+  }
+
+  function nieuweKlantVelden(csrf: string, extra: Record<string, string> = {}) {
+    return {
+      csrf,
+      klantNaam: 'Acme B.V.',
+      slug: 'acme',
+      eigenaarNaam: 'Eva de Vries',
+      eigenaarEmail: 'eva@acme.nl',
+      abonnement: 'premium_business',
+      abonnementVereist: 'ja',
+      ...extra,
+    };
+  }
+
+  it('alle klantenroutes vereisen een sessie', async () => {
+    const jar = nieuweJar();
+    for (const pad of ['/admin/klanten', '/admin/klanten/nieuw']) {
+      const r = await get(pad, jar);
+      assert.equal(r.status, 303, pad);
+      assert.equal(r.headers.get('location'), '/admin/login');
+    }
+    const p1 = await post('/admin/klanten/nieuw', nieuweKlantVelden('x'), jar);
+    assert.equal(p1.status, 303);
+    assert.equal(p1.headers.get('location'), '/admin/login');
+    const p2 = await post(`/admin/klanten/${accountId}/koppellink`, { csrf: 'x' }, jar);
+    assert.equal(p2.status, 303);
+    assert.equal(p2.headers.get('location'), '/admin/login');
+    assert.equal(await vindClientBijSlug(db, 'acme'), null);
+  });
+
+  it('het overzicht linkt naar Klanten', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    const html = await (await get('/admin/', jar)).text();
+    assert.match(html, /href="\/admin\/klanten"/);
+  });
+
+  it('formulier nieuwe klant toont de abonnementen en het vinkje standaard aan', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    const r = await get('/admin/klanten/nieuw', jar);
+    assert.equal(r.status, 200);
+    const html = await r.text();
+    for (const a of ['free', 'premium_career', 'premium_business', 'salesnav_core', 'salesnav_advanced']) {
+      assert.match(html, new RegExp(`value="${a}"`));
+    }
+    assert.match(html, /name="abonnementVereist" value="ja" checked/);
+  });
+
+  it('weigert nieuwe klant zonder CSRF (403) en maakt niets aan', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    const r = await post('/admin/klanten/nieuw', nieuweKlantVelden('fout-token'), jar);
+    assert.equal(r.status, 403);
+    assert.equal(await vindClientBijSlug(db, 'acme'), null);
+  });
+
+  it('maakt klant + account + koppellink en toont de link eenmalig met voorbeeldmail', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    const form = await (await get('/admin/klanten/nieuw', jar)).text();
+    const r = await post('/admin/klanten/nieuw', nieuweKlantVelden(csrfUit(form)), jar);
+    assert.equal(r.status, 200);
+    assert.match(r.headers.get('cache-control') ?? '', /no-store/);
+    const html = await r.text();
+    const token = tokenUit(html);
+    assert.match(html, /Eva de Vries/);
+    assert.match(html, /eva@acme\.nl/);
+    assert.match(html, /Beste Eva/);
+    const u = await vindGeldigeUitnodiging(db, token, vasteKlok(NU));
+    assert.ok(u, 'token uit de pagina is een geldige uitnodiging');
+    const client = await vindClientBijSlug(db, 'acme');
+    assert.equal(client?.abonnementVereist, true);
+
+    // Daarna nergens meer op te vragen.
+    const lijst = await (await get('/admin/klanten', jar)).text();
+    assert.ok(!lijst.includes(token), 'token mag niet in de klantenlijst staan');
+    assert.match(lijst, /Acme B\.V\./);
+    assert.match(lijst, /Eva de Vries/);
+    assert.match(lijst, /Nieuwe koppellink/);
+  });
+
+  it('bewaart abonnement_vereist = false als het vinkje uit staat', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    const form = await (await get('/admin/klanten/nieuw', jar)).text();
+    const velden: Record<string, string> = nieuweKlantVelden(csrfUit(form));
+    delete velden['abonnementVereist'];
+    const r = await post('/admin/klanten/nieuw', velden, jar);
+    assert.equal(r.status, 200);
+    assert.equal((await vindClientBijSlug(db, 'acme'))?.abonnementVereist, false);
+  });
+
+  it('stelt een slug voor uit de naam als het slugveld leeg is', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    const form = await (await get('/admin/klanten/nieuw', jar)).text();
+    const r = await post(
+      '/admin/klanten/nieuw',
+      nieuweKlantVelden(csrfUit(form), { klantNaam: 'Beta Groep', slug: '' }),
+      jar,
+    );
+    assert.equal(r.status, 200);
+    assert.ok(await vindClientBijSlug(db, 'beta-groep'));
+  });
+
+  it('dubbele slug: formulier opnieuw met NL-melding (400), ingevulde waarden blijven staan', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    const form = await (await get('/admin/klanten/nieuw', jar)).text();
+    const r = await post(
+      '/admin/klanten/nieuw',
+      nieuweKlantVelden(csrfUit(form), { slug: 'markaas-ui' }),
+      jar,
+    );
+    assert.equal(r.status, 400);
+    const html = await r.text();
+    assert.match(html, /al in gebruik/);
+    assert.match(html, /value="eva@acme\.nl"/);
+  });
+
+  it('nieuwe koppellink voor een bestaand niet-gekoppeld account (CSRF verplicht)', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    const form = await (await get('/admin/klanten/nieuw', jar)).text();
+    const csrf = csrfUit(form);
+    const eerste = tokenUit(await (await post('/admin/klanten/nieuw', nieuweKlantVelden(csrf), jar)).text());
+    const u = await vindGeldigeUitnodiging(db, eerste, vasteKlok(NU));
+    const nieuwAccountId = u!.accountId;
+
+    const zonder = await post(`/admin/klanten/${nieuwAccountId}/koppellink`, { csrf: 'fout' }, jar);
+    assert.equal(zonder.status, 403);
+
+    const r = await post(`/admin/klanten/${nieuwAccountId}/koppellink`, { csrf }, jar);
+    assert.equal(r.status, 200);
+    const tweede = tokenUit(await r.text());
+    assert.notEqual(tweede, eerste);
+    assert.equal(await vindGeldigeUitnodiging(db, eerste, vasteKlok(NU)), null);
+    assert.ok(await vindGeldigeUitnodiging(db, tweede, vasteKlok(NU)));
+  });
+
+  it('weigert een nieuwe koppellink voor een al gekoppeld account met NL-melding', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    const form = await (await get('/admin/klanten/nieuw', jar)).text();
+    const r = await post(`/admin/klanten/${accountId}/koppellink`, { csrf: csrfUit(form) }, jar);
+    assert.equal(r.status, 303);
+    assert.equal(r.headers.get('location'), '/admin/klanten');
+    const lijst = await (await get('/admin/klanten', jar)).text();
+    assert.match(lijst, /al gekoppeld/);
+  });
+});
+

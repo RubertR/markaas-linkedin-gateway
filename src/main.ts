@@ -1,6 +1,6 @@
 /**
  * Startpunt van de gateway (`npm start`). Eén proces met:
- * - de hono-server: `/health`, `/webhooks/*`, `/mcp`, `/admin/*`;
+ * - de hono-server: `/health`, `/webhooks/*`, `/mcp`, `/admin/*`, `/koppelen/*`;
  * - de planner-lus, alleen als `PLANNER_ENABLED=true` (standaard uit).
  *
  * Draait géén migraties; die blijven een bewuste handmatige stap
@@ -13,6 +13,7 @@ import { systeemKlok } from './budget/klok.ts';
 import { laadLimieten } from './budget/limits.ts';
 import { verwerkVerzoekenSyncTick } from './budget/verzoekensync.ts';
 import { EnvFout, leesEnv, type Env } from './config/env.ts';
+import { laadJuridisch } from './config/juridisch.ts';
 import { postgresBackend } from './db/postgres-backend.ts';
 import { maakLogger, type Logger } from './log/logger.ts';
 import { startPlannerLus } from './queue/lus.ts';
@@ -65,6 +66,7 @@ async function main(): Promise<void> {
   const logger = maakLogger({ niveau: env.logLevel, geheimen: geheimenUit(env) });
   const versie = leesVersie();
   const limieten = await laadLimieten();
+  const juridisch = await laadJuridisch();
   const db = postgresBackend({ databaseUrl: env.databaseUrl });
   const baseUrl = unipileBaseUrl(env.unipileDsn);
   const unipile = maakUnipileClient({ baseUrl, apiKey: env.unipileApiKey });
@@ -75,6 +77,7 @@ async function main(): Promise<void> {
     db,
     unipile,
     limieten,
+    juridisch,
     klok,
     pauzeKiezer: systeemRandom,
     werkdagen: systeemWerkdagenKiezer,

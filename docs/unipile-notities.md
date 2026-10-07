@@ -275,6 +275,24 @@ De verzoekensync gebruikt daarom 100 per pagina en maximaal 5 pagina's (= 500).
   `x-webhook-secret`; `/webhooks/unipile` alleen de header. De toegangslog toont alleen het pad.
 - Links niet in een iframe tonen (captcha/OAuth). Niet in chat of logs laten slingeren.
 
+### Terugsturen na koppelen (`success_redirect_url` / `failure_redirect_url`)
+
+*Uit de Unipile-documentatie (hosted auth), 7 okt 2026; nog niet op een echt account getest.*
+
+- `POST /api/v1/hosted/accounts/link` kent naast `notify_url` twee optionele velden:
+  `success_redirect_url` (browser na geslaagde koppeling) en `failure_redirect_url`
+  (browser als koppelen mislukt of wordt afgebroken).
+- De documentatie zegt **niet** welke queryparameters Unipile aan die URL's toevoegt. De
+  gateway leunt er daarom niet op: `/koppelen/klaar` en `/koppelen/mislukt` zijn vaste
+  pagina's zonder logica. Wat telt is de callback `CREATION_SUCCESS` op de `notify_url`
+  (§6); die verwerking (`verwerkKoppelCallback`) is ongewijzigd.
+- De gateway stuurt de velden alleen mee als ze gezet zijn (`KoppellinkAanvraag.successRedirectUrl`
+  / `failureRedirectUrl` in `src/unipile/client.ts`). Alleen de koppelpagina
+  (`POST /koppelen/<token>`) zet ze, op `<PUBLIC_BASE_URL>/koppelen/klaar` en `/koppelen/mislukt`.
+  Reconnect-links en `npm run account:registreer` blijven zoals ze waren.
+- Bij de eerste echte koppeling via de koppelpagina nakijken: komt de browser op
+  `/koppelen/klaar` terecht, en welke queryparameters hangen eraan? Hier vastleggen.
+
 ## Opruimen na fase 1
 
 - 30 sep 2026: de drie testwebhooks naar webhook.site verwijderd (`DELETE /api/v1/webhooks/{id}`,

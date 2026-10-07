@@ -38,3 +38,23 @@ export function koppelSleutel(webhookSecret: string): string {
 export function koppelNotifyUrl(publicBaseUrl: string, webhookSecret: string): string {
   return `${publicBaseUrl}/webhooks/koppel?${KOPPEL_SLEUTEL_PARAM}=${koppelSleutel(webhookSecret)}`;
 }
+
+export interface KoppelpaginaSleutels {
+  /** HMAC-sleutel voor `account_consents.ip_hash` (SPEC §14.2 punt 4, "geheim zout"). */
+  ipSleutel: string;
+  /** HMAC-sleutel voor het CSRF-veld op `/koppelen/<token>`. */
+  csrfSleutel: string;
+}
+
+/**
+ * Sleutels voor de publieke koppelpagina, afgeleid van WEBHOOK_SECRET op
+ * dezelfde manier als `koppelSleutel`, elk met een eigen vaste tekst. Zo is er
+ * geen extra omgevingsvariabele nodig en lekt het geheim zelf nergens heen.
+ * Let op: wie WEBHOOK_SECRET vervangt, maakt bestaande ip-hashes onvergelijkbaar.
+ */
+export function koppelpaginaSleutels(webhookSecret: string): KoppelpaginaSleutels {
+  return {
+    ipSleutel: createHmac('sha256', webhookSecret).update('consent-ip').digest('hex'),
+    csrfSleutel: createHmac('sha256', webhookSecret).update('koppelen-csrf').digest('hex'),
+  };
+}

@@ -78,6 +78,26 @@ describe('koppelflow — maakCreateLink', () => {
     assert.equal(body['single_use'], true);
   });
 
+  it('geeft success- en failure-redirect uit de opties door aan Unipile', async () => {
+    fake.antwoord('POST', '/api/v1/hosted/accounts/link', {
+      status: 200,
+      body: { object: 'HostedAuthUrl', url: 'https://account.unipile.com/link/abc' },
+    });
+    await maakCreateLink(
+      db,
+      unipile,
+      {
+        ...OPTIES,
+        successRedirectUrl: 'https://gateway.markaas.test/koppelen/klaar',
+        failureRedirectUrl: 'https://gateway.markaas.test/koppelen/mislukt',
+      },
+      accountId,
+    );
+    const body = fake.aanroepen[0]?.body as Record<string, unknown>;
+    assert.equal(body['success_redirect_url'], 'https://gateway.markaas.test/koppelen/klaar');
+    assert.equal(body['failure_redirect_url'], 'https://gateway.markaas.test/koppelen/mislukt');
+  });
+
   it('vertaalt 429 op hosted/link naar een Nederlandse KoppelflowFout en slaat geen link op', async () => {
     fake.antwoord('POST', '/api/v1/hosted/accounts/link', {
       status: 429,

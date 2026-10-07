@@ -5,12 +5,16 @@ export interface Client {
   naam: string;
   slug: string;
   actief: boolean;
+  /** Betaalpoort (SPEC §14.4): zonder actief abonnement geen verzending. */
+  abonnementVereist: boolean;
   aangemaaktOp: Date;
 }
 
 export interface MaakClientInvoer {
   naam: string;
   slug: string;
+  /** Standaard true (schemastandaard). */
+  abonnementVereist?: boolean;
 }
 
 interface ClientRij {
@@ -18,8 +22,11 @@ interface ClientRij {
   naam: string;
   slug: string;
   actief: boolean;
+  abonnement_vereist: boolean;
   aangemaakt_op: string | Date;
 }
+
+const KOLOMMEN = 'id, naam, slug, actief, abonnement_vereist, aangemaakt_op';
 
 function map(rij: ClientRij): Client {
   return {
@@ -27,6 +34,7 @@ function map(rij: ClientRij): Client {
     naam: rij.naam,
     slug: rij.slug,
     actief: rij.actief,
+    abonnementVereist: rij.abonnement_vereist,
     aangemaaktOp: rij.aangemaakt_op instanceof Date ? rij.aangemaakt_op : new Date(rij.aangemaakt_op),
   };
 }
@@ -34,10 +42,10 @@ function map(rij: ClientRij): Client {
 export async function maakClient(db: Backend, invoer: MaakClientInvoer): Promise<Client> {
   try {
     const rijen = await db.query<ClientRij>(
-      `insert into clients(naam, slug)
-       values ($1, $2)
-       returning id, naam, slug, actief, aangemaakt_op`,
-      [invoer.naam, invoer.slug],
+      `insert into clients(naam, slug, abonnement_vereist)
+       values ($1, $2, coalesce($3::boolean, true))
+       returning ${KOLOMMEN}`,
+      [invoer.naam, invoer.slug, invoer.abonnementVereist ?? null],
     );
     const rij = rijen[0];
     if (!rij) throw new Error('Client aanmaken gaf geen rij terug.');
@@ -52,7 +60,7 @@ export async function maakClient(db: Backend, invoer: MaakClientInvoer): Promise
 
 export async function vindClientBijSlug(db: Backend, slug: string): Promise<Client | null> {
   const rijen = await db.query<ClientRij>(
-    `select id, naam, slug, actief, aangemaakt_op from clients where slug = $1`,
+    `select ${KOLOMMEN} from clients where slug = $1`,
     [slug],
   );
   return rijen[0] ? map(rijen[0]) : null;

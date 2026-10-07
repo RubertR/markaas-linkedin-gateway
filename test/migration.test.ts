@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -6,16 +8,23 @@ import { draaiMigraties } from '../src/db/migrator.ts';
 import { MIGRATIE_MAP, verseDatabaseMetMigraties, versePglite } from './helpers/pglite.ts';
 
 const VERWACHTE_TABELLEN = [
+  'account_consents',
   'accounts',
   'actions',
   'clients',
   'events',
+  'koppel_uitnodigingen',
   'schema_migrations',
   'sequences',
   'usage',
 ];
 
-const ALLE_MIGRATIES = ['0001_init.sql', '0002_sequences.sql', '0003_sequenties_herstart.sql'];
+const ALLE_MIGRATIES = [
+  '0001_init.sql',
+  '0002_sequences.sql',
+  '0003_sequenties_herstart.sql',
+  '0004_onboarding.sql',
+];
 
 describe('0001_init.sql', () => {
   it('past de migratie schoon toe op een verse PGlite', async () => {
@@ -295,6 +304,82 @@ describe('0001_init.sql', () => {
         ),
         /duplicate|unique/i,
       );
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe('0004_onboarding.sql', () => {
+  it('zet abonnement_vereist op false voor markaas en laat andere bestaande klanten op true', async () => {
+    const { db, close } = await versePglite();
+    try {
+      // Simuleer een database waarop 0001–0003 al draaiden, met bestaande klanten.
+      await db.exec(`create table schema_migrations (
+        naam text primary key, toegepast_op timestamptz not null default now())`);
+      for (const naam of ALLE_MIGRATIES.slice(0, 3)) {
+        await db.exec(await readFile(join(MIGRATIE_MAP, naam), 'utf8'));
+        await db.query('insert into schema_migrations(naam) values ($1)', [naam]);
+      }
+      await db.query(
+        "insert into clients(naam, slug) values ('MARKaaS', 'markaas'), ('Aqua', 'aqua')",
+      );
+      const nieuw = await draaiMigraties(db, MIGRATIE_MAP);
+      assert.deepEqual(nieuw, ['0004_onboarding.sql']);
+      const rijen = await db.query<{ slug: string; abonnement_vereist: boolean }>(
+        'select slug, abonnement_vereist from clients order by slug',
+      );
+      assert.deepEqual(rijen, [
+        { slug: 'aqua', abonnement_vereist: true },
+        { slug: 'markaas', abonnement_vereist: false },
+      ]);
+      // Nieuwe klanten krijgen standaard true.
+      await db.query("insert into clients(naam, slug) values ('Nieuw', 'nieuw')");
+      const [nieuwRij] = await db.query<{ abonnement_vereist: boolean }>(
+        "select abonnement_vereist from clients where slug = 'nieuw'",
+      );
+      assert.equal(nieuwRij?.abonnement_vereist, true);
+    } finally {
+      await close();
+    }
+  });
+
+  it('dwingt unieke token_hash af en ruimt uitnodigingen en toestemmingen op met het account', async () => {
+    const { db, close } = await verseDatabaseMetMigraties();
+    try {
+      const [client] = await db.query<{ id: string }>(
+        "insert into clients(naam, slug) values ('K', 'k') returning id",
+      );
+      const [account] = await db.query<{ id: string }>(
+        `insert into accounts(client_id, eigenaar_naam, eigenaar_email, abonnement)
+         values ($1, 'Eva', 'eva@voorbeeld.nl', 'free') returning id`,
+        [client!.id],
+      );
+      const [uitn] = await db.query<{ id: string }>(
+        `insert into koppel_uitnodigingen(account_id, token_hash, verloopt_op)
+         values ($1, 'hash-1', now() + interval '7 days') returning id`,
+        [account!.id],
+      );
+      await assert.rejects(
+        db.query(
+          `insert into koppel_uitnodigingen(account_id, token_hash, verloopt_op)
+           values ($1, 'hash-1', now())`,
+          [account!.id],
+        ),
+        /duplicate|unique/i,
+      );
+      await db.query(
+        `insert into account_consents(account_id, uitnodiging_id, naam, email,
+           versie_voorwaarden, versie_verwerkersovereenkomst)
+         values ($1, $2, 'Eva', 'eva@voorbeeld.nl', '0.1', '0.1')`,
+        [account!.id, uitn!.id],
+      );
+      await db.query('delete from accounts where id = $1', [account!.id]);
+      const [telling] = await db.query<{ u: number; c: number }>(
+        `select (select count(*)::int from koppel_uitnodigingen) as u,
+                (select count(*)::int from account_consents) as c`,
+      );
+      assert.deepEqual(telling, { u: 0, c: 0 });
     } finally {
       await close();
     }

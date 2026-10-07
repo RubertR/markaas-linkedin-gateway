@@ -3,7 +3,13 @@ import assert from 'node:assert/strict';
 
 import { createHmac } from 'node:crypto';
 
-import { KOPPEL_SLEUTEL_PARAM, koppelNotifyUrl, koppelSleutel, vergelijkGeheim } from './geheim.ts';
+import {
+  KOPPEL_SLEUTEL_PARAM,
+  koppelNotifyUrl,
+  koppelpaginaSleutels,
+  koppelSleutel,
+  vergelijkGeheim,
+} from './geheim.ts';
 
 describe('koppelSleutel', () => {
   it('is HMAC-SHA256 over de vaste tekst "koppel" met WEBHOOK_SECRET als sleutel', () => {
@@ -52,5 +58,16 @@ describe('vergelijkGeheim', () => {
   it('is byte-exact (case-sensitive, spaties tellen)', () => {
     assert.equal(vergelijkGeheim('Geheim', 'geheim'), false);
     assert.equal(vergelijkGeheim(' geheim', 'geheim'), false);
+  });
+});
+
+describe('koppelpaginaSleutels', () => {
+  it('leidt twee verschillende sleutels af van WEBHOOK_SECRET, geen van beide het geheim zelf', () => {
+    const s = koppelpaginaSleutels('geheim-abc');
+    assert.equal(s.ipSleutel, createHmac('sha256', 'geheim-abc').update('consent-ip').digest('hex'));
+    assert.equal(s.csrfSleutel, createHmac('sha256', 'geheim-abc').update('koppelen-csrf').digest('hex'));
+    assert.notEqual(s.ipSleutel, s.csrfSleutel);
+    assert.notEqual(s.ipSleutel, koppelSleutel('geheim-abc'));
+    assert.notEqual(s.ipSleutel, 'geheim-abc');
   });
 });

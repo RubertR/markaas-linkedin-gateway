@@ -1,0 +1,6 @@
+{
+  "$toelichting": "Versies van de juridische documenten die de koppelpagina (/koppelen/<token>) toont en die in account_consents worden vastgelegd (SPEC §14.2, §14.5). Verhoog de versie bij elke inhoudelijke wijziging van een document. Lege url = de pagina meldt dat MARKaaS het document meestuurt. koppeluitnodiging_geldig_dagen = geldigheid van een koppellink van de gateway.",
+  "voorwaarden": { "versie": "0.1", "url": "" },
+  "verwerkersovereenkomst": { "versie": "0.1", "url": "" },
+  "koppeluitnodiging_geldig_dagen": 7
+}

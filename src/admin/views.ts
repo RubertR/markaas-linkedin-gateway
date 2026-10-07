@@ -1,4 +1,5 @@
 import { formatteerAmsterdam } from './datum.ts';
+import type { KlantRegel, UitnodigingStand } from './klanten.ts';
 import type {
   DraftWeergave,
   OnzekerWeergave,
@@ -67,7 +68,22 @@ button, .knop {
   background: #0b63b7; color: #fff; border: 0; padding: 0.6rem 0.9rem;
   border-radius: 4px; font-size: 0.95rem; min-height: 44px; cursor: pointer;
 }
-button.secundair { background: #fff; color: #0b63b7; border: 1px solid #0b63b7; }
+button.secundair, a.knop.secundair { background: #fff; color: #0b63b7; border: 1px solid #0b63b7; }
+a.knop { display: inline-flex; align-items: center; text-decoration: none; }
+table.klanten { width: 100%; border-collapse: collapse; background: #fff;
+                border: 1px solid #e1e5ea; border-radius: 6px; margin: 0 0 1rem; }
+table.klanten th, table.klanten td { text-align: left; padding: 0.5rem 0.6rem;
+                                     border-bottom: 1px solid #eef0f3; vertical-align: top; }
+table.klanten th { font-size: 0.85rem; color: #555; }
+.formulier label { display: block; font-weight: 600; margin: 0.6rem 0 0.2rem; }
+.formulier select { padding: 0.6rem; font-size: 1rem; border: 1px solid #c4c9cf;
+                    border-radius: 4px; width: 100%; }
+.formulier input[type="email"] { padding: 0.6rem; border: 1px solid #c4c9cf; border-radius: 4px;
+                                 font-size: 1rem; width: 100%; }
+.formulier label.checkbox { font-weight: 400; display: inline-flex; margin-top: 0.8rem; }
+.uitleg { color: #555; font-size: 0.9rem; margin: 0.2rem 0 0; }
+textarea.kopie { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                 font-size: 0.9rem; padding: 0.5rem; border: 1px solid #c4c9cf; border-radius: 4px; }
 button.gevaarlijk { background: #b23c2d; }
 .batch { display: flex; align-items: center; gap: 0.6rem; margin: 1rem 0; }
 .batch button { background: #197a3d; }
@@ -312,6 +328,7 @@ export function overzichtView(opts: OverzichtViewOpties): string {
 <header>
   <h1>Goedkeuringspagina</h1>
   <nav>
+    <a class="knop secundair" href="/admin/klanten">Klanten</a>
     <form method="post" action="/admin/logout">
       <input type="hidden" name="csrf" value="${h(opts.csrfToken)}">
       <button type="submit" class="secundair">Uitloggen</button>
@@ -336,3 +353,216 @@ export function overzichtView(opts: OverzichtViewOpties): string {
 </main>`;
   return layout('Goedkeuren', inhoud, true);
 }
+
+// -- klanten en koppellinks (SPEC §14.2) -----------------------------------
+
+function adminHeader(titel: string, csrfToken: string): string {
+  return `
+<header>
+  <h1>${h(titel)}</h1>
+  <nav>
+    <a class="knop secundair" href="/admin/">Concepten</a>
+    <a class="knop secundair" href="/admin/klanten">Klanten</a>
+    <form method="post" action="/admin/logout">
+      <input type="hidden" name="csrf" value="${h(csrfToken)}">
+      <button type="submit" class="secundair">Uitloggen</button>
+    </form>
+  </nav>
+</header>`;
+}
+
+const STATUS_TEKST: Record<string, string> = {
+  OK: 'werkt',
+  RECONNECTED: 'werkt (opnieuw gekoppeld)',
+  CONNECTING: 'wacht op koppelen',
+  CREDENTIALS: 'opnieuw inloggen nodig',
+  ERROR: 'fout',
+  STOPPED: 'gestopt',
+  PERMISSIONS: 'rechten ontbreken',
+  UNKNOWN: 'onbekend',
+};
+
+function uitnodigingTekst(stand: UitnodigingStand, verlooptOp: Date | null): string {
+  switch (stand) {
+    case 'geen':
+      return 'geen koppellink';
+    case 'open':
+      return `link open tot ${verlooptOp ? formatteerAmsterdam(verlooptOp) : '—'}`;
+    case 'verlopen':
+      return 'link verlopen';
+    case 'gebruikt':
+      return 'link gebruikt';
+  }
+}
+
+export interface KlantenViewOpties {
+  csrfToken: string;
+  klanten: readonly KlantRegel[];
+  melding?: { soort: 'ok' | 'fout'; tekst: string };
+}
+
+export function klantenView(opts: KlantenViewOpties): string {
+  const rijen = opts.klanten
+    .map((k) => {
+      const accounts =
+        k.accounts.length === 0
+          ? [`<tr><td>${h(k.naam)}<br><small>${h(k.slug)}</small></td><td colspan="4">Geen accounts.</td></tr>`]
+          : k.accounts.map(
+              (a, i) => `
+<tr>
+  <td>${i === 0 ? `${h(k.naam)}<br><small>${h(k.slug)} · abonnement ${k.abonnementVereist ? 'vereist' : 'niet vereist'}</small>` : ''}</td>
+  <td>${h(a.eigenaarNaam)}${a.eigenaarEmail ? `<br><small>${h(a.eigenaarEmail)}</small>` : ''}</td>
+  <td>${h(STATUS_TEKST[a.status] ?? a.status)}<br><small>${h(a.abonnement)}</small></td>
+  <td>${a.gekoppeld ? 'ja' : 'nee'}${a.gekoppeld ? '' : `<br><small>${h(uitnodigingTekst(a.uitnodiging, a.uitnodigingVerlooptOp))}</small>`}</td>
+  <td>${
+    a.gekoppeld
+      ? ''
+      : `<form method="post" action="/admin/klanten/${h(a.id)}/koppellink">
+      <input type="hidden" name="csrf" value="${h(opts.csrfToken)}">
+      <button type="submit" class="secundair">Nieuwe koppellink</button>
+    </form>`
+  }</td>
+</tr>`,
+            );
+      return accounts.join('');
+    })
+    .join('');
+  const inhoud = `
+${adminHeader('Klanten', opts.csrfToken)}
+<main>
+  ${opts.melding ? `<p class="melding ${opts.melding.soort}">${h(opts.melding.tekst)}</p>` : ''}
+  <p><a class="knop" href="/admin/klanten/nieuw">Nieuwe klant</a></p>
+  ${
+    opts.klanten.length === 0
+      ? '<p class="leeg">Nog geen klanten.</p>'
+      : `<table class="klanten">
+    <thead><tr><th>Klant</th><th>Accounteigenaar</th><th>Status</th><th>Gekoppeld</th><th></th></tr></thead>
+    <tbody>${rijen}</tbody>
+  </table>`
+  }
+</main>`;
+  return layout('Klanten', inhoud);
+}
+
+export interface NieuweKlantWaarden {
+  klantNaam: string;
+  slug: string;
+  eigenaarNaam: string;
+  eigenaarEmail: string;
+  abonnement: string;
+  abonnementVereist: boolean;
+}
+
+export interface NieuweKlantViewOpties {
+  csrfToken: string;
+  abonnementen: readonly string[];
+  waarden?: NieuweKlantWaarden;
+  foutmelding?: string;
+}
+
+// Vult de slug voor zolang Rubert hem niet zelf heeft aangepast. Server-side
+// geldt hetzelfde voorstel als het veld leeg blijft.
+const SLUG_JS = `
+(function () {
+  var naam = document.getElementById('klantNaam');
+  var slug = document.getElementById('slug');
+  if (!naam || !slug) return;
+  var handmatig = slug.value !== '';
+  slug.addEventListener('input', function () { handmatig = slug.value !== ''; });
+  naam.addEventListener('input', function () {
+    if (handmatig) return;
+    slug.value = naam.value.trim().toLowerCase()
+      .normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  });
+})();
+`.trim();
+
+export function nieuweKlantView(opts: NieuweKlantViewOpties): string {
+  const w: NieuweKlantWaarden = opts.waarden ?? {
+    klantNaam: '',
+    slug: '',
+    eigenaarNaam: '',
+    eigenaarEmail: '',
+    abonnement: 'premium_business',
+    abonnementVereist: true,
+  };
+  const opties = opts.abonnementen
+    .map((a) => `<option value="${h(a)}"${a === w.abonnement ? ' selected' : ''}>${h(a)}</option>`)
+    .join('');
+  const inhoud = `
+${adminHeader('Nieuwe klant', opts.csrfToken)}
+<main>
+  ${opts.foutmelding ? `<p class="melding fout">${h(opts.foutmelding)}</p>` : ''}
+  <form method="post" action="/admin/klanten/nieuw" class="formulier actie-kaart" autocomplete="off">
+    <input type="hidden" name="csrf" value="${h(opts.csrfToken)}">
+    <label for="klantNaam">Klantnaam</label>
+    <input id="klantNaam" name="klantNaam" type="text" required maxlength="200" value="${h(w.klantNaam)}">
+    <label for="slug">Slug</label>
+    <input id="slug" name="slug" type="text" maxlength="60" pattern="[a-z0-9]+(-[a-z0-9]+)*" value="${h(w.slug)}">
+    <p class="uitleg">Kleine letters, cijfers en koppeltekens. Leeg = voorstel uit de klantnaam.</p>
+    <label for="eigenaarNaam">Naam accounteigenaar</label>
+    <input id="eigenaarNaam" name="eigenaarNaam" type="text" required maxlength="200" value="${h(w.eigenaarNaam)}">
+    <label for="eigenaarEmail">E-mail accounteigenaar</label>
+    <input id="eigenaarEmail" name="eigenaarEmail" type="email" required maxlength="254" value="${h(w.eigenaarEmail)}">
+    <label for="abonnement">LinkedIn-abonnement</label>
+    <select id="abonnement" name="abonnement">${opties}</select>
+    <label class="checkbox"><input type="checkbox" name="abonnementVereist" value="ja"${w.abonnementVereist ? ' checked' : ''}> Abonnement vereist (betaalpoort, SPEC §14.4)</label>
+    <p><button type="submit">Klant aanmaken en koppellink maken</button></p>
+  </form>
+</main>
+<script>${SLUG_JS}</script>`;
+  return layout('Nieuwe klant', inhoud);
+}
+
+export interface KoppellinkViewOpties {
+  csrfToken: string;
+  link: string;
+  klantNaam: string;
+  eigenaarNaam: string;
+  eigenaarEmail: string | null;
+  verlooptOp: Date;
+}
+
+export function voorbeeldMail(o: Omit<KoppellinkViewOpties, 'csrfToken'>): string {
+  const voornaam = o.eigenaarNaam.trim().split(/\s+/)[0] ?? o.eigenaarNaam;
+  return `Onderwerp: Uw LinkedIn-account koppelen aan MARKaaS
+
+Beste ${voornaam},
+
+Zoals besproken koppelen we uw LinkedIn-account aan de MARKaaS-gateway. Via de link hieronder leest u wat dat inhoudt, geeft u toestemming en logt u in bij LinkedIn via de beveiligde pagina van onze partner Unipile. MARKaaS ziet uw wachtwoord niet, en elk bericht wordt eerst door ons goedgekeurd voordat het verstuurd wordt.
+
+${o.link}
+
+De link is persoonlijk, werkt één keer en is geldig tot ${formatteerAmsterdam(o.verlooptOp)}. Het koppelen duurt ongeveer vijf minuten; houd uw telefoon bij de hand voor een eventuele verificatiecode van LinkedIn.
+
+Met vriendelijke groet,
+
+Rubert Rietkerk
+MARKaaS`;
+}
+
+export function koppellinkView(o: KoppellinkViewOpties): string {
+  const inhoud = `
+${adminHeader('Koppellink', o.csrfToken)}
+<main>
+  <p class="melding ok">Koppellink gemaakt voor ${h(o.eigenaarNaam)}${
+    o.eigenaarEmail ? ` (${h(o.eigenaarEmail)})` : ''
+  }, ${h(o.klantNaam)}. Geldig tot ${h(formatteerAmsterdam(o.verlooptOp))}, eenmalig te gebruiken.</p>
+  <p class="melding fout">Kopieer de link nu: hij is hierna niet meer op te vragen (alleen een hash is
+    opgeslagen). Kwijt? Maak via Klanten een nieuwe koppellink.</p>
+  <section class="actie-kaart">
+    <h3>Koppellink</h3>
+    <textarea id="link" class="kopie" rows="2" readonly>${h(o.link)}</textarea>
+    <p><button type="button" class="secundair" onclick="navigator.clipboard.writeText(document.getElementById('link').value)">Kopieer link</button></p>
+  </section>
+  <section class="actie-kaart">
+    <h3>Voorbeeldmail</h3>
+    <textarea id="mail" class="kopie" rows="18" readonly>${h(voorbeeldMail(o))}</textarea>
+    <p><button type="button" class="secundair" onclick="navigator.clipboard.writeText(document.getElementById('mail').value)">Kopieer mail</button></p>
+  </section>
+  <p><a class="knop secundair" href="/admin/klanten">Terug naar klanten</a></p>
+</main>`;
+  return layout('Koppellink', inhoud);
+}
+
