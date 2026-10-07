@@ -430,8 +430,9 @@ Goedkeuren kan door de klant én door MARKaaS. `goedgekeurd_door` legt vast wie:
   - `unpaid`, `canceled`, `incomplete_expired` of geen abonnement → **geen verzending**
     (`invite`, `message`, `inmail`): de budgetmotor weigert met een NL-reden
     "Abonnement niet actief". Zoeken en profielen blijven mogelijk voor MARKaaS.
-  - Bestaande klanten (MARKaaS, IPknowledge, Aqua, ICT Media, TAG) krijgen
-    `abonnement_vereist = false`; nieuwe klanten standaard `true`.
+  - MARKaaS, IPknowledge en TAG krijgen `abonnement_vereist = false` (besluit Rubert,
+    7 okt 2026). Aqua, ICT Media en alle nieuwe klanten krijgen `true`: zij hebben een
+    actief abonnement (of proefperiode) nodig voordat er verzonden wordt.
 
 ### 14.5 Juridisch
 
