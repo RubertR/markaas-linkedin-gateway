@@ -1,4 +1,6 @@
 import { formatteerAmsterdam } from './datum.ts';
+import type { GebruikerRegel } from '../portaal/gebruikers.ts';
+
 import type { KlantRegel, UitnodigingStand } from './klanten.ts';
 import type {
   DraftWeergave,
@@ -14,7 +16,8 @@ import type {
  * knoppen minimaal 44 px hoog).
  */
 
-const CSS = `
+/** Gedeelde opmaak; ook gebruikt door het klantportaal (src/portaal/views.ts). */
+export const BASIS_CSS = `
 *,*::before,*::after { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body {
@@ -144,7 +147,7 @@ function layout(titel: string, inhoud: string, metScript = false): string {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
   <title>${h(titel)} — MARKaaS gateway</title>
-  <style>${CSS}</style>
+  <style>${BASIS_CSS}</style>
 </head>
 <body>
 ${inhoud}
@@ -406,11 +409,11 @@ export function klantenView(opts: KlantenViewOpties): string {
     .map((k) => {
       const accounts =
         k.accounts.length === 0
-          ? [`<tr><td>${h(k.naam)}<br><small>${h(k.slug)}</small></td><td colspan="4">Geen accounts.</td></tr>`]
+          ? [`<tr><td><a href="/admin/klanten/${h(k.slug)}">${h(k.naam)}</a><br><small>${h(k.slug)}</small></td><td colspan="4">Geen accounts.</td></tr>`]
           : k.accounts.map(
               (a, i) => `
 <tr>
-  <td>${i === 0 ? `${h(k.naam)}<br><small>${h(k.slug)} · abonnement ${k.abonnementVereist ? 'vereist' : 'niet vereist'}</small>` : ''}</td>
+  <td>${i === 0 ? `<a href="/admin/klanten/${h(k.slug)}">${h(k.naam)}</a><br><small>${h(k.slug)} · abonnement ${k.abonnementVereist ? 'vereist' : 'niet vereist'}</small>` : ''}</td>
   <td>${h(a.eigenaarNaam)}${a.eigenaarEmail ? `<br><small>${h(a.eigenaarEmail)}</small>` : ''}</td>
   <td>${h(STATUS_TEKST[a.status] ?? a.status)}<br><small>${h(a.abonnement)}</small></td>
   <td>${a.gekoppeld ? 'ja' : 'nee'}${a.gekoppeld ? '' : `<br><small>${h(uitnodigingTekst(a.uitnodiging, a.uitnodigingVerlooptOp))}</small>`}</td>
@@ -566,3 +569,164 @@ ${adminHeader('Koppellink', o.csrfToken)}
   return layout('Koppellink', inhoud);
 }
 
+
+// -- klantdetail en portaalgebruikers (SPEC §14.3) -------------------------
+
+function gebruikerLinkStand(g: GebruikerRegel): string {
+  if (!g.actief) return 'gedeactiveerd';
+  const link = (() => {
+    switch (g.uitnodiging) {
+      case 'geen':
+        return 'geen link';
+      case 'open':
+        return `link open tot ${g.uitnodigingVerlooptOp ? formatteerAmsterdam(g.uitnodigingVerlooptOp) : '—'}`;
+      case 'verlopen':
+        return 'link verlopen';
+      case 'gebruikt':
+        return 'link gebruikt';
+    }
+  })();
+  return g.heeftWachtwoord ? `actief · ${link}` : `wacht op wachtwoord · ${link}`;
+}
+
+export interface GebruikerWaarden {
+  naam: string;
+  email: string;
+}
+
+export interface KlantDetailViewOpties {
+  csrfToken: string;
+  klant: KlantRegel;
+  gebruikers: readonly GebruikerRegel[];
+  melding?: { soort: 'ok' | 'fout'; tekst: string };
+  waarden?: GebruikerWaarden;
+}
+
+export function klantDetailView(o: KlantDetailViewOpties): string {
+  const k = o.klant;
+  const basis = `/admin/klanten/${encodeURIComponent(k.slug)}`;
+  const accounts =
+    k.accounts.length === 0
+      ? '<p class="leeg">Geen accounts.</p>'
+      : `<table class="klanten">
+    <thead><tr><th>Accounteigenaar</th><th>Status</th><th>Gekoppeld</th></tr></thead>
+    <tbody>${k.accounts
+      .map(
+        (a) => `
+      <tr><td>${h(a.eigenaarNaam)}${a.eigenaarEmail ? `<br><small>${h(a.eigenaarEmail)}</small>` : ''}</td>
+      <td>${h(STATUS_TEKST[a.status] ?? a.status)}<br><small>${h(a.abonnement)}</small></td>
+      <td>${a.gekoppeld ? 'ja' : `nee<br><small>${h(uitnodigingTekst(a.uitnodiging, a.uitnodigingVerlooptOp))}</small>`}</td></tr>`,
+      )
+      .join('')}</tbody>
+  </table>`;
+  const gebruikers =
+    o.gebruikers.length === 0
+      ? '<p class="leeg">Nog geen portaalgebruikers.</p>'
+      : `<table class="klanten">
+    <thead><tr><th>Gebruiker</th><th>Stand</th><th>Laatst ingelogd</th><th></th></tr></thead>
+    <tbody>${o.gebruikers
+      .map(
+        (g) => `
+      <tr><td>${h(g.naam)}<br><small>${h(g.email)}</small></td>
+      <td>${h(gebruikerLinkStand(g))}</td>
+      <td>${g.laatstIngelogdOp ? h(formatteerAmsterdam(g.laatstIngelogdOp)) : '—'}</td>
+      <td><div class="knoppen">
+        <form method="post" action="${basis}/gebruikers/${h(g.id)}/nieuwe-link">
+          <input type="hidden" name="csrf" value="${h(o.csrfToken)}">
+          <button type="submit" class="secundair">${g.actief ? 'Nieuwe link' : 'Activeren met nieuwe link'}</button>
+        </form>
+        ${
+          g.actief
+            ? `<form method="post" action="${basis}/gebruikers/${h(g.id)}/deactiveren">
+          <input type="hidden" name="csrf" value="${h(o.csrfToken)}">
+          <button type="submit" class="gevaarlijk">Deactiveren</button>
+        </form>`
+            : ''
+        }
+      </div></td></tr>`,
+      )
+      .join('')}</tbody>
+  </table>`;
+  const w = o.waarden ?? { naam: '', email: '' };
+  const inhoud = `
+${adminHeader(k.naam, o.csrfToken)}
+<main>
+  ${o.melding ? `<p class="melding ${o.melding.soort}">${h(o.melding.tekst)}</p>` : ''}
+  <p class="uitleg">${h(k.slug)} · abonnement ${k.abonnementVereist ? 'vereist' : 'niet vereist'}</p>
+  <section>
+    <h2>LinkedIn-accounts</h2>
+    ${accounts}
+  </section>
+  <section>
+    <h2>Portaalgebruikers</h2>
+    ${gebruikers}
+    <p class="uitleg">"Nieuwe link" is ook voor wachtwoord vergeten. Deactiveren logt de gebruiker direct overal uit.</p>
+  </section>
+  <section>
+    <h2>Gebruiker uitnodigen</h2>
+    <form method="post" action="${basis}/gebruikers" class="formulier actie-kaart" autocomplete="off">
+      <input type="hidden" name="csrf" value="${h(o.csrfToken)}">
+      <label for="naam">Naam</label>
+      <input id="naam" name="naam" type="text" required maxlength="200" value="${h(w.naam)}">
+      <label for="email">E-mail</label>
+      <input id="email" name="email" type="email" required maxlength="254" value="${h(w.email)}">
+      <p><button type="submit">Uitnodigingslink maken</button></p>
+    </form>
+  </section>
+  <p><a class="knop secundair" href="/admin/klanten">Terug naar klanten</a></p>
+</main>`;
+  return layout(k.naam, inhoud);
+}
+
+export interface GebruikerLinkViewOpties {
+  csrfToken: string;
+  slug: string;
+  link: string;
+  klantNaam: string;
+  naam: string;
+  email: string;
+  verlooptOp: Date;
+}
+
+export function voorbeeldMailPortaal(o: Omit<GebruikerLinkViewOpties, 'csrfToken' | 'slug'>): string {
+  const voornaam = o.naam.trim().split(/\s+/)[0] ?? o.naam;
+  return `Onderwerp: Uw toegang tot het MARKaaS klantportaal
+
+Beste ${voornaam},
+
+U heeft toegang tot het klantportaal van MARKaaS voor ${o.klantNaam}. Daar ziet u de LinkedIn-berichten die wij voor uw accounts hebben voorbereid. U keurt ze goed of wijst ze af; er wordt niets verstuurd zonder goedkeuring. Ook ziet u per week hoeveel verzoeken zijn verstuurd en geaccepteerd en hoeveel reacties er kwamen.
+
+Via de link hieronder kiest u uw wachtwoord (minimaal 12 tekens). Daarna logt u in met ${o.email}.
+
+${o.link}
+
+De link is persoonlijk, werkt één keer en is geldig tot ${formatteerAmsterdam(o.verlooptOp)}.
+
+Met vriendelijke groet,
+
+Rubert Rietkerk
+MARKaaS`;
+}
+
+export function gebruikerLinkView(o: GebruikerLinkViewOpties): string {
+  const inhoud = `
+${adminHeader('Uitnodigingslink', o.csrfToken)}
+<main>
+  <p class="melding ok">Uitnodigingslink gemaakt voor ${h(o.naam)} (${h(o.email)}), ${h(o.klantNaam)}.
+    Geldig tot ${h(formatteerAmsterdam(o.verlooptOp))}, eenmalig te gebruiken.</p>
+  <p class="melding fout">Kopieer de link nu: hij is hierna niet meer op te vragen (alleen een hash is
+    opgeslagen). Kwijt? Maak bij de klant een nieuwe link.</p>
+  <section class="actie-kaart">
+    <h3>Uitnodigingslink</h3>
+    <textarea id="link" class="kopie" rows="2" readonly>${h(o.link)}</textarea>
+    <p><button type="button" class="secundair" onclick="navigator.clipboard.writeText(document.getElementById('link').value)">Kopieer link</button></p>
+  </section>
+  <section class="actie-kaart">
+    <h3>Voorbeeldmail</h3>
+    <textarea id="mail" class="kopie" rows="18" readonly>${h(voorbeeldMailPortaal(o))}</textarea>
+    <p><button type="button" class="secundair" onclick="navigator.clipboard.writeText(document.getElementById('mail').value)">Kopieer mail</button></p>
+  </section>
+  <p><a class="knop secundair" href="/admin/klanten/${h(o.slug)}">Terug naar ${h(o.klantNaam)}</a></p>
+</main>`;
+  return layout('Uitnodigingslink', inhoud);
+}

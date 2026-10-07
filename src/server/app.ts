@@ -9,6 +9,7 @@ import type { Backend } from '../db/backend.ts';
 import { maakKoppelApp } from '../koppelen/server.ts';
 import type { Logger } from '../log/logger.ts';
 import { maakMcpApp } from '../mcp/server.ts';
+import { maakPortaalApp } from '../portaal/server.ts';
 import type { PauzeKiezer } from '../queue/pauze.ts';
 import type { WerkdagenKiezer } from '../sequences/wachttijd.ts';
 import type { UnipileClient } from '../unipile/client.ts';
@@ -19,8 +20,8 @@ import { maakHealthApp } from './health.ts';
 
 /**
  * Stelt de complete HTTP-app samen: `/health`, `/webhooks/*`, `/mcp`,
- * `/admin/*` en de publieke koppelpagina `/koppelen/*` in één hono-server
- * (SPEC §7, §8, §12, §14.2). Puur samenstellen; het
+ * `/admin/*`, de publieke koppelpagina `/koppelen/*` en het klantportaal
+ * `/portaal/*` in één hono-server (SPEC §7, §8, §12, §14.2, §14.3). Puur samenstellen; het
  * luisteren op een poort gebeurt in `src/main.ts`.
  */
 
@@ -134,6 +135,24 @@ export function maakGatewayApp(deps: GatewayDeps) {
     }),
   );
 
+  app.route(
+    '/',
+    maakPortaalApp({
+      db: deps.db,
+      limieten: deps.limieten,
+      klok: deps.klok,
+      unipile: deps.unipile,
+      koppelOpties: {
+        notifyUrl: koppelNotifyUrl(env.publicBaseUrl, env.webhookSecret),
+        apiUrl: unipileBaseUrl(env.unipileDsn),
+      },
+      cookieSecure: productie,
+      vertrouwProxy: productie,
+      koppeluitnodigingGeldigDagen: deps.juridisch.koppeluitnodiging_geldig_dagen,
+      logger,
+    }),
+  );
+
   app.get('/', (c) => c.redirect('/admin/login', 303));
   app.notFound((c) => c.text('Niet gevonden.', 404));
 
@@ -149,10 +168,12 @@ export function unipileBaseUrl(dsn: string): string {
 const VASTE_KOPPELPADEN = new Set(['/koppelen/klaar', '/koppelen/mislukt']);
 
 /**
- * Het token van de koppelpagina staat in het pad; dat hoort niet in de logs.
- * `/koppelen/<token>` → `/koppelen/…`.
+ * Het token van de koppelpagina en van de portaaluitnodiging staat in het pad;
+ * dat hoort niet in de logs. `/koppelen/<token>` → `/koppelen/…`,
+ * `/portaal/uitnodiging/<token>` → `/portaal/uitnodiging/…`.
  */
 export function maskeerPad(pad: string): string {
+  if (pad.startsWith('/portaal/uitnodiging/')) return '/portaal/uitnodiging/…';
   if (!pad.startsWith('/koppelen/') || VASTE_KOPPELPADEN.has(pad)) return pad;
   return '/koppelen/…';
 }

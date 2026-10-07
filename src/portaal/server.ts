@@ -1,0 +1,442 @@
+import { randomBytes, timingSafeEqual } from 'node:crypto';
+
+import { Hono, type Context } from 'hono';
+import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
+
+import { PogingenTracker } from '../admin/pogingen.ts';
+import { maakWachtwoordHash, verifieerWachtwoord } from '../admin/wachtwoord.ts';
+import type { Klok } from '../budget/klok.ts';
+import type { Limieten } from '../budget/limits.ts';
+import type { Backend } from '../db/backend.ts';
+import type { Logger } from '../log/logger.ts';
+import { KoppelflowFout, type KoppelflowOpties } from '../register/koppelflow.ts';
+import { NieuweKlantFout } from '../register/nieuweklant.ts';
+import { clientIp } from '../server/clientip.ts';
+import type { UnipileClient } from '../unipile/client.ts';
+
+import {
+  PortaalKoppelFout,
+  PortaalNietGevondenFout,
+  conceptenVoorKlant,
+  keurAllesGoedVoorKlant,
+  keurGoedVoorKlant,
+  maakKoppellinkVoorKlant,
+  wijsAfVoorKlant,
+} from './dienst.ts';
+import {
+  gebruikUitnodiging,
+  normaliseerEmail,
+  registreerLogin,
+  valideerNieuwWachtwoord,
+  vindGebruikerVoorLogin,
+  vindGeldigeGebruikerUitnodiging,
+} from './gebruikers.ts';
+import { resultatenVoorKlant } from './resultaten.ts';
+import {
+  PORTAAL_SESSIE_DUUR_MS,
+  maakPortaalSessie,
+  ruimVerlopenSessiesOp,
+  verwijderPortaalSessie,
+  vindPortaalSessie,
+  type PortaalSessie,
+} from './sessies.ts';
+import {
+  conceptenView,
+  loginView,
+  nietGevondenView,
+  ongeldigeUitnodigingView,
+  resultatenView,
+  verlopenFormulierView,
+  wachtwoordKiezenView,
+  type Melding,
+} from './views.ts';
+
+/**
+ * Hono-sub-app voor het klantportaal (SPEC §14.3), onder `/portaal/*`.
+ *
+ * Beveiliging, in lagen zoals de admin (§12):
+ * 1. Sessiecookie `portaal_sessie`: HttpOnly, Secure (productie), SameSite=Strict,
+ *    Path=/portaal, 12 uur. Sessies staan in de database (overleven een herstart).
+ * 2. CSRF-token per sessie, verplicht op elke POST. Vóór het inloggen (login,
+ *    wachtwoord kiezen) een double-submit-token in een aparte cookie.
+ * 3. Brute force: 5 mislukte pogingen per IP óf per e-mailadres → 15 minuten blokkade.
+ *    De foutmelding verraadt niet of het e-mailadres bestaat; ook voor onbekende
+ *    adressen wordt een scrypt-vergelijking gedaan (gelijke tijd).
+ * 4. Afscherming (§14.1): alle gegevens komen via `dienst.ts`/`resultaten.ts`,
+ *    die filteren op de klant van de sessie. Een actie of account van een
+ *    andere klant geeft 404 en verandert niets.
+ */
+
+const SESSIE_COOKIE = 'portaal_sessie';
+const CSRF_COOKIE = 'portaal_csrf';
+const FLASH_COOKIE = 'portaal_flash';
+const PAD = '/portaal';
+const GENERIEKE_LOGINFOUT = 'E-mailadres of wachtwoord klopt niet.';
+
+export interface PortaalDeps {
+  db: Backend;
+  limieten: Limieten;
+  klok: Klok;
+  unipile: UnipileClient;
+  /** Voor reconnect-links (notify_url, api_url). */
+  koppelOpties: KoppelflowOpties;
+  cookieSecure: boolean;
+  /** Zie AdminDeps.vertrouwProxy. Standaard true. */
+  vertrouwProxy?: boolean;
+  /** Geldigheid van nieuwe koppeluitnodigingen (config/juridisch.json). Standaard 7. */
+  koppeluitnodigingGeldigDagen?: number;
+  pogingen?: PogingenTracker;
+  logger?: Logger;
+}
+
+type PortaalContext = Context;
+
+export function maakPortaalApp(deps: PortaalDeps) {
+  const pogingen =
+    deps.pogingen ??
+    new PogingenTracker({ maxFouten: 5, blokkadeMs: 15 * 60 * 1000, klok: deps.klok });
+  // Hash om tegen te vergelijken als het adres onbekend is (gelijke tijd).
+  let dummyHash: Promise<string> | null = null;
+  const vergelijkHash = () => (dummyHash ??= maakWachtwoordHash(randomBytes(24).toString('base64url')));
+
+  const app = new Hono();
+
+  app.use(`${PAD}/*`, async (c, next) => {
+    await next();
+    c.header('Cache-Control', 'no-store');
+    c.header('Referrer-Policy', 'no-referrer');
+    c.header('X-Frame-Options', 'DENY');
+    c.header('X-Content-Type-Options', 'nosniff');
+  });
+
+  app.get(PAD, (c) => c.redirect(`${PAD}/`, 301));
+
+  // -- inloggen ------------------------------------------------------------
+
+  app.get(`${PAD}/login`, async (c) => {
+    if (await laadSessie(c, deps)) return c.redirect(`${PAD}/`, 303);
+    return c.html(loginView({ csrfToken: preCsrf(c, deps) }));
+  });
+
+  app.post(`${PAD}/login`, async (c) => {
+    const form = await c.req.parseBody();
+    const email = normaliseerEmail(tekst(form, 'email'));
+    const wachtwoord = tekst(form, 'wachtwoord');
+    if (!gelijk(tekst(form, 'csrf'), getCookie(c, CSRF_COOKIE) ?? '')) {
+      c.status(403);
+      return c.html(loginView({ csrfToken: preCsrf(c, deps), email, foutmelding: 'Formulier verlopen; probeer opnieuw.' }));
+    }
+    const ipSleutel = `ip:${clientIp(c, deps.vertrouwProxy ?? true) ?? 'onbekend'}`;
+    const emailSleutel = `email:${email}`;
+    const geblokkeerd = [ipSleutel, emailSleutel].filter((s) => pogingen.isGeblokkeerd(s));
+    if (geblokkeerd.length > 0) {
+      c.status(429);
+      return c.html(
+        loginView({
+          csrfToken: preCsrf(c, deps),
+          email,
+          blokkadeSeconden: Math.max(...geblokkeerd.map((s) => pogingen.resterendSeconden(s))),
+        }),
+      );
+    }
+
+    const gevonden = email ? await vindGebruikerVoorLogin(deps.db, email) : null;
+    const hash = gevonden?.wachtwoordHash ?? (await vergelijkHash());
+    const wachtwoordJuist = await verifieerWachtwoord(hash, wachtwoord);
+    const juist =
+      wachtwoordJuist &&
+      gevonden !== null &&
+      gevonden.wachtwoordHash !== null &&
+      gevonden.gebruiker.actief &&
+      gevonden.klantActief;
+    if (!juist || !gevonden) {
+      pogingen.registreerFout(ipSleutel);
+      pogingen.registreerFout(emailSleutel);
+      c.status(401);
+      return c.html(loginView({ csrfToken: preCsrf(c, deps), email, foutmelding: GENERIEKE_LOGINFOUT }));
+    }
+    pogingen.reset(ipSleutel);
+    pogingen.reset(emailSleutel);
+    await registreerLogin(deps.db, gevonden.gebruiker.id, deps.klok);
+    return await startSessie(c, deps, gevonden.gebruiker.id);
+  });
+
+  app.post(`${PAD}/logout`, async (c) => {
+    const sessie = await laadSessie(c, deps);
+    if (sessie) {
+      const form = await c.req.parseBody();
+      if (!gelijk(tekst(form, 'csrf'), sessie.csrfToken)) return csrfFout(c);
+      await verwijderPortaalSessie(deps.db, getCookie(c, SESSIE_COOKIE));
+    }
+    deleteCookie(c, SESSIE_COOKIE, { path: PAD });
+    return c.redirect(`${PAD}/login`, 303);
+  });
+
+  // -- uitnodiging: wachtwoord kiezen --------------------------------------
+
+  app.get(`${PAD}/uitnodiging/:token`, async (c) => {
+    const token = c.req.param('token');
+    const u = await vindGeldigeGebruikerUitnodiging(deps.db, token, deps.klok);
+    if (!u) return ongeldig(c);
+    return c.html(
+      wachtwoordKiezenView({ token, csrfToken: preCsrf(c, deps), naam: u.naam, email: u.email, klantNaam: u.klantNaam }),
+    );
+  });
+
+  app.post(`${PAD}/uitnodiging/:token`, async (c) => {
+    const token = c.req.param('token');
+    const u = await vindGeldigeGebruikerUitnodiging(deps.db, token, deps.klok);
+    if (!u) return ongeldig(c);
+    const form = await c.req.parseBody();
+    if (!gelijk(tekst(form, 'csrf'), getCookie(c, CSRF_COOKIE) ?? '')) {
+      c.status(403);
+      return c.html(verlopenFormulierView());
+    }
+    const fout = valideerNieuwWachtwoord(tekst(form, 'wachtwoord'), tekst(form, 'herhaling'));
+    if (fout) {
+      c.status(400);
+      return c.html(
+        wachtwoordKiezenView({
+          token,
+          csrfToken: preCsrf(c, deps),
+          naam: u.naam,
+          email: u.email,
+          klantNaam: u.klantNaam,
+          foutmelding: fout,
+        }),
+      );
+    }
+    const hash = await maakWachtwoordHash(tekst(form, 'wachtwoord'));
+    const gebruiker = await gebruikUitnodiging(deps.db, token, hash, deps.klok);
+    // Tussen controle en opslaan door iemand anders gebruikt (dubbel verzonden).
+    if (!gebruiker) return ongeldig(c);
+    deps.logger?.info('Klantportaal: wachtwoord gekozen via uitnodiging', { client_user_id: gebruiker.id });
+    await registreerLogin(deps.db, gebruiker.id, deps.klok);
+    return await startSessie(c, deps, gebruiker.id);
+  });
+
+  // -- concepten -----------------------------------------------------------
+
+  app.get(`${PAD}/`, async (c) => {
+    const sessie = await laadSessie(c, deps);
+    if (!sessie) return naarLogin(c);
+    const concepten = await conceptenVoorKlant(deps.db, sessie.clientId, {
+      limieten: deps.limieten,
+      klok: deps.klok,
+    });
+    const opts: Parameters<typeof conceptenView>[0] = {
+      klantNaam: sessie.klantNaam,
+      csrfToken: sessie.csrfToken,
+      concepten,
+    };
+    const melding = leesFlash(c);
+    if (melding) opts.melding = melding;
+    return c.html(conceptenView(opts));
+  });
+
+  app.post(`${PAD}/acties/goedkeuren`, async (c) => {
+    const sessie = await laadSessie(c, deps);
+    if (!sessie) return naarLogin(c);
+    const form = await c.req.parseBody();
+    if (!gelijk(tekst(form, 'csrf'), sessie.csrfToken)) return csrfFout(c);
+    try {
+      await keurGoedVoorKlant(deps.db, sessie, tekst(form, 'actieId'), {
+        limieten: deps.limieten,
+        klok: deps.klok,
+      });
+      zetFlash(c, deps, { soort: 'ok', tekst: 'Concept goedgekeurd. Het wordt verstuurd binnen de afgesproken limieten.' });
+    } catch (err) {
+      if (err instanceof PortaalNietGevondenFout) return nietGevonden(c, err);
+      zetFlash(c, deps, { soort: 'fout', tekst: (err as Error).message });
+    }
+    return c.redirect(`${PAD}/`, 303);
+  });
+
+  app.post(`${PAD}/acties/afwijzen`, async (c) => {
+    const sessie = await laadSessie(c, deps);
+    if (!sessie) return naarLogin(c);
+    const form = await c.req.parseBody();
+    if (!gelijk(tekst(form, 'csrf'), sessie.csrfToken)) return csrfFout(c);
+    try {
+      await wijsAfVoorKlant(deps.db, sessie, tekst(form, 'actieId'), tekst(form, 'reden').slice(0, 500), {
+        limieten: deps.limieten,
+      });
+      zetFlash(c, deps, { soort: 'ok', tekst: 'Concept afgewezen; het wordt niet verstuurd.' });
+    } catch (err) {
+      if (err instanceof PortaalNietGevondenFout) return nietGevonden(c, err);
+      zetFlash(c, deps, { soort: 'fout', tekst: (err as Error).message });
+    }
+    return c.redirect(`${PAD}/`, 303);
+  });
+
+  app.post(`${PAD}/acties/goedkeuren-alles`, async (c) => {
+    const sessie = await laadSessie(c, deps);
+    if (!sessie) return naarLogin(c);
+    const form = await c.req.parseBody({ all: true });
+    if (!gelijk(tekst(form, 'csrf'), sessie.csrfToken)) return csrfFout(c);
+    const ruw = form['ids'];
+    const ids = (Array.isArray(ruw) ? ruw : [ruw]).filter((v): v is string => typeof v === 'string');
+    if (ids.length === 0) {
+      zetFlash(c, deps, { soort: 'fout', tekst: 'Er waren geen concepten om goed te keuren.' });
+      return c.redirect(`${PAD}/`, 303);
+    }
+    try {
+      const r = await keurAllesGoedVoorKlant(deps.db, sessie, ids, { limieten: deps.limieten, klok: deps.klok });
+      const overgeslagen = r.overgeslagen.length;
+      zetFlash(c, deps, {
+        soort: overgeslagen === 0 ? 'ok' : 'fout',
+        tekst:
+          `${r.goedgekeurd.length} ${r.goedgekeurd.length === 1 ? 'concept' : 'concepten'} goedgekeurd.` +
+          (overgeslagen > 0 ? ` ${overgeslagen} niet goedgekeurd: ${r.overgeslagen.map((o) => o.reden).join(' ')}` : ''),
+      });
+    } catch (err) {
+      if (err instanceof PortaalNietGevondenFout) return nietGevonden(c, err);
+      throw err;
+    }
+    return c.redirect(`${PAD}/`, 303);
+  });
+
+  // -- resultaten ----------------------------------------------------------
+
+  app.get(`${PAD}/resultaten`, async (c) => {
+    const sessie = await laadSessie(c, deps);
+    if (!sessie) return naarLogin(c);
+    const opts: Parameters<typeof resultatenView>[0] = {
+      klantNaam: sessie.klantNaam,
+      csrfToken: sessie.csrfToken,
+      accounts: await resultatenVoorKlant(deps.db, sessie.clientId, deps.klok),
+    };
+    const melding = leesFlash(c);
+    if (melding) opts.melding = melding;
+    return c.html(resultatenView(opts));
+  });
+
+  app.post(`${PAD}/accounts/:accountId/opnieuw-koppelen`, async (c) => {
+    const sessie = await laadSessie(c, deps);
+    if (!sessie) return naarLogin(c);
+    const form = await c.req.parseBody();
+    if (!gelijk(tekst(form, 'csrf'), sessie.csrfToken)) return csrfFout(c);
+    const accountId = c.req.param('accountId');
+    try {
+      const { url } = await maakKoppellinkVoorKlant(
+        {
+          db: deps.db,
+          unipile: deps.unipile,
+          koppelOpties: deps.koppelOpties,
+          uitnodigingOpties: { klok: deps.klok, geldigDagen: deps.koppeluitnodigingGeldigDagen ?? 7 },
+          klok: deps.klok,
+        },
+        sessie.clientId,
+        accountId,
+      );
+      deps.logger?.info('Klantportaal: (her)koppellink gemaakt', { account_id: accountId });
+      return c.redirect(url, 303);
+    } catch (err) {
+      if (err instanceof PortaalNietGevondenFout) return nietGevonden(c, err);
+      if (err instanceof PortaalKoppelFout || err instanceof KoppelflowFout || err instanceof NieuweKlantFout) {
+        zetFlash(c, deps, { soort: 'fout', tekst: err.message });
+        return c.redirect(`${PAD}/resultaten`, 303);
+      }
+      deps.logger?.warn('Klantportaal: (her)koppellink maken mislukt', {
+        account_id: accountId,
+        fout: (err as Error).message,
+      });
+      zetFlash(c, deps, {
+        soort: 'fout',
+        tekst: 'Het maken van de koppellink lukte niet. Probeer het later opnieuw of neem contact op met MARKaaS.',
+      });
+      return c.redirect(`${PAD}/resultaten`, 303);
+    }
+  });
+
+  return app;
+}
+
+// -- hulpjes ---------------------------------------------------------------
+
+async function laadSessie(c: PortaalContext, deps: PortaalDeps): Promise<PortaalSessie | null> {
+  return await vindPortaalSessie(deps.db, getCookie(c, SESSIE_COOKIE), deps.klok);
+}
+
+async function startSessie(c: PortaalContext, deps: PortaalDeps, gebruikerId: string): Promise<Response> {
+  // Verlopen sessies opruimen bij elke nieuwe login (weinig gebruikers, goedkoop).
+  await ruimVerlopenSessiesOp(deps.db, deps.klok);
+  // Altijd een nieuw token (geen session fixation).
+  const sessie = await maakPortaalSessie(deps.db, gebruikerId, { klok: deps.klok });
+  setCookie(c, SESSIE_COOKIE, sessie.token, {
+    httpOnly: true,
+    secure: deps.cookieSecure,
+    sameSite: 'Strict',
+    path: PAD,
+    maxAge: Math.floor(PORTAAL_SESSIE_DUUR_MS / 1000),
+  });
+  deleteCookie(c, CSRF_COOKIE, { path: PAD });
+  return c.redirect(`${PAD}/`, 303) as Response;
+}
+
+function naarLogin(c: PortaalContext): Response {
+  return c.redirect(`${PAD}/login`, 303) as Response;
+}
+
+function ongeldig(c: PortaalContext): Response {
+  c.status(410);
+  return c.html(ongeldigeUitnodigingView()) as Response;
+}
+
+function nietGevonden(c: PortaalContext, err: Error): Response {
+  c.status(404);
+  return c.html(nietGevondenView(err.message)) as Response;
+}
+
+function csrfFout(c: PortaalContext): Response {
+  c.status(403);
+  return c.html(verlopenFormulierView()) as Response;
+}
+
+function preCsrf(c: PortaalContext, deps: PortaalDeps): string {
+  const bestaand = getCookie(c, CSRF_COOKIE);
+  if (bestaand) return bestaand;
+  const nieuw = randomBytes(24).toString('base64url');
+  setCookie(c, CSRF_COOKIE, nieuw, {
+    httpOnly: true,
+    secure: deps.cookieSecure,
+    sameSite: 'Strict',
+    path: PAD,
+    maxAge: 60 * 60,
+  });
+  return nieuw;
+}
+
+function gelijk(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
+
+function tekst(form: Record<string, unknown>, veld: string): string {
+  const w = form[veld];
+  if (typeof w === 'string') return w;
+  if (Array.isArray(w) && typeof w[0] === 'string') return w[0];
+  return '';
+}
+
+function zetFlash(c: PortaalContext, deps: PortaalDeps, melding: Melding): void {
+  setCookie(c, FLASH_COOKIE, `${melding.soort}:${melding.tekst}`, {
+    httpOnly: true,
+    secure: deps.cookieSecure,
+    sameSite: 'Strict',
+    path: PAD,
+    maxAge: 30,
+  });
+}
+
+function leesFlash(c: PortaalContext): Melding | undefined {
+  const w = getCookie(c, FLASH_COOKIE);
+  if (!w) return undefined;
+  deleteCookie(c, FLASH_COOKIE, { path: PAD });
+  const [soort, ...rest] = w.split(':');
+  if (soort !== 'ok' && soort !== 'fout') return undefined;
+  return { soort, tekst: rest.join(':') };
+}

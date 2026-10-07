@@ -16,15 +16,23 @@ import type { Abonnement } from '../register/accounts.ts';
 import { stopSequentieNaAfwijzing } from '../sequences/motor.ts';
 
 /**
- * Dienstlaag voor de goedkeuringspagina (SPEC §12).
+ * Dienstlaag voor de goedkeuringspagina (SPEC §12) en het klantportaal
+ * (SPEC §14.3).
  *
- * Dit is de ENIGE plek in de code waar `goedkeurd_door = 'rubert'` wordt
- * gezet. Alle andere modules (planner, worker, MCP-tools) laten het veld
- * leeg of lezen het alleen. Zie `admin/dienst.test.ts` voor de scan die
- * deze regel afdwingt.
+ * Dit is de ENIGE plek in de code waar `goedkeurd_door` wordt gezet:
+ * standaard `rubert` (admin), of `klant:<e-mail>` als het klantportaal een
+ * `door` meegeeft (SPEC §14.1). Alle andere modules (planner, worker,
+ * MCP-tools) laten het veld leeg of lezen het alleen. Zie
+ * `admin/dienst.test.ts` voor de scan die deze regel afdwingt.
  */
 
 export const GOEDKEURDER_RUBERT = 'rubert' as const;
+export const GOEDKEURDER_KLANT_PREFIX = 'klant:' as const;
+
+/** `klant:<e-mail>` voor `goedgekeurd_door`/`afgewezen_door` (SPEC §14.1). */
+export function goedkeurderKlant(email: string): string {
+  return `${GOEDKEURDER_KLANT_PREFIX}${email.trim().toLowerCase()}`;
+}
 
 export type AdminActieType = Extract<ActieType, 'invite' | 'message' | 'inmail'>;
 
@@ -115,20 +123,30 @@ export interface LijstDraftsOpties {
   limieten: Limieten;
   klok: Klok;
   accountId?: string;
+  /** Alleen concepten van accounts van deze klant (klantportaal, SPEC §14.1). */
+  clientId?: string;
 }
 
 export async function lijstDrafts(
   db: Backend,
   opties: LijstDraftsOpties,
 ): Promise<DraftWeergave[]> {
+  const params: string[] = [];
+  const filters: string[] = [];
+  if (opties.accountId) {
+    params.push(opties.accountId);
+    filters.push(`and a.account_id = $${params.length}`);
+  }
+  if (opties.clientId) {
+    params.push(opties.clientId);
+    filters.push(`and acc.client_id = $${params.length}`);
+  }
   const sql = `select ${LIJST_KOLOMMEN}
     ${LIJST_FROM}
     where a.status = 'draft'::action_status
-      ${opties.accountId ? 'and a.account_id = $1' : ''}
+      ${filters.join(' ')}
     order by a.aangemaakt_op asc`;
-  const rijen = opties.accountId
-    ? await db.query<ActieRij>(sql, [opties.accountId])
-    : await db.query<ActieRij>(sql);
+  const rijen = await db.query<ActieRij>(sql, params);
   const uit: DraftWeergave[] = [];
   for (const rij of rijen) {
     if (!isAdminType(rij.type)) continue; // search/profile horen hier niet.
@@ -216,6 +234,8 @@ export interface GoedkeurenOpties {
    * nooit vertrouwen op JS-counter in de browser".
    */
   limieten?: Limieten;
+  /** Wie keurt goed. Standaard `rubert`; het portaal geeft `klant:<e-mail>`. */
+  door?: string;
 }
 
 export async function goedkeur(
@@ -229,7 +249,7 @@ export async function goedkeur(
     await controleerBestaandeTekst(db, actieId, opts.limieten);
   }
   const nu = opts.klok?.nu() ?? new Date();
-  return await keurActieGoed(db, actieId, GOEDKEURDER_RUBERT, nu);
+  return await keurActieGoed(db, actieId, opts.door ?? GOEDKEURDER_RUBERT, nu);
 }
 
 export interface GoedkeurBatchResultaat {
@@ -240,13 +260,15 @@ export interface GoedkeurBatchResultaat {
 export async function goedkeurBatch(
   db: Backend,
   actieIds: readonly string[],
-  opts: { klok?: Klok } = {},
+  opts: { klok?: Klok; door?: string; limieten?: Limieten } = {},
 ): Promise<GoedkeurBatchResultaat> {
   const resultaat: GoedkeurBatchResultaat = { goedgekeurd: [], overgeslagen: [] };
   for (const id of actieIds) {
     try {
+      // Met limieten (portaal): zelfde tekstcontrole als bij losse goedkeuring.
+      if (opts.limieten) await controleerBestaandeTekst(db, id, opts.limieten);
       const nu = opts.klok?.nu() ?? new Date();
-      await keurActieGoed(db, id, GOEDKEURDER_RUBERT, nu);
+      await keurActieGoed(db, id, opts.door ?? GOEDKEURDER_RUBERT, nu);
       resultaat.goedgekeurd.push(id);
     } catch (err) {
       resultaat.overgeslagen.push({ actieId: id, reden: (err as Error).message });
@@ -264,8 +286,9 @@ export async function wijsAf(
   db: Backend,
   actieId: string,
   reden: string,
-  opts: { limieten: Limieten },
+  opts: { limieten: Limieten; door?: string },
 ): Promise<Actie> {
+  const door = opts.door ?? GOEDKEURDER_RUBERT;
   const schoongemaakt = reden.trim();
   if (!schoongemaakt) {
     throw new Error('Reden voor afwijzen is verplicht.');
@@ -278,8 +301,11 @@ export async function wijsAf(
     );
   }
   return await db.transaction(async (tx) => {
-    const afgewezen = await zetActieStatus(tx, actieId, 'rejected', { reden: schoongemaakt });
-    await stopSequentieNaAfwijzing(tx, opts.limieten, { actieId, reden: schoongemaakt });
+    const afgewezen = await zetActieStatus(tx, actieId, 'rejected', {
+      reden: schoongemaakt,
+      afgewezenDoor: door,
+    });
+    await stopSequentieNaAfwijzing(tx, opts.limieten, { actieId, reden: schoongemaakt, door });
     return afgewezen;
   });
 }

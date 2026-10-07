@@ -14,6 +14,14 @@ import {
 } from '../register/nieuweklant.ts';
 import { ABONNEMENTEN, maakSlug } from '../register/registreer.ts';
 import type { NieuweUitnodiging } from '../register/uitnodiging.ts';
+import {
+  PortaalGebruikerFout,
+  deactiveerGebruiker,
+  lijstGebruikers,
+  maakNieuweGebruikerLink,
+  nodigGebruikerUit,
+  type PortaalGebruiker,
+} from '../portaal/gebruikers.ts';
 import { clientIp } from '../server/clientip.ts';
 
 import {
@@ -30,6 +38,8 @@ import { SessieStore, type Sessie } from './sessie.ts';
 import { verifieerWachtwoord } from './wachtwoord.ts';
 import { haalAccountVoorKoppellink, lijstKlanten } from './klanten.ts';
 import {
+  gebruikerLinkView,
+  klantDetailView,
   klantenView,
   koppellinkView,
   loginView,
@@ -371,6 +381,142 @@ export function maakAdminApp(deps: AdminDeps) {
         }),
       );
     }
+  });
+
+  // -- klantdetail en portaalgebruikers (SPEC §14.3) ------------------------
+
+  async function vindKlant(slug: string) {
+    return (await lijstKlanten(deps.db, deps.klok)).find((k) => k.slug === slug) ?? null;
+  }
+
+  async function toonKlantDetail(
+    c: AdminContext,
+    sessie: Sessie,
+    slug: string,
+    extra: Pick<Parameters<typeof klantDetailView>[0], 'melding' | 'waarden'> = {},
+  ): Promise<Response> {
+    const klant = await vindKlant(slug);
+    if (!klant) {
+      c.status(404);
+      return c.text('Onbekende klant.') as Response;
+    }
+    const opts: Parameters<typeof klantDetailView>[0] = {
+      csrfToken: sessie.csrfToken,
+      klant,
+      gebruikers: await lijstGebruikers(deps.db, klant.id, deps.klok),
+    };
+    if (extra.melding) opts.melding = extra.melding;
+    if (extra.waarden) opts.waarden = extra.waarden;
+    return c.html(klantDetailView(opts)) as Response;
+  }
+
+  function toonGebruikerLink(
+    c: AdminContext,
+    sessie: Sessie,
+    klant: { naam: string; slug: string },
+    gebruiker: PortaalGebruiker,
+    link: { token: string; verlooptOp: Date },
+  ): Response {
+    // Het token staat alleen in deze ene response; niet laten cachen.
+    c.header('Cache-Control', 'no-store');
+    c.header('Referrer-Policy', 'no-referrer');
+    return c.html(
+      gebruikerLinkView({
+        csrfToken: sessie.csrfToken,
+        slug: klant.slug,
+        link: `${basisUrl}/portaal/uitnodiging/${link.token}`,
+        klantNaam: klant.naam,
+        naam: gebruiker.naam,
+        email: gebruiker.email,
+        verlooptOp: link.verlooptOp,
+      }),
+    ) as Response;
+  }
+
+  app.get('/admin/klanten/:slug', async (c) => {
+    const sessie = laadSessie(c, sessies);
+    if (!sessie) return c.redirect('/admin/login', 303);
+    const melding = flashUitCookie(c);
+    return await toonKlantDetail(c, sessie, c.req.param('slug'), melding ? { melding } : {});
+  });
+
+  app.post('/admin/klanten/:slug/gebruikers', async (c) => {
+    const sessie = laadSessie(c, sessies);
+    if (!sessie) return c.redirect('/admin/login', 303);
+    const form = await c.req.parseBody();
+    if (!csrfConstanteTijdGelijk(getString(form, 'csrf'), sessie.csrfToken)) {
+      c.status(403);
+      return c.text('CSRF-token ontbreekt of klopt niet.');
+    }
+    const slug = c.req.param('slug');
+    const klant = await vindKlant(slug);
+    if (!klant) {
+      c.status(404);
+      return c.text('Onbekende klant.');
+    }
+    const waarden = { naam: getString(form, 'naam').trim(), email: getString(form, 'email').trim() };
+    try {
+      const r = await nodigGebruikerUit(deps.db, { clientId: klant.id, ...waarden }, uitnodigingOpties());
+      return toonGebruikerLink(c, sessie, klant, r.gebruiker, r.uitnodiging);
+    } catch (err) {
+      if (!(err instanceof PortaalGebruikerFout)) throw err;
+      c.status(400);
+      return await toonKlantDetail(c, sessie, slug, {
+        melding: { soort: 'fout', tekst: err.message },
+        waarden,
+      });
+    }
+  });
+
+  app.post('/admin/klanten/:slug/gebruikers/:gebruikerId/nieuwe-link', async (c) => {
+    const sessie = laadSessie(c, sessies);
+    if (!sessie) return c.redirect('/admin/login', 303);
+    const form = await c.req.parseBody();
+    if (!csrfConstanteTijdGelijk(getString(form, 'csrf'), sessie.csrfToken)) {
+      c.status(403);
+      return c.text('CSRF-token ontbreekt of klopt niet.');
+    }
+    const slug = c.req.param('slug');
+    const klant = await vindKlant(slug);
+    if (!klant) {
+      c.status(404);
+      return c.text('Onbekende klant.');
+    }
+    try {
+      const r = await maakNieuweGebruikerLink(deps.db, klant.id, c.req.param('gebruikerId'), uitnodigingOpties());
+      return toonGebruikerLink(c, sessie, klant, r.gebruiker, r);
+    } catch (err) {
+      if (!(err instanceof PortaalGebruikerFout)) throw err;
+      zetFlash(c, deps, { soort: 'fout', tekst: err.message });
+      return c.redirect(`/admin/klanten/${encodeURIComponent(slug)}`, 303);
+    }
+  });
+
+  app.post('/admin/klanten/:slug/gebruikers/:gebruikerId/deactiveren', async (c) => {
+    const sessie = laadSessie(c, sessies);
+    if (!sessie) return c.redirect('/admin/login', 303);
+    const form = await c.req.parseBody();
+    if (!csrfConstanteTijdGelijk(getString(form, 'csrf'), sessie.csrfToken)) {
+      c.status(403);
+      return c.text('CSRF-token ontbreekt of klopt niet.');
+    }
+    const slug = c.req.param('slug');
+    const klant = await vindKlant(slug);
+    if (!klant) {
+      c.status(404);
+      return c.text('Onbekende klant.');
+    }
+    try {
+      const g = await deactiveerGebruiker(deps.db, klant.id, c.req.param('gebruikerId'), deps.klok);
+      zetFlash(c, deps, {
+        soort: 'ok',
+        tekst: `${g.naam} is gedeactiveerd en overal uitgelogd. Met "Activeren met nieuwe link" krijgt de gebruiker weer toegang.`,
+      });
+    } catch (err) {
+      if (!(err instanceof PortaalGebruikerFout)) throw err;
+      zetFlash(c, deps, { soort: 'fout', tekst: err.message });
+    }
+    return c.redirect(`/admin/klanten/${encodeURIComponent(slug)}`, 303);
   });
 
   app.post('/admin/klanten/:accountId/koppellink', async (c) => {

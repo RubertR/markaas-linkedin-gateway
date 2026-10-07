@@ -413,6 +413,83 @@ describe('wijsAf van een sequentie-stap', () => {
   });
 });
 
+describe('door-parameter (SPEC §14.1: rubert of klant:<e-mail>)', () => {
+  const KLANT = 'klant:eva@acme.nl';
+
+  it('goedkeur zonder door blijft "rubert"; met door legt de klant vast', async () => {
+    const a = await maakDraft('invite', { providerId: 'A' });
+    const b = await maakDraft('invite', { providerId: 'B' });
+    assert.equal((await goedkeur(db, a.id, { klok })).goedgekeurdDoor, 'rubert');
+    assert.equal((await goedkeur(db, b.id, { klok, door: KLANT })).goedgekeurdDoor, KLANT);
+  });
+
+  it('goedkeurBatch legt de meegegeven goedkeurder vast', async () => {
+    const a = await maakDraft('invite', { providerId: 'A' });
+    const r = await goedkeurBatch(db, [a.id], { klok, door: KLANT });
+    assert.deepEqual(r.goedgekeurd, [a.id]);
+    assert.equal((await vindActie(db, a.id))?.goedgekeurdDoor, KLANT);
+  });
+
+  it('goedkeurBatch met limieten slaat een te lange tekst over', async () => {
+    const lang = await maakDraft('invite', { providerId: 'A', message: 'x'.repeat(301) });
+    const kort = await maakDraft('invite', { providerId: 'B', message: 'kort' });
+    const r = await goedkeurBatch(db, [lang.id, kort.id], { klok, limieten });
+    assert.deepEqual(r.goedgekeurd, [kort.id]);
+    assert.equal(r.overgeslagen[0]?.actieId, lang.id);
+    assert.match(r.overgeslagen[0]!.reden, /maximum/);
+    assert.equal((await vindActie(db, lang.id))?.status, 'draft');
+  });
+
+  it('wijsAf legt afgewezen_door vast: standaard rubert, anders de klant', async () => {
+    const a = await maakDraft('invite', { providerId: 'A' });
+    const b = await maakDraft('invite', { providerId: 'B' });
+    assert.equal((await wijsAf(db, a.id, 'nee', { limieten })).afgewezenDoor, 'rubert');
+    assert.equal((await wijsAf(db, b.id, 'nee', { limieten, door: KLANT })).afgewezenDoor, KLANT);
+  });
+
+  it('wijsAf van een sequentie-stap zet afgewezen_door ook op de meegewezen stappen', async () => {
+    const uit = await startSequentie(db, {
+      accountId,
+      lead: {
+        providerId: 'ACo-x',
+        naam: 'X',
+        functie: 'CTO',
+        bedrijf: 'Flux',
+        linkedinUrl: 'https://www.linkedin.com/in/x/',
+        waarom: 'w',
+      },
+      teksten: { invite: 'Hoi', bericht: 'Dank', opvolging: 'Reminder' },
+    });
+    const extra = await maakActie(db, {
+      accountId,
+      type: 'message',
+      payload: { ...ontvangerVelden(), chatId: 'C-1', tekst: 'x' },
+    });
+    await db.query(`update actions set sequence_id = $2, sequence_stap = 2 where id = $1`, [
+      extra.id,
+      uit.sequentie.id,
+    ]);
+    await wijsAf(db, uit.invite!.id, 'andere toon', { limieten, door: KLANT });
+    const na = await vindActie(db, extra.id);
+    assert.equal(na?.status, 'rejected');
+    assert.equal(na?.afgewezenDoor, KLANT);
+  });
+
+  it('lijstDrafts filtert op clientId', async () => {
+    await maakDraft('invite', { providerId: 'A' });
+    const andere = await maakClient(db, { naam: 'Ander', slug: 'ander' });
+    const acc = await registreerAccount(db, {
+      clientId: andere.id,
+      eigenaarNaam: 'Ander',
+      abonnement: 'free',
+    });
+    await maakActie(db, { accountId: acc.id, type: 'invite', payload: { providerId: 'B' } });
+    const alleen = await lijstDrafts(db, { limieten, klok, clientId: andere.id });
+    assert.equal(alleen.length, 1);
+    assert.equal(alleen[0]?.clientNaam, 'Ander');
+  });
+});
+
 describe('markeerOnzekerAlsDone / herapproveOnzeker', () => {
   async function maakOnzekerActie() {
     const d = await maakDraft('invite', { providerId: 'A' });
