@@ -19,8 +19,8 @@ describe('laadLimieten', () => {
     assert.equal(limieten.tijdvenster.pauze_mcp_sync_seconden.search.min, 120);
     assert.equal(limieten.tijdvenster.pauze_mcp_sync_seconden.search.max, 480);
     assert.equal(limieten.unipile_usage_signaal.afremmen_bij_percentage, 75);
-    assert.equal(limieten.verzoeken_sync.pagina_grootte, 250);
-    assert.equal(limieten.verzoeken_sync.max_paginas, 2);
+    assert.equal(limieten.verzoeken_sync.pagina_grootte, 100);
+    assert.equal(limieten.verzoeken_sync.max_paginas, 5);
     assert.equal(limieten.tekst_max_tekens.invite, 300);
     assert.equal(limieten.tekst_max_tekens.message, 8000);
     assert.equal(limieten.tekst_max_tekens.inmail, 2000);
@@ -107,7 +107,7 @@ describe('limietenUitObject', () => {
         },
       },
       unipile_usage_signaal: { afremmen_bij_percentage: 75, nieuwe_factor_bij_afremmen: 0.5 },
-      verzoeken_sync: { pagina_grootte: 250, max_paginas: 2 },
+      verzoeken_sync: { pagina_grootte: 100, max_paginas: 5 },
       abonnementen: {
         free: {},
       },
@@ -121,9 +121,9 @@ describe('limietenUitObject', () => {
     assert.throws(() => limietenUitObject(basis), /invite.*ontbreekt/);
   });
 
-  it('werpt NL-fout als verzoeken_sync.pagina_grootte boven 250 ligt (Unipile-maximum)', () => {
+  it('werpt NL-fout als verzoeken_sync.pagina_grootte boven 100 ligt (Unipile-maximum)', () => {
     const basis = basisConfig();
-    basis['verzoeken_sync'] = { pagina_grootte: 500, max_paginas: 2 };
+    basis['verzoeken_sync'] = { pagina_grootte: 250, max_paginas: 2 };
     assert.throws(() => limietenUitObject(basis), /pagina_grootte/);
   });
 
@@ -197,7 +197,7 @@ function basisConfig(): Record<string, Record<string, unknown>> & {
       afremmen_bij_percentage: 75,
       nieuwe_factor_bij_afremmen: 0.5,
     },
-    verzoeken_sync: { pagina_grootte: 250, max_paginas: 2 },
+    verzoeken_sync: { pagina_grootte: 100, max_paginas: 5 },
     abonnementen: {
       free: perAbonnement(),
       premium_career: perAbonnement(),

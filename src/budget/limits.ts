@@ -206,7 +206,7 @@ function parseVerzoekenSync(raw: unknown): VerzoekenSync {
   if (!isRecord(raw)) {
     throw new Error('Veld "verzoeken_sync" ontbreekt in limieten-configuratie.');
   }
-  const paginaGrootte = getalInBereik(raw, 'pagina_grootte', 1, 250);
+  const paginaGrootte = getalInBereik(raw, 'pagina_grootte', 1, 100);
   const maxPaginas = positiefGetal(raw, 'max_paginas');
   if (!Number.isInteger(paginaGrootte) || !Number.isInteger(maxPaginas)) {
     throw new Error('Velden "verzoeken_sync.pagina_grootte" en "max_paginas" moeten gehele getallen zijn.');

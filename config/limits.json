@@ -60,9 +60,9 @@
   },
 
   "verzoeken_sync": {
-    "$toelichting": "Dagelijkse sync van openstaande_verzoeken met GET /api/v1/users/invite/sent (SPEC §5a). Eén keer per werkdag per account binnen het tijdvenster. Unipile staat maximaal 250 items per pagina toe; 2 pagina's dekken het maximum van 500 openstaande verzoeken. Daarboven blijft de teller een ondergrens (≥ 500), wat invites al tegenhoudt.",
-    "pagina_grootte": 250,
-    "max_paginas": 2
+    "$toelichting": "Dagelijkse sync van openstaande_verzoeken met GET /api/v1/users/invite/sent (SPEC §5a). Eén keer per werkdag per account binnen het tijdvenster. Unipile staat op dit endpoint maximaal 100 items per pagina toe (HTTP 400 bij meer, waargenomen 7 okt 2026); 5 pagina's dekken het maximum van 500 openstaande verzoeken. Daarboven blijft de teller een ondergrens (≥ 500), wat invites al tegenhoudt.",
+    "pagina_grootte": 100,
+    "max_paginas": 5
   },
 
   "abonnementen": {

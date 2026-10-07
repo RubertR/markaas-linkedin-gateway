@@ -241,6 +241,10 @@ Niet geabonneerd: `creation_success`/`creation_fail` (komen via de koppel-callba
 - `new_relation` kan tot 8 uur na de acceptatie binnenkomen; het eerste eigen bericht blijft het
   snelste signaal.
 
+**`GET /api/v1/users/invite/sent` (7 okt 2026):** `limit` moet tussen 1 en 100 liggen;
+`limit=250` gaf HTTP 400 `errors/invalid_parameters` (schema minimum 1, maximum 100).
+De verzoekensync gebruikt daarom 100 per pagina en maximaal 5 pagina's (= 500).
+
 ## Hosted auth (koppelen en opnieuw koppelen)
 
 *Getest 30 sep 2026, v1: twee links aangemaakt, niet gebruikt.*
