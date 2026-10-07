@@ -47,7 +47,7 @@ beforeEach(async () => {
   await db.query('delete from clients');
   fake.reset();
 
-  const client = await maakClient(db, { naam: 'Markaas Test', slug: 'markaas-test' });
+  const client = await maakClient(db, { naam: 'Markaas Test', slug: 'markaas-test', abonnementVereist: false });
   clientSlug = client.slug;
   const account = await registreerAccount(db, {
     clientId: client.id,
@@ -647,5 +647,41 @@ describe('get_results', () => {
     assert.ok(actie['sequentieId']);
     assert.equal(actie['sequentieStap'], 1);
     assert.ok(actie['sequentieGestartOp']);
+  });
+});
+
+describe('get_budget — betaalpoort (SPEC §14.4)', () => {
+  type Teller = { gebruikt: number; norm: number; resterend: number };
+  type Budget = {
+    reden?: string;
+    klantAbonnement: { vereist: boolean; status: string | null; verzendenToegestaan: boolean };
+    budget: Record<string, { dag?: Teller; week?: Teller | null; maand?: Teller }>;
+  };
+
+  it('zonder abonnementsplicht: verzenden toegestaan, geen reden', async () => {
+    const r = (await voerTool(deps, 'get_budget', { accountId })) as Budget;
+    assert.deepEqual(r.klantAbonnement, { vereist: false, status: null, verzendenToegestaan: true });
+    assert.equal(r.reden, undefined);
+  });
+
+  it('abonnement vereist en niet actief: verzendnormen 0 met NL-reden; zoeken en profielen blijven', async () => {
+    await db.query("update clients set abonnement_vereist = true where slug = 'markaas-test'");
+    const r = (await voerTool(deps, 'get_budget', { accountId })) as Budget;
+    assert.deepEqual(r.klantAbonnement, { vereist: true, status: null, verzendenToegestaan: false });
+    assert.match(r.reden ?? '', /^Abonnement niet actief/);
+    assert.equal(r.budget['invite']!.dag!.norm, 0);
+    assert.equal(r.budget['message']!.dag!.norm, 0);
+    assert.equal(r.budget['inmail']!.maand!.norm, 0);
+    assert.ok(r.budget['profile']!.dag!.norm > 0);
+    assert.ok(r.budget['search']!.dag!.norm > 0);
+  });
+
+  it('abonnement vereist en past_due: verzenden gaat door', async () => {
+    const [c] = await db.query<{ id: string }>("update clients set abonnement_vereist = true where slug = 'markaas-test' returning id");
+    await db.query("insert into subscriptions(client_id, status) values ($1, 'past_due')", [c!.id]);
+    const r = (await voerTool(deps, 'get_budget', { accountId })) as Budget;
+    assert.equal(r.klantAbonnement.verzendenToegestaan, true);
+    assert.equal(r.reden, undefined);
+    assert.ok(r.budget['invite']!.dag!.norm > 0);
   });
 });

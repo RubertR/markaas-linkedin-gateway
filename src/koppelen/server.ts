@@ -1,6 +1,7 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 import { Hono, type Context } from 'hono';
+import { getCookie, setCookie } from 'hono/cookie';
 
 import type { Klok } from '../budget/klok.ts';
 import type { Limieten } from '../budget/limits.ts';
@@ -34,8 +35,10 @@ import {
  * - `GET  /koppelen/klaar` en `/koppelen/mislukt`: terugkeer vanaf Unipile.
  *
  * Een ongeldig, verlopen of gebruikt token geeft altijd dezelfde 410-pagina,
- * zodat niet te zien is welk van de drie. CSRF: een HMAC van het token met een
- * van WEBHOOK_SECRET afgeleide sleutel (stateless; geen cookie nodig).
+ * zodat niet te zien is welk van de drie. CSRF in twee lagen: een HMAC van het
+ * token met een van WEBHOOK_SECRET afgeleide sleutel, én een double-submit-cookie
+ * `koppel_csrf` (HttpOnly, SameSite=Lax, Path=/koppelen) die gelijk moet zijn aan
+ * het verborgen veld `csrf_cookie`.
  * Het token staat in de URL: daarom `Referrer-Policy: no-referrer` en
  * `Cache-Control: no-store` op elke pagina.
  */
@@ -51,10 +54,13 @@ export interface KoppelDeps {
   webhookSecret: string;
   /** Zie AdminDeps.vertrouwProxy. Standaard true. */
   vertrouwProxy?: boolean;
+  /** Secure-vlag op de CSRF-cookie (productie: true). */
+  cookieSecure?: boolean;
   logger?: Logger;
 }
 
 const NAAM_MAX = 200;
+const CSRF_COOKIE = 'koppel_csrf';
 
 export function maakKoppelApp(deps: KoppelDeps) {
   const sleutels = koppelpaginaSleutels(deps.webhookSecret);
@@ -79,7 +85,7 @@ export function maakKoppelApp(deps: KoppelDeps) {
     if (!uitnodiging || !context) return ongeldig(c);
     return c.html(
       koppelPaginaView({
-        ...paginaBasis(deps, context, token, csrfVoor(sleutels.csrfSleutel, token)),
+        ...paginaBasis(deps, context, token, csrfVoor(sleutels.csrfSleutel, token), csrfCookie(c, deps)),
         naam: context.eigenaarNaam,
         email: context.eigenaarEmail ?? '',
       }),
@@ -94,7 +100,11 @@ export function maakKoppelApp(deps: KoppelDeps) {
 
     const form = await c.req.parseBody();
     const csrf = csrfVoor(sleutels.csrfSleutel, token);
-    if (!constanteTijdGelijk(tekst(form, 'csrf'), csrf)) {
+    const cookieWaarde = getCookie(c, CSRF_COOKIE) ?? '';
+    if (
+      !constanteTijdGelijk(tekst(form, 'csrf'), csrf) ||
+      !constanteTijdGelijk(tekst(form, 'csrf_cookie'), cookieWaarde)
+    ) {
       c.status(403);
       return c.html(verlopenFormulierView());
     }
@@ -117,7 +127,7 @@ export function maakKoppelApp(deps: KoppelDeps) {
       c.status(400);
       return c.html(
         koppelPaginaView({
-          ...paginaBasis(deps, context, token, csrf),
+          ...paginaBasis(deps, context, token, csrf, cookieWaarde),
           naam,
           email,
           aangevinkt,
@@ -172,10 +182,11 @@ function ongeldig(c: Context): Response {
   return c.html(ongeldigView()) as Response;
 }
 
-function paginaBasis(deps: KoppelDeps, context: KoppelContext, token: string, csrf: string) {
+function paginaBasis(deps: KoppelDeps, context: KoppelContext, token: string, csrf: string, csrfCookie: string) {
   return {
     token,
     csrf,
+    csrfCookie,
     klantNaam: context.klantNaam,
     limieten: limietenVoor(deps.limieten, context),
     voorwaarden: deps.juridisch.voorwaarden,
@@ -192,6 +203,21 @@ function limietenVoor(limieten: Limieten, context: KoppelContext): KoppelLimiete
     berichtenPerWeek: a.message.week,
     startPercentage: Math.round(limieten.opbouw.start_factor * 100),
   };
+}
+
+/** Double-submit-cookie: bestaande waarde hergebruiken, anders een nieuwe zetten. */
+function csrfCookie(c: Context, deps: KoppelDeps): string {
+  const bestaand = getCookie(c, CSRF_COOKIE);
+  if (bestaand && /^[A-Za-z0-9_-]{32}$/.test(bestaand)) return bestaand;
+  const nieuw = randomBytes(24).toString('base64url');
+  setCookie(c, CSRF_COOKIE, nieuw, {
+    httpOnly: true,
+    secure: deps.cookieSecure ?? false,
+    sameSite: 'Lax',
+    path: '/koppelen',
+    maxAge: 60 * 60 * 24,
+  });
+  return nieuw;
 }
 
 function csrfVoor(sleutel: string, token: string): string {

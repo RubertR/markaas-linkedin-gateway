@@ -1,3 +1,4 @@
+import { betaalpoortVoorAccount } from '../abonnement/abonnementen.ts';
 import type { Backend } from '../db/backend.ts';
 import { vindAccount, type Account } from '../register/accounts.ts';
 
@@ -77,6 +78,8 @@ export async function reserveerEnVerbruik(
       wekenSindsStart: invoer.wekenSindsStart ?? 0,
       acceptatieVerhouding: invoer.acceptatieVerhouding ?? 0,
       limieten: invoer.limieten,
+      // Geen rij = account zonder klant; kan niet (FK), maar dan geen poort.
+      betaalpoort: (await betaalpoortVoorAccount(tx, account.id)) ?? { vereist: false, status: null },
     };
 
     const uitslag = beoordeel(beoordelingsInvoer);

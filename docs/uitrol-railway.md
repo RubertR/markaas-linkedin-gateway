@@ -75,6 +75,7 @@ waarden uit "Vooraf".
 | `LOG_LEVEL` | nee | `info` |
 | `TIMEZONE_DEFAULT` | nee | `Europe/Amsterdam` |
 | `PUBLIC_BASE_URL` | nee | Alleen bij een eigen domein, bijv. `https://gateway.markaas.nl` |
+| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID` | nee | Alle drie of geen; zonder staat betalen uit. Zie README, "Stripe inrichten" |
 
 `PORT` vul je **niet** in; die zet Railway zelf.
 

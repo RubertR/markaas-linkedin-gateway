@@ -96,17 +96,22 @@ function csrfUit(html: string): string {
   return m[1]!;
 }
 
+const CSRF_COOKIE_WAARDE = 'abcdefghijklmnopqrstuvwxyz012345';
+
+/** Stuurt standaard de double-submit-cookie mee; `cookie: null` laat hem weg. */
 async function post(
   t: string,
   velden: Record<string, string>,
-  opts: { klok?: ReturnType<typeof vasteKlok>; headers?: Record<string, string> } = {},
+  opts: { klok?: ReturnType<typeof vasteKlok>; headers?: Record<string, string>; cookie?: string | null } = {},
 ): Promise<Response> {
+  const cookie = opts.cookie === undefined ? CSRF_COOKIE_WAARDE : opts.cookie;
   return await app(opts.klok).request(`/koppelen/${t}`, {
     method: 'POST',
     headers: {
       'content-type': 'application/x-www-form-urlencoded',
       'x-forwarded-for': '203.0.113.9',
       'user-agent': 'Testbrowser/1.0',
+      ...(cookie === null ? {} : { cookie: `koppel_csrf=${cookie}` }),
       ...(opts.headers ?? {}),
     },
     body: new URLSearchParams(velden).toString(),
@@ -116,6 +121,7 @@ async function post(
 function volledigFormulier(t: string): Record<string, string> {
   return {
     csrf: csrfVoor(t),
+    csrf_cookie: CSRF_COOKIE_WAARDE,
     naam: 'Eva de Vries',
     email: 'eva@acme.nl',
     eigenaar: 'ja',
@@ -209,6 +215,28 @@ describe('POST /koppelen/:token', () => {
     assert.equal(await aantalConsents(), 0);
   });
 
+  it('double-submit: zonder cookie, zonder veld of met afwijkende waarde 403, niets opgeslagen', async () => {
+    assert.equal((await post(token, volledigFormulier(token), { cookie: null })).status, 403);
+    const zonderVeld = volledigFormulier(token);
+    delete zonderVeld['csrf_cookie'];
+    assert.equal((await post(token, zonderVeld)).status, 403);
+    assert.equal((await post(token, volledigFormulier(token), { cookie: 'Z'.repeat(32) })).status, 403);
+    assert.equal(await aantalConsents(), 0);
+    assert.equal(fake.aanroepen.length, 0);
+  });
+
+  it('GET zet de double-submit-cookie (HttpOnly, SameSite=Lax, Path=/koppelen) en het formulierveld klopt', async () => {
+    const res = await app().request(`/koppelen/${token}`);
+    const setCookie = res.headers.getSetCookie().find((c) => c.startsWith('koppel_csrf='))!;
+    assert.ok(setCookie);
+    assert.match(setCookie, /HttpOnly/i);
+    assert.match(setCookie, /SameSite=Lax/i);
+    assert.match(setCookie, /Path=\/koppelen/i);
+    const waarde = setCookie.split(';')[0]!.split('=')[1]!;
+    const html = await res.text();
+    assert.match(html, new RegExp(`name="csrf_cookie" value="${waarde}"`));
+  });
+
   it('weigert zonder of met fout CSRF-veld (403)', async () => {
     const zonder = volledigFormulier(token);
     delete zonder['csrf'];
@@ -240,6 +268,15 @@ describe('POST /koppelen/:token', () => {
     );
     assert.equal((c['user_agent'] as string).length, 400);
     assert.ok(c['uitnodiging_id']);
+    // Momentopname (migratie 0007).
+    const [acc] = await db.query<{ client_id: string; eigenaar_naam: string; klant: string }>(
+      'select a.client_id, a.eigenaar_naam, c.naam as klant from accounts a join clients c on c.id = a.client_id where a.id = $1',
+      [accountId],
+    );
+    assert.equal(c['client_id'], acc!.client_id);
+    assert.equal(c['klantnaam'], acc!.klant);
+    assert.equal(c['account_eigenaar_naam'], acc!.eigenaar_naam);
+    assert.equal(c['unipile_account_id'], null);
 
     assert.equal(await vindGeldigeUitnodiging(db, token, vasteKlok(NU)), null, 'eenmalig');
     const [u] = await db.query<{ gebruikt_op: Date | null }>('select gebruikt_op from koppel_uitnodigingen');

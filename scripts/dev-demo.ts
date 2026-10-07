@@ -44,7 +44,7 @@ function leesWachtwoordHash(): string {
 }
 
 async function zaaiDemodata(db: Awaited<ReturnType<typeof pgliteBackend>>): Promise<void> {
-  const klant = await maakClient(db, { naam: 'Demo', slug: 'demo' });
+  const klant = await maakClient(db, { naam: 'Demo', slug: 'demo', abonnementVereist: false });
   const account = await registreerAccount(db, {
     clientId: klant.id,
     eigenaarNaam: 'Rubert (demo)',

@@ -64,7 +64,7 @@ Eén TypeScript-project (Node 20+), één database (Postgres, EU-regio). Geen mi
 | `actions` | id, account_id, type (`search`, `profile`, `invite`, `message`, `inmail`), payload (json), status (`draft`, `approved`, `queued`, `running`, `done`, `failed`, `rejected`), reden, goedgekeurd_door, gepland_op, uitgevoerd_op, unipile_response |
 | `usage` | account_id, type, dag, aantal |
 | `sequences` | id, account_id, lead_linkedin_url, stap, status, volgende_actie_op, laatste_gebeurtenis |
-| `events` | id, bron (`unipile`, `gateway`), type, account_id, payload, ontvangen_op |
+| `events` | id, bron (`unipile`, `gateway`, `stripe`), type, extern_id, account_id, payload, ontvangen_op |
 
 ## 5. Budgetmotor
 
@@ -72,6 +72,10 @@ Elke actie passeert zes controles, in deze volgorde. Faalt er één, dan blijft 
 wachtrij (tijdelijk) of wordt ze geweigerd met reden (structureel).
 
 1. **Account gezond** — status `OK`. Bij `CREDENTIALS`, `ERROR`, `STOPPED` stopt alles.
+   Direct daarna de **betaalpoort** (§14.4, controle 1a): zonder actief abonnement worden
+   `invite`, `message` en `inmail` bij klanten met `abonnement_vereist` **geparkeerd**
+   (wachtrij, opnieuw beoordelen na 60 minuten), niet afgewezen: zodra er een actief
+   abonnement is, gaan goedgekeurde acties alsnog.
 2. **Goedgekeurd** — `invite`, `message`, `inmail` vereisen `goedgekeurd_door`. `search` en
    `profile` niet.
 3. **Dagbudget** — verbruik vandaag + deze actie ≤ dagnorm × opbouw_factor.
@@ -384,7 +388,11 @@ Goedkeuren kan door de klant én door MARKaaS. `goedgekeurd_door` legt vast wie:
    - ik heb de voorwaarden en de verwerkersovereenkomst (met versienummer) gelezen.
 4. **Toestemming vastleggen** in `account_consents`: account, naam, e-mail, tekstversie van
    voorwaarden en verwerkersovereenkomst, tijdstip, gehashte IP (SHA-256 met geheim zout) en
-   user-agent. Bewaard zolang het account bestaat plus 2 jaar.
+   user-agent, plus een momentopname van klant (client_id, klantnaam), accounteigenaar en
+   unipile_account_id (migratie 0007), zodat het bewijs leesbaar blijft na verwijderen of
+   hernoemen. Bewaard zolang het account bestaat plus 2 jaar.
+   De koppelpagina heeft CSRF in twee lagen: HMAC van het token én een double-submit-cookie
+   (`koppel_csrf`, HttpOnly, SameSite=Lax, Path=/koppelen).
 5. Daarna maakt de gateway een Unipile hosted-auth-link (`type: create`) en stuurt de browser
    door. Callback `CREATION_SUCCESS` werkt zoals in §6.
 6. De pagina toont na terugkomst "gekoppeld" of een duidelijke foutmelding met vervolgstap.
@@ -395,14 +403,24 @@ Goedkeuren kan door de klant én door MARKaaS. `goedgekeurd_door` legt vast wie:
   uitnodigingslink (zelfde tokenregels als 14.2, 7 dagen, eenmalig). De gebruiker kiest
   daarmee zijn wachtwoord (minimaal 12 tekens, scrypt-hash zoals de admin).
 - **Inloggen** (`/portaal/login`): e-mail + wachtwoord, eigen sessiecookie (`portaal_sessie`,
-  HttpOnly, Secure, SameSite=Strict), CSRF-token per sessie, vertraging na mislukte pogingen
+  HttpOnly, Secure, SameSite=Lax — zodat de terugkeer van Stripe niet op het loginscherm valt;
+  elke POST eist het CSRF-token en geen GET wijzigt iets), CSRF-token per sessie, vertraging na mislukte pogingen
   zoals bij de admin. Wachtwoord vergeten: Rubert maakt een nieuwe uitnodigingslink (v1).
 - **Concepten** (`/portaal/`): open concepten van de eigen accounts met lead, tekst en stap;
   goedkeuren, afwijzen met reden, of alles tegelijk goedkeuren. Dezelfde helpers als de admin
   (`src/queue/acties.ts`), zodat budget, tijdvenster en sequentieregels identiek gelden.
+  Zolang een klant met `abonnement_vereist` geen `trialing`/`active`/`past_due`-abonnement
+  heeft, kan de klant in het portaal niet goedkeuren (NL-melding); de admin wel, met een
+  waarschuwing (de actie blijft dan geparkeerd, §5).
+- **Foutmeldingen:** alleen eigen foutklassen met een NL-tekst voor de klant worden letterlijk
+  getoond; overige fouten geven "Er ging iets mis; probeer het opnieuw of neem contact op met
+  MARKaaS" en de details gaan naar de log.
 - **Resultaten** (`/portaal/resultaten`): per account verstuurd, geaccepteerd, gereageerd,
   per week; status van het account (gekoppeld, opnieuw koppelen nodig met knop voor een
-  reconnect-link, in afkoeling).
+  reconnect-link, in afkoeling). De knop werkt alleen in de stand "opnieuw koppelen nodig",
+  maximaal één reconnect-link per account per 5 minuten. Een nog niet gekoppeld account krijgt
+  vanuit het portaal geen nieuwe uitnodiging: "Vraag MARKaaS om een nieuwe koppellink voor de
+  accounteigenaar" (de toestemming loopt via §14.2).
 - **Abonnement** (`/portaal/abonnement`): status, proefperiode tot, volgende betaling; knop
   "Abonnement starten" (Stripe Checkout) of "Abonnement beheren" (Stripe Customer Portal).
 - Sessies van het portaal worden in de database bewaard (tabel `portal_sessions`), omdat er
@@ -418,18 +436,38 @@ Goedkeuren kan door de klant én door MARKaaS. `goedgekeurd_door` legt vast wie:
   in Stripe en `config/abonnement.json`, nooit in de code.
 - **Checkout:** Stripe Checkout in `subscription`-modus, één Stripe-customer per klant
   (`metadata.client_id`). Aantal = aantal gekoppelde LinkedIn-accounts als de prijs per
-  account is.
+  account is. Vóór de Checkout haalt de gateway de abonnementen van de customer op
+  (`status=all`); bestaat er een niet-beëindigd abonnement (niet `canceled` of
+  `incomplete_expired`), dan geen nieuwe Checkout maar een melding en door naar "Abonnement
+  beheren".
+- **Proefperiode maar één keer:** `trial_period_days` alleen als de klant nog nooit een
+  abonnement had (geen `stripe_subscription_id` of `proef_tot` in de tabel en geen enkel
+  abonnement bij Stripe).
+- **Aantal bijhouden:** bij prijs per account werkt de gateway na een nieuw gekoppeld account
+  (`CREATION_SUCCESS`) de quantity van het lopende abonnement bij
+  (`POST /v1/subscriptions/{id}`, `items[0][id]`, `items[0][quantity]`,
+  `proration_behavior=create_prorations`). Ontkoppelen of verwijderen gebeurt (nog) buiten de
+  gateway; daarvoor staat op de klantpagina in de admin de knop "Aantal in Stripe bijwerken".
+  Een Stripe-fout laat de koppeling niet falen: log + event (`stripe_aantal_mislukt`) dat de
+  admin op de klantpagina toont.
 - **Webhook** `/webhooks/stripe`: handtekening controleren met `STRIPE_WEBHOOK_SECRET`;
   dedup op event-id in `events`. Verwerkt `checkout.session.completed`,
   `customer.subscription.created|updated|deleted`, `invoice.paid`, `invoice.payment_failed`.
+  Bij elk van deze events haalt de gateway het abonnement opnieuw op bij Stripe en slaat die
+  actuele stand op (alleen als Stripe het niet meer kent: de stand uit het event).
 - **Tabel `subscriptions`:** client_id, stripe_customer_id, stripe_subscription_id, status
-  (Stripe-status), proef_tot, periode_tot, bijgewerkt_op.
+  (Stripe-status), proef_tot, periode_tot, opgezegd_per_einde, stripe_event_op, bijgewerkt_op.
+  `stripe_event_op` = `created` van het laatst toegepaste event: Stripe levert niet op volgorde,
+  een ouder event (strikt eerder tijdstip) overschrijft geen nieuwere stand, ook niet bij een
+  ander abonnement-id; een beëindigd ander abonnement overschrijft een lopend abonnement niet.
 - **Betaalpoort in de budgetmotor:** voor klanten met `abonnement_vereist = true`:
   - `trialing`, `active` → normaal;
-  - `past_due` → normaal, met waarschuwing in portaal en ochtendbriefing;
+  - `past_due` → normaal, met waarschuwing in portaal en ochtendbriefing (de briefing leest
+    `klantAbonnement` uit `get_budget`);
   - `unpaid`, `canceled`, `incomplete_expired` of geen abonnement → **geen verzending**
-    (`invite`, `message`, `inmail`): de budgetmotor weigert met een NL-reden
-    "Abonnement niet actief". Zoeken en profielen blijven mogelijk voor MARKaaS.
+    (`invite`, `message`, `inmail`): de budgetmotor parkeert de actie in de wachtrij met de
+    NL-reden "Abonnement niet actief" (geen definitieve afwijzing). Zoeken en profielen
+    blijven mogelijk voor MARKaaS.
   - MARKaaS, IPknowledge en TAG krijgen `abonnement_vereist = false` (besluit Rubert,
     7 okt 2026). Aqua, ICT Media en alle nieuwe klanten krijgen `true`: zij hebben een
     actief abonnement (of proefperiode) nodig voordat er verzonden wordt.

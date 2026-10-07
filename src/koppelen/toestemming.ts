@@ -75,10 +75,17 @@ export async function legToestemmingVast(
 ): Promise<boolean> {
   return await db.transaction(async (tx) => {
     if (!(await claimUitnodiging(tx, invoer.uitnodigingId, klok))) return false;
-    await tx.query(
+    // Momentopname van klant en account (migratie 0007): het bewijs blijft leesbaar
+    // als het account later verdwijnt of hernoemd wordt.
+    const vastgelegd = await tx.query<{ id: string }>(
       `insert into account_consents(account_id, uitnodiging_id, naam, email,
-         versie_voorwaarden, versie_verwerkersovereenkomst, ip_hash, user_agent, gegeven_op)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+         versie_voorwaarden, versie_verwerkersovereenkomst, ip_hash, user_agent, gegeven_op,
+         client_id, klantnaam, account_eigenaar_naam, unipile_account_id)
+       select $1, $2, $3, $4, $5, $6, $7, $8, $9,
+              a.client_id, c.naam, a.eigenaar_naam, a.unipile_account_id
+       from accounts a join clients c on c.id = a.client_id
+       where a.id = $1
+       returning id`,
       [
         invoer.accountId,
         invoer.uitnodigingId,
@@ -91,6 +98,7 @@ export async function legToestemmingVast(
         klok.nu().toISOString(),
       ],
     );
+    if (vastgelegd.length === 0) throw new Error(`Account ${invoer.accountId} bestaat niet; toestemming niet vastgelegd.`);
     return true;
   });
 }

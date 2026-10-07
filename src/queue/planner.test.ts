@@ -46,7 +46,7 @@ beforeEach(async () => {
   await db.query('delete from clients');
   fake.reset();
 
-  const client = await maakClient(db, { naam: 'Test', slug: 'test' });
+  const client = await maakClient(db, { naam: 'Test', slug: 'test', abonnementVereist: false });
   const account = await registreerAccount(db, {
     clientId: client.id,
     eigenaarNaam: 'Rubert',
@@ -288,5 +288,37 @@ describe('planner — foutpaden via worker', () => {
       statussen.includes('approved'),
       `verwachte een onaangeraakt approved; kreeg ${JSON.stringify(statussen)}`,
     );
+  });
+});
+
+describe('planner — betaalpoort (SPEC §14.4)', () => {
+  it('klant met abonnementsplicht zonder abonnement: invite blijft geparkeerd (queued) met NL-reden, geen Unipile-aanroep', async () => {
+    await db.query("update clients set abonnement_vereist = true where slug = 'test'");
+    const actie = await maakGoedgekeurdeInvite({ accountId, providerId: 'ACo-x' });
+    const r = await voerPlannerTickUit(basisContext());
+    assert.equal(r.details[0]?.resultaat, 'queued');
+    const na = await vindActie(db, actie.id);
+    assert.equal(na?.status, 'queued');
+    assert.equal(
+      na?.reden,
+      'Abonnement niet actief: de klant moet in het klantportaal een abonnement starten.',
+    );
+    // Over een uur opnieuw beoordelen (standaardWachtMinuten('abonnement') = 60).
+    assert.equal(na?.geplandOp?.toISOString(), '2026-10-06T11:00:00.000Z');
+    assert.equal(fake.aanroepen.length, 0);
+  });
+
+  it('na het starten van een abonnement gaat de geparkeerde actie alsnog door', async () => {
+    fake.antwoord('POST', '/api/v1/users/invite', () => ({
+      status: 200,
+      body: { object: 'UserInvitationSent', invitation_id: 'inv-later' },
+    }));
+    const [c] = await db.query<{ id: string }>("update clients set abonnement_vereist = true where slug = 'test' returning id");
+    const actie = await maakGoedgekeurdeInvite({ accountId, providerId: 'ACo-y' });
+    await voerPlannerTickUit(basisContext());
+    assert.equal((await vindActie(db, actie.id))?.status, 'queued');
+    await db.query("insert into subscriptions(client_id, status) values ($1, 'trialing')", [c!.id]);
+    await voerPlannerTickUit(basisContext({ klok: vasteKlok('2026-10-06T11:05:00Z') }));
+    assert.equal((await vindActie(db, actie.id))?.status, 'done');
   });
 });

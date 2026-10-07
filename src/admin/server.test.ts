@@ -839,3 +839,113 @@ describe('klantgebruikers uitnodigen (SPEC §14.3)', () => {
     assert.equal((await vindActie(db, d.id))?.afgewezenDoor, 'rubert');
   });
 });
+
+describe('abonnement per klant (SPEC §14.4)', () => {
+  async function detailHtml(jar: CookieJar, a = app): Promise<string> {
+    const r = await a.request('/admin/klanten/markaas-ui', { headers: { cookie: cookieHeader(jar) } });
+    assert.equal(r.status, 200);
+    return await r.text();
+  }
+
+  it('klantpagina toont de abonnementsstand en "Betalen is nog niet ingericht" zonder Stripe', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    const html = await detailHtml(jar);
+    assert.match(html, /<h2>Abonnement<\/h2>/);
+    assert.match(html, /Geen abonnement/);
+    assert.match(html, /geblokkeerd: abonnement niet actief/);
+    assert.match(html, /Betalen is nog niet ingericht/);
+    assert.match(html, /name="vereist" value="ja" checked/);
+  });
+
+  it('met Stripe ingericht en een abonnement in proef: stand, Stripe-status en datum', async () => {
+    const klant = await vindClientBijSlug(db, 'markaas-ui');
+    await db.query(
+      "insert into subscriptions(client_id, stripe_customer_id, status, proef_tot) values ($1, 'cus_ui', 'trialing', '2026-11-05T10:00:00Z')",
+      [klant!.id],
+    );
+    app = maakAdminApp({ ...deps, stripeIngericht: true });
+    const jar = nieuweJar();
+    await logIn(jar);
+    const html = await detailHtml(jar);
+    assert.match(html, /Proefperiode tot 5 november 2026/);
+    assert.match(html, /Stripe: trialing/);
+    assert.match(html, /cus_ui/);
+    assert.doesNotMatch(html, /Betalen is nog niet ingericht/);
+  });
+
+  it('vinkje abonnement_vereist uitzetten en weer aanzetten (CSRF verplicht)', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    const csrf = csrfUit(await detailHtml(jar));
+    const fout = await post('/admin/klanten/markaas-ui/abonnement-vereist', { csrf: 'fout' }, jar);
+    assert.equal(fout.status, 403);
+    assert.equal((await vindClientBijSlug(db, 'markaas-ui'))!.abonnementVereist, true);
+
+    const uit = await post('/admin/klanten/markaas-ui/abonnement-vereist', { csrf }, jar);
+    assert.equal(uit.status, 303);
+    assert.equal((await vindClientBijSlug(db, 'markaas-ui'))!.abonnementVereist, false);
+    const html = await detailHtml(jar);
+    assert.match(html, /geen abonnement nodig/i);
+    assert.doesNotMatch(html, /name="vereist" value="ja" checked/);
+
+    await post('/admin/klanten/markaas-ui/abonnement-vereist', { csrf, vereist: 'ja' }, jar);
+    assert.equal((await vindClientBijSlug(db, 'markaas-ui'))!.abonnementVereist, true);
+  });
+
+  it('vinkje aanpassen zonder sessie of voor een onbekende klant wijzigt niets', async () => {
+    const zonder = await post('/admin/klanten/markaas-ui/abonnement-vereist', { csrf: 'x' }, nieuweJar());
+    assert.equal(zonder.status, 303);
+    assert.equal(zonder.headers.get('location'), '/admin/login');
+    assert.equal((await vindClientBijSlug(db, 'markaas-ui'))!.abonnementVereist, true);
+    const jar = nieuweJar();
+    await logIn(jar);
+    const csrf = csrfUit(await detailHtml(jar));
+    const onbekend = await post('/admin/klanten/bestaat-niet/abonnement-vereist', { csrf }, jar);
+    assert.equal(onbekend.status, 404);
+  });
+
+  it('concepten van een klant zonder actief abonnement krijgen een waarschuwing in het overzicht', async () => {
+    await maakDraft();
+    const jar = nieuweJar();
+    await logIn(jar);
+    const metPoort = await (await get('/admin/', jar)).text();
+    assert.match(metPoort, /Abonnement niet actief: de klant moet in het klantportaal een abonnement starten\./);
+    await db.query("update clients set abonnement_vereist = false where slug = 'markaas-ui'");
+    const zonderPoort = await (await get('/admin/', jar)).text();
+    assert.doesNotMatch(zonderPoort, /Abonnement niet actief/);
+  });
+});
+
+describe('aantal in Stripe vanuit de admin (SPEC §14.4)', () => {
+  it('knop roept de sync aan (CSRF) en een mislukte sync is zichtbaar op de klantpagina', async () => {
+    const klant = await vindClientBijSlug(db, 'markaas-ui');
+    await db.query("insert into subscriptions(client_id, stripe_subscription_id, status) values ($1, 'sub_ui', 'active')", [klant!.id]);
+    const aanroepen: string[] = [];
+    app = maakAdminApp({
+      ...deps,
+      stripeIngericht: true,
+      aantalSync: async (clientId, aanleiding) => {
+        aanroepen.push(`${clientId}:${aanleiding}`);
+        await db.query(
+          `insert into events(bron, type, payload) values ('gateway', 'stripe_aantal_mislukt', $1::jsonb)`,
+          [JSON.stringify({ client_id: clientId, fout: 'Stripe-serverfout (HTTP 500)' })],
+        );
+        return { resultaat: 'mislukt', reden: 'Stripe-serverfout (HTTP 500)' };
+      },
+    });
+    const jar = nieuweJar();
+    await logIn(jar);
+    const html = await (await get('/admin/klanten/markaas-ui', jar)).text();
+    assert.match(html, /Aantal in Stripe bijwerken/);
+    const csrf = csrfUit(html);
+    assert.equal((await post('/admin/klanten/markaas-ui/abonnement-aantal', { csrf: 'fout' }, jar)).status, 403);
+    assert.equal(aanroepen.length, 0);
+    const r = await post('/admin/klanten/markaas-ui/abonnement-aantal', { csrf }, jar);
+    assert.equal(r.status, 303);
+    assert.deepEqual(aanroepen, [`${klant!.id}:admin`]);
+    const na = await (await get('/admin/klanten/markaas-ui', jar)).text();
+    assert.match(na, /bijwerken mislukt op/);
+    assert.match(na, /Stripe-serverfout \(HTTP 500\)/);
+  });
+});

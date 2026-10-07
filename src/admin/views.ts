@@ -1,3 +1,7 @@
+import type { LaatsteAantalSync } from '../abonnement/aantal.ts';
+import type { KlantAbonnement } from '../abonnement/abonnementen.ts';
+import { datumTekst, type AbonnementWeergave } from '../abonnement/weergave.ts';
+
 import { formatteerAmsterdam } from './datum.ts';
 import type { GebruikerRegel } from '../portaal/gebruikers.ts';
 
@@ -224,6 +228,7 @@ function draftKaart(d: DraftWeergave, csrfToken: string): string {
   return `
 <article class="actie-kaart" data-type="${h(d.type)}">
   <h3>${h(etiket(d.type))}</h3>
+  ${d.betaalpoortReden ? `<p class="melding fout">${h(d.betaalpoortReden)} Na goedkeuring blijft dit concept in de wachtrij tot er een actief abonnement is.</p>` : ''}
   ${d.sequentie ? sequentieBanner(d.sequentie) : ''}
   ${ontvangerBlok(d.ontvanger)}
   <div class="waarom">
@@ -594,10 +599,19 @@ export interface GebruikerWaarden {
   email: string;
 }
 
+export interface KlantAbonnementWeergave {
+  weergave: AbonnementWeergave;
+  abonnement: KlantAbonnement | null;
+  stripeIngericht: boolean;
+  laatsteAantalSync?: LaatsteAantalSync | null;
+}
+
 export interface KlantDetailViewOpties {
   csrfToken: string;
   klant: KlantRegel;
   gebruikers: readonly GebruikerRegel[];
+  /** Abonnement (SPEC §14.4). Ontbreekt in oudere tests: dan geen sectie. */
+  abonnement?: KlantAbonnementWeergave;
   melding?: { soort: 'ok' | 'fout'; tekst: string };
   waarden?: GebruikerWaarden;
 }
@@ -653,6 +667,7 @@ ${adminHeader(k.naam, o.csrfToken)}
 <main>
   ${o.melding ? `<p class="melding ${o.melding.soort}">${h(o.melding.tekst)}</p>` : ''}
   <p class="uitleg">${h(k.slug)} · abonnement ${k.abonnementVereist ? 'vereist' : 'niet vereist'}</p>
+  ${o.abonnement ? abonnementSectie(basis, o.csrfToken, k.abonnementVereist, o.abonnement) : ''}
   <section>
     <h2>LinkedIn-accounts</h2>
     ${accounts}
@@ -729,4 +744,46 @@ ${adminHeader('Uitnodigingslink', o.csrfToken)}
   <p><a class="knop secundair" href="/admin/klanten/${h(o.slug)}">Terug naar ${h(o.klantNaam)}</a></p>
 </main>`;
   return layout('Uitnodigingslink', inhoud);
+}
+
+function abonnementSectie(basis: string, csrfToken: string, vereist: boolean, a: KlantAbonnementWeergave): string {
+  const ab = a.abonnement;
+  const regels: string[] = [
+    `<dt>Stand</dt><dd>${h(a.weergave.titel)}${ab?.status ? ` <small>(Stripe: ${h(ab.status)})</small>` : ''}</dd>`,
+    `<dt>Verzenden</dt><dd>${a.weergave.verzendenToegestaan ? 'toegestaan' : 'geblokkeerd: abonnement niet actief'}</dd>`,
+  ];
+  if (ab?.proefTot) regels.push(`<dt>Proef tot</dt><dd>${h(datumTekst(ab.proefTot))}</dd>`);
+  if (ab?.periodeTot) regels.push(`<dt>Periode tot</dt><dd>${h(datumTekst(ab.periodeTot))}</dd>`);
+  if (ab?.opgezegdPerEinde) regels.push('<dt>Opgezegd</dt><dd>per einde van de periode</dd>');
+  if (ab?.stripeCustomerId) regels.push(`<dt>Stripe-klant</dt><dd><small>${h(ab.stripeCustomerId)}</small></dd>`);
+  const sync = a.laatsteAantalSync;
+  if (sync) {
+    regels.push(
+      `<dt>Aantal in Stripe</dt><dd>${
+        sync.gelukt
+          ? `bijgewerkt op ${h(formatteerAmsterdam(sync.op))}`
+          : `<strong>bijwerken mislukt op ${h(formatteerAmsterdam(sync.op))}</strong>: ${h(sync.fout ?? 'onbekende fout')}`
+      }</dd>`,
+    );
+  }
+  return `
+  <section>
+    <h2>Abonnement</h2>
+    ${a.stripeIngericht ? '' : '<p class="melding fout">Betalen is nog niet ingericht (STRIPE_*-variabelen ontbreken).</p>'}
+    <div class="actie-kaart">
+      <dl>${regels.join('')}</dl>
+      <form method="post" action="${basis}/abonnement-vereist" class="knoppen">
+        <input type="hidden" name="csrf" value="${h(csrfToken)}">
+        <label><input type="checkbox" name="vereist" value="ja"${vereist ? ' checked' : ''}>
+          Abonnement vereist voor verzenden</label>
+        <button type="submit" class="secundair">Opslaan</button>
+      </form>
+      <p class="uitleg">Uit voor eigen organisaties (MARKaaS, IPknowledge, TAG): dan wordt er nooit tegengehouden.</p>
+      <form method="post" action="${basis}/abonnement-aantal">
+        <input type="hidden" name="csrf" value="${h(csrfToken)}">
+        <button type="submit" class="secundair">Aantal in Stripe bijwerken</button>
+      </form>
+      <p class="uitleg">Zet het aantal in Stripe gelijk aan het aantal gekoppelde accounts (bijv. na ontkoppelen).</p>
+    </div>
+  </section>`;
 }

@@ -1,3 +1,8 @@
+import {
+  REDEN_NIET_ACTIEF,
+  betaalpoortVoorAccount,
+  verzendenToegestaan,
+} from '../abonnement/abonnementen.ts';
 import type { Klok } from '../budget/klok.ts';
 import { telGebruikOpDag, telGebruikOverDagen } from '../budget/gebruik.ts';
 import type { AbonnementLimieten, ActieType, Limieten } from '../budget/limits.ts';
@@ -72,6 +77,11 @@ export interface DraftWeergave {
   aangemaaktOp: Date;
   budget: BudgetResterendPerType;
   sequentie: SequentieHerkomst | null;
+  /**
+   * Gezet als de klant een abonnement nodig heeft dat niet actief is (SPEC §14.4):
+   * na goedkeuring weigert de budgetmotor dit concept.
+   */
+  betaalpoortReden?: string;
 }
 
 export interface OnzekerWeergave {
@@ -148,8 +158,15 @@ export async function lijstDrafts(
     order by a.aangemaakt_op asc`;
   const rijen = await db.query<ActieRij>(sql, params);
   const uit: DraftWeergave[] = [];
+  const poortPerAccount = new Map<string, boolean>();
   for (const rij of rijen) {
     if (!isAdminType(rij.type)) continue; // search/profile horen hier niet.
+    let verzenden = poortPerAccount.get(rij.account_id);
+    if (verzenden === undefined) {
+      const poort = await betaalpoortVoorAccount(db, rij.account_id);
+      verzenden = poort === null || verzendenToegestaan(poort);
+      poortPerAccount.set(rij.account_id, verzenden);
+    }
     const payload = alsJson(rij.payload);
     uit.push({
       actieId: rij.id,
@@ -173,6 +190,7 @@ export async function lijstDrafts(
         klok: opties.klok,
       }),
       sequentie: sequentieHerkomstUit(rij),
+      ...(verzenden ? {} : { betaalpoortReden: REDEN_NIET_ACTIEF }),
     });
   }
   return uit;
@@ -225,6 +243,18 @@ export async function lijstOnzeker(
   return uit;
 }
 
+/**
+ * Fout door invoer van de gebruiker (te lange tekst, ontbrekende reden). De
+ * melding is in gewone taal en mag letterlijk aan een klant getoond worden;
+ * andere fouten niet (SPEC §14.3).
+ */
+export class AdminInvoerFout extends Error {
+  constructor(bericht: string) {
+    super(bericht);
+    this.name = 'AdminInvoerFout';
+  }
+}
+
 export interface GoedkeurenOpties {
   nieuweTekst?: string;
   klok?: Klok;
@@ -254,7 +284,8 @@ export async function goedkeur(
 
 export interface GoedkeurBatchResultaat {
   goedgekeurd: string[];
-  overgeslagen: Array<{ actieId: string; reden: string }>;
+  /** `bekend`: de reden is een AdminInvoerFout en mag letterlijk aan een klant getoond worden. */
+  overgeslagen: Array<{ actieId: string; reden: string; bekend: boolean }>;
 }
 
 export async function goedkeurBatch(
@@ -271,7 +302,11 @@ export async function goedkeurBatch(
       await keurActieGoed(db, id, opts.door ?? GOEDKEURDER_RUBERT, nu);
       resultaat.goedgekeurd.push(id);
     } catch (err) {
-      resultaat.overgeslagen.push({ actieId: id, reden: (err as Error).message });
+      resultaat.overgeslagen.push({
+        actieId: id,
+        reden: (err as Error).message,
+        bekend: err instanceof AdminInvoerFout,
+      });
     }
   }
   return resultaat;
@@ -291,7 +326,7 @@ export async function wijsAf(
   const door = opts.door ?? GOEDKEURDER_RUBERT;
   const schoongemaakt = reden.trim();
   if (!schoongemaakt) {
-    throw new Error('Reden voor afwijzen is verplicht.');
+    throw new AdminInvoerFout('Reden voor afwijzen is verplicht.');
   }
   const actie = await vindActie(db, actieId);
   if (!actie) throw new Error(`Actie ${actieId} bestaat niet.`);
@@ -456,7 +491,7 @@ async function werkTekstBij(
   if (limieten) {
     const max = tekenMaxVoorType(actie.type, limieten);
     if (schoon.length > max) {
-      throw new Error(
+      throw new AdminInvoerFout(
         `Tekst is ${schoon.length} tekens; maximum voor ${actie.type} is ${max} tekens. Korter maken vóór goedkeuren.`,
       );
     }
@@ -483,7 +518,7 @@ async function controleerBestaandeTekst(
   const tekst = tekstUitPayload(actie.type, payload);
   const max = tekenMaxVoorType(actie.type, limieten);
   if (tekst.length > max) {
-    throw new Error(
+    throw new AdminInvoerFout(
       `Tekst is ${tekst.length} tekens; maximum voor ${actie.type} is ${max} tekens. Korter maken vóór goedkeuren.`,
     );
   }

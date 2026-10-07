@@ -14,9 +14,22 @@ async function versAccount(opties: {
   openstaand?: number;
   afkoelingTot?: string | null;
   opbouwFactor?: number;
+  /** Betaalpoort (SPEC §14.4); standaard uit zodat de budgettests er los van staan. */
+  abonnementVereist?: boolean;
+  abonnementStatus?: string;
 } = {}) {
   const h = await verseDatabaseMetMigraties();
-  const client = await maakClient(h.db, { naam: 'ACME BV', slug: 'acme' });
+  const client = await maakClient(h.db, {
+    naam: 'ACME BV',
+    slug: 'acme',
+    abonnementVereist: opties.abonnementVereist ?? false,
+  });
+  if (opties.abonnementStatus) {
+    await h.db.query('insert into subscriptions(client_id, status) values ($1, $2)', [
+      client.id,
+      opties.abonnementStatus,
+    ]);
+  }
   const account = await registreerAccount(h.db, {
     clientId: client.id,
     eigenaarNaam: 'Rubert',
@@ -247,6 +260,55 @@ describe('reserveerEnVerbruik — leest week- en maandverbruik', () => {
       });
       assert.equal(uitslag.status, 'wachtrij');
       assert.match(uitslag.reden!, /maand/i);
+    } finally {
+      await h.close();
+    }
+  });
+});
+
+describe('reserveerEnVerbruik — betaalpoort (SPEC §14.4)', () => {
+  const klok = vasteKlok('2026-10-06T10:00:00Z');
+
+  async function probeer(h: Awaited<ReturnType<typeof versAccount>>, actieType: 'invite' | 'search' | 'profile') {
+    return await reserveerEnVerbruik(h.db, {
+      accountId: h.accountId,
+      actieType,
+      goedgekeurd: true,
+      klok,
+      limieten: await laadLimieten(),
+      minPauzeSeconden: 0,
+    });
+  }
+
+  it('klant met abonnementsplicht zonder abonnement: invite geparkeerd, niets geteld', async () => {
+    const h = await versAccount({ abonnementVereist: true });
+    try {
+      const uitslag = await probeer(h, 'invite');
+      assert.equal(uitslag.status, 'wachtrij');
+      assert.equal(uitslag.status === 'wachtrij' && uitslag.controle, 'abonnement');
+      assert.match(uitslag.status === 'wachtrij' ? uitslag.reden : '', /Abonnement niet actief/);
+      assert.equal(await telGebruikOpDag(h.db, h.accountId, 'invite', '2026-10-06'), 0);
+      // Zoeken en profielen blijven mogelijk.
+      assert.equal((await probeer(h, 'search')).status, 'toegestaan');
+      assert.equal((await probeer(h, 'profile')).status, 'toegestaan');
+    } finally {
+      await h.close();
+    }
+  });
+
+  it('met een abonnement in proefperiode: invite toegestaan', async () => {
+    const h = await versAccount({ abonnementVereist: true, abonnementStatus: 'trialing' });
+    try {
+      assert.equal((await probeer(h, 'invite')).status, 'toegestaan');
+    } finally {
+      await h.close();
+    }
+  });
+
+  it('beëindigd abonnement: geparkeerd', async () => {
+    const h = await versAccount({ abonnementVereist: true, abonnementStatus: 'canceled' });
+    try {
+      assert.equal((await probeer(h, 'invite')).status, 'wachtrij');
     } finally {
       await h.close();
     }

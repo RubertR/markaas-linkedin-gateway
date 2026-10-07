@@ -1,3 +1,4 @@
+import { REDEN_NIET_ACTIEF, verzendenToegestaan, type Betaalpoort } from '../abonnement/abonnementen.ts';
 import type { Abonnement } from '../register/accounts.ts';
 import type { AccountStatus } from '../register/status.ts';
 
@@ -9,6 +10,10 @@ import { binnenWerkuren, isWerkdag } from './tijdvenster.ts';
 /**
  * Zes controles uit SPEC §5, in deze volgorde:
  * 1. account_gezond — status van het Unipile-account.
+ *    1a. abonnement — betaalpoort (SPEC §14.4): bij klanten met
+ *    `abonnement_vereist` alleen verzending (invite/message/inmail) als het
+ *    abonnement `trialing`, `active` of `past_due` is. Anders wachtrij: de
+ *    actie blijft geparkeerd tot er een actief abonnement is.
  * 2. goedgekeurd — invite/message/inmail vereist menselijke goedkeuring.
  * 3. dagbudget — vandaag niet over de norm (incl. openstaand ≥ 500 voor
  *    invites en het Unipile-usage-signaal ≥ 75%). Voor InMail is dit het
@@ -33,6 +38,7 @@ export type BeoordelingStatus = 'toegestaan' | 'wachtrij' | 'weigering';
 
 export type ControleNaam =
   | 'account_gezond'
+  | 'abonnement'
   | 'goedgekeurd'
   | 'dagbudget'
   | 'weekbudget'
@@ -75,11 +81,17 @@ export interface BeoordelingsInvoer {
   wekenSindsStart: number;
   acceptatieVerhouding: number;
   limieten: Limieten;
+  /**
+   * Betaalpoort van de klant (SPEC §14.4). Ontbreekt hij, dan geldt geen
+   * betaalpoort (pure unittests); src/budget/verbruik.ts vult hem altijd.
+   */
+  betaalpoort?: Betaalpoort;
 }
 
 export function beoordeel(invoer: BeoordelingsInvoer): Beoordeling {
   const uitslag =
     controle1AccountGezond(invoer) ??
+    controle1aAbonnement(invoer) ??
     controle2Goedgekeurd(invoer) ??
     controle3Dagbudget(invoer) ??
     controle4Weekbudget(invoer) ??
@@ -128,6 +140,18 @@ function controle1AccountGezond(invoer: BeoordelingsInvoer): Beoordeling | null 
         'Accountstatus is onbekend; wacht op volgende statusbericht van Unipile.',
       );
   }
+}
+
+// -- controle 1a: betaalpoort ------------------------------------------------
+
+const VERZENDTYPEN: ReadonlySet<ActieType> = new Set(['invite', 'message', 'inmail'] as const);
+
+function controle1aAbonnement(invoer: BeoordelingsInvoer): Beoordeling | null {
+  if (!invoer.betaalpoort) return null;
+  if (!VERZENDTYPEN.has(invoer.actieType)) return null;
+  if (verzendenToegestaan(invoer.betaalpoort)) return null;
+  // Parkeren, niet afwijzen: zodra er een actief abonnement is, gaat de actie alsnog.
+  return wachtrij('abonnement', REDEN_NIET_ACTIEF);
 }
 
 // -- controle 2 --------------------------------------------------------------
