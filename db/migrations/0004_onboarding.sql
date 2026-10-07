@@ -29,8 +29,10 @@ create index koppel_uitnodigingen_account_idx on koppel_uitnodigingen(account_id
 
 create table account_consents (
   id                            uuid primary key default gen_random_uuid(),
-  account_id                    uuid not null references accounts(id) on delete cascade,
-  uitnodiging_id                uuid references koppel_uitnodigingen(id),
+  -- Toestemming blijft bewaard als bewijs, ook na verwijderen van het account
+  -- (SPEC §14.2 punt 4: zolang het account bestaat plus 2 jaar).
+  account_id                    uuid references accounts(id) on delete set null,
+  uitnodiging_id                uuid references koppel_uitnodigingen(id) on delete set null,
   naam                          text not null,
   email                         text not null,
   versie_voorwaarden            text not null,

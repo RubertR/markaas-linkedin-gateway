@@ -375,11 +375,13 @@ describe('0004_onboarding.sql', () => {
         [account!.id, uitn!.id],
       );
       await db.query('delete from accounts where id = $1', [account!.id]);
-      const [telling] = await db.query<{ u: number; c: number }>(
+      const [telling] = await db.query<{ u: number; c: number; z: number }>(
         `select (select count(*)::int from koppel_uitnodigingen) as u,
-                (select count(*)::int from account_consents) as c`,
+                (select count(*)::int from account_consents) as c,
+                (select count(*)::int from account_consents where account_id is null and uitnodiging_id is null) as z`,
       );
-      assert.deepEqual(telling, { u: 0, c: 0 });
+      // Uitnodigingen gaan mee met het account; toestemming blijft als bewijs bewaard.
+      assert.deepEqual(telling, { u: 0, c: 1, z: 1 });
     } finally {
       await close();
     }
