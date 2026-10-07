@@ -377,6 +377,34 @@ describe('UnipileClient — maakKoppellink', () => {
     assert.equal(body['single_use'], true);
   });
 
+  it('stuurt success_redirect_url en failure_redirect_url alleen mee als ze gegeven zijn', async () => {
+    fake.antwoord('POST', '/api/v1/hosted/accounts/link', {
+      status: 200,
+      body: { object: 'HostedAuthUrl', url: 'https://account.unipile.com/link/r' },
+    });
+    const client = maakClient();
+    await client.maakKoppellink({
+      type: 'create',
+      naam: 'account-42',
+      notifyUrl: 'https://gateway.example/webhooks/koppel',
+      vervaltOp: new Date('2026-10-01T00:00:00Z'),
+      successRedirectUrl: 'https://gateway.example/koppelen/klaar',
+      failureRedirectUrl: 'https://gateway.example/koppelen/mislukt',
+    });
+    await client.maakKoppellink({
+      type: 'create',
+      naam: 'account-43',
+      notifyUrl: 'https://gateway.example/webhooks/koppel',
+      vervaltOp: new Date('2026-10-01T00:00:00Z'),
+    });
+    const met = fake.aanroepen[0]?.body as Record<string, unknown>;
+    assert.equal(met['success_redirect_url'], 'https://gateway.example/koppelen/klaar');
+    assert.equal(met['failure_redirect_url'], 'https://gateway.example/koppelen/mislukt');
+    const zonder = fake.aanroepen[1]?.body as Record<string, unknown>;
+    assert.equal('success_redirect_url' in zonder, false);
+    assert.equal('failure_redirect_url' in zonder, false);
+  });
+
   it('gebruikt reconnect_account bij type "reconnect" en geen providers', async () => {
     fake.antwoord('POST', '/api/v1/hosted/accounts/link', {
       status: 200,

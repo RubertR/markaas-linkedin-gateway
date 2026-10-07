@@ -4,7 +4,9 @@ import { maakAdminApp } from '../admin/server.ts';
 import type { Klok } from '../budget/klok.ts';
 import type { Limieten } from '../budget/limits.ts';
 import type { Env } from '../config/env.ts';
+import type { Juridisch } from '../config/juridisch.ts';
 import type { Backend } from '../db/backend.ts';
+import { maakKoppelApp } from '../koppelen/server.ts';
 import type { Logger } from '../log/logger.ts';
 import { maakMcpApp } from '../mcp/server.ts';
 import type { PauzeKiezer } from '../queue/pauze.ts';
@@ -16,8 +18,9 @@ import { maakWebhookApp } from '../webhooks/server.ts';
 import { maakHealthApp } from './health.ts';
 
 /**
- * Stelt de complete HTTP-app samen: `/health`, `/webhooks/*`, `/mcp` en
- * `/admin/*` in één hono-server (SPEC §7, §8, §12). Puur samenstellen; het
+ * Stelt de complete HTTP-app samen: `/health`, `/webhooks/*`, `/mcp`,
+ * `/admin/*` en de publieke koppelpagina `/koppelen/*` in één hono-server
+ * (SPEC §7, §8, §12, §14.2). Puur samenstellen; het
  * luisteren op een poort gebeurt in `src/main.ts`.
  */
 
@@ -26,6 +29,7 @@ export interface GatewayDeps {
   db: Backend;
   unipile: UnipileClient;
   limieten: Limieten;
+  juridisch: Juridisch;
   klok: Klok;
   pauzeKiezer: PauzeKiezer;
   werkdagen: WerkdagenKiezer;
@@ -45,7 +49,7 @@ export function maakGatewayApp(deps: GatewayDeps) {
     await next();
     const velden = {
       methode: c.req.method,
-      pad: c.req.path,
+      pad: maskeerPad(c.req.path),
       status: c.res.status,
       duur_ms: Math.round(performance.now() - start),
     };
@@ -56,7 +60,7 @@ export function maakGatewayApp(deps: GatewayDeps) {
   app.onError((err, c) => {
     logger.error('Onverwachte fout in HTTP-verzoek', {
       methode: c.req.method,
-      pad: c.req.path,
+      pad: maskeerPad(c.req.path),
       fout: err,
     });
     return c.text('Interne fout in de gateway; zie de logs voor details.', 500);
@@ -105,6 +109,28 @@ export function maakGatewayApp(deps: GatewayDeps) {
       wachtwoordHash: env.adminPasswordHash,
       cookieSecure: productie,
       vertrouwProxy: productie,
+      publicBaseUrl: env.publicBaseUrl,
+      koppeluitnodigingGeldigDagen: deps.juridisch.koppeluitnodiging_geldig_dagen,
+    }),
+  );
+
+  app.route(
+    '/',
+    maakKoppelApp({
+      db: deps.db,
+      unipile: deps.unipile,
+      klok: deps.klok,
+      limieten: deps.limieten,
+      juridisch: deps.juridisch,
+      koppelOpties: {
+        notifyUrl: koppelNotifyUrl(env.publicBaseUrl, env.webhookSecret),
+        apiUrl: unipileBaseUrl(env.unipileDsn),
+        successRedirectUrl: `${env.publicBaseUrl}/koppelen/klaar`,
+        failureRedirectUrl: `${env.publicBaseUrl}/koppelen/mislukt`,
+      },
+      webhookSecret: env.webhookSecret,
+      vertrouwProxy: productie,
+      logger,
     }),
   );
 
@@ -119,3 +145,15 @@ export function unipileBaseUrl(dsn: string): string {
   const schoon = dsn.trim().replace(/\/+$/, '');
   return /^https?:\/\//.test(schoon) ? schoon : `https://${schoon}`;
 }
+
+const VASTE_KOPPELPADEN = new Set(['/koppelen/klaar', '/koppelen/mislukt']);
+
+/**
+ * Het token van de koppelpagina staat in het pad; dat hoort niet in de logs.
+ * `/koppelen/<token>` → `/koppelen/…`.
+ */
+export function maskeerPad(pad: string): string {
+  if (!pad.startsWith('/koppelen/') || VASTE_KOPPELPADEN.has(pad)) return pad;
+  return '/koppelen/…';
+}
+

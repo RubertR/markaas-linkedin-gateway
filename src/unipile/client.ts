@@ -32,6 +32,10 @@ export interface KoppellinkAanvraag {
   singleUse?: boolean;
   cookieAuthUit?: boolean;
   apiUrl?: string;
+  /** Unipile stuurt de browser hierheen na een geslaagde koppeling. */
+  successRedirectUrl?: string;
+  /** Unipile stuurt de browser hierheen als koppelen mislukt. */
+  failureRedirectUrl?: string;
 }
 
 export interface Koppellink {
@@ -315,6 +319,8 @@ export function maakUnipileClient(opties: UnipileOpties): UnipileClient {
         name: aanvraag.naam,
         notify_url: aanvraag.notifyUrl,
       };
+      if (aanvraag.successRedirectUrl) body['success_redirect_url'] = aanvraag.successRedirectUrl;
+      if (aanvraag.failureRedirectUrl) body['failure_redirect_url'] = aanvraag.failureRedirectUrl;
       const ctx: { accountId?: string } = {};
       if (aanvraag.type === 'create') {
         body['providers'] = ['LINKEDIN'];

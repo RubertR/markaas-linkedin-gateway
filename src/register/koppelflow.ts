@@ -1,5 +1,5 @@
 import type { Backend } from '../db/backend.ts';
-import type { UnipileClient } from '../unipile/client.ts';
+import type { KoppellinkAanvraag, UnipileClient } from '../unipile/client.ts';
 import {
   UnipileGatewayAuthFout,
   UnipileTijdelijkeFout,
@@ -17,6 +17,9 @@ export interface KoppelflowOpties {
   notifyUrl: string;
   apiUrl: string;
   linkDuurUren?: number;
+  /** Optioneel: waar Unipile de browser na koppelen heen stuurt (SPEC §14.2 punt 6). */
+  successRedirectUrl?: string;
+  failureRedirectUrl?: string;
 }
 
 const STANDAARD_LINK_DUUR_UREN = 24;
@@ -75,14 +78,17 @@ export async function maakCreateLink(
     throw new KoppelflowFout('invoer', `Onbekend account-id: ${accountId}.`);
   }
   try {
-    return await unipile.maakKoppellink({
+    const aanvraag: KoppellinkAanvraag = {
       type: 'create',
       naam: account.id,
       notifyUrl: opties.notifyUrl,
       apiUrl: opties.apiUrl,
       vervaltOp: vervaltOp(opties.linkDuurUren ?? STANDAARD_LINK_DUUR_UREN),
       singleUse: true,
-    });
+    };
+    if (opties.successRedirectUrl) aanvraag.successRedirectUrl = opties.successRedirectUrl;
+    if (opties.failureRedirectUrl) aanvraag.failureRedirectUrl = opties.failureRedirectUrl;
+    return await unipile.maakKoppellink(aanvraag);
   } catch (err) {
     if (err instanceof UnipileGatewayAuthFout) throw err;
     const flowFout = omzettenNaarKoppelflowFout(err);

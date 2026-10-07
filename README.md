@@ -28,10 +28,31 @@ Geteste Unipile-endpoints staan in `docs/unipile-notities.md`.
 | [docs/limieten.md](docs/limieten.md) | Werknormen per account en actie |
 | [docs/uitrol-railway.md](docs/uitrol-railway.md) | Stappenplan voor de uitrol op Railway (EU West) |
 
+## Nieuwe klant aanmaken (SPEC §14.2)
+
+1. Log in op `/admin/` en kies **Klanten** → **Nieuwe klant**.
+2. Vul klantnaam, slug (leeg = voorstel uit de naam), naam en e-mail van de
+   accounteigenaar en het LinkedIn-abonnement in. Laat **Abonnement vereist** aan, behalve
+   voor MARKaaS, IPknowledge en TAG (SPEC §14.4).
+3. De volgende pagina toont de koppellink (`<PUBLIC_BASE_URL>/koppelen/<token>`) en een
+   voorbeeldmail. **Kopieer ze meteen**: de link is daarna niet meer op te vragen (alleen een
+   hash staat in de database). Plak de mail in je eigen mailprogramma en verstuur hem.
+4. De link is 7 dagen geldig (`config/juridisch.json`) en werkt één keer. De eigenaar leest de
+   uitleg, vult naam en e-mail in, zet drie vinkjes en gaat door naar de inlogpagina van
+   Unipile. De toestemming staat dan in `account_consents`.
+5. Na het inloggen stuurt Unipile de eigenaar naar `/koppelen/klaar` (of `/koppelen/mislukt`)
+   en meldt de koppeling via de webhook; het account gaat dan van `CONNECTING` naar `OK`.
+6. Verlopen of kwijt? Klik bij het account in **Klanten** op **Nieuwe koppellink**. De vorige
+   link vervalt daarmee.
+
+Nieuwe versie van de voorwaarden of verwerkersovereenkomst: pas `versie` (en eventueel
+`url`) aan in `config/juridisch.json`. Lege `url` = de pagina meldt dat MARKaaS het document
+meestuurt.
+
 ## Scripts
 
 - `npm start` — start de gateway (hono-server met `/health`, `/webhooks/*`,
-  `/mcp`, `/admin/*`, plus de planner-lus als `PLANNER_ENABLED=true`). Dit is
+  `/mcp`, `/admin/*`, `/koppelen/*`, plus de planner-lus als `PLANNER_ENABLED=true`). Dit is
   het startcommando op Railway; zie [docs/uitrol-railway.md](docs/uitrol-railway.md).
 - `npm run dev` — hetzelfde, maar leest lokaal `.env`.
 - `npm test` — alle tests tegen PGlite.
