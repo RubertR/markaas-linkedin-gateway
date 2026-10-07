@@ -1,6 +1,10 @@
 # SPEC — MARKaaS LinkedIn-gateway
 
-Versie 0.1 · 30 september 2026 · eigenaar: Rubert Rietkerk (MARKaaS)
+Versie 0.2 · 7 oktober 2026 · eigenaar: Rubert Rietkerk (MARKaaS)
+
+> **Wijziging 0.2 (7 okt 2026, besluit Rubert):** de gateway wordt een betaald product. Klanten
+> krijgen een eigen portaal met login, keuren zelf concepten goed en betalen een abonnement via
+> Stripe. Zie §14. Dit vervangt de uitsluiting "klantportaal, facturatie, zelfbediening" uit §2.
 
 ## 1. Doel
 
@@ -17,14 +21,19 @@ verbinding met LinkedIn. De gateway voegt toe wat MARKaaS als product onderschei
 **Wel (v1)**
 
 - 10–25 klanten, gemiddeld 2 LinkedIn-accounts per klant.
-- Alleen MARKaaS bedient het systeem. Klanten koppelen alleen hun LinkedIn-account via een link.
+- MARKaaS bedient het systeem: zoeken, concepten maken, sequenties starten. Klanten koppelen
+  hun LinkedIn-account via een link, keuren concepten voor hun eigen accounts goed in het
+  klantportaal en betalen een abonnement (§14).
 - Acties: zoeken (LinkedIn en Sales Navigator), profiel ophalen, connectieverzoek, bericht aan
   connectie, InMail.
 - Eenvoudige sequenties: verzoek → geaccepteerd → bericht → opvolging; stopt bij een reactie.
 
 **Niet (v1)**
 
-- Klantportaal met eigen login, facturatie, zelfbediening.
+- Zelfbediening voor zoeken, teksten schrijven of sequenties starten door klanten.
+- Aanmelden zonder uitnodiging van MARKaaS.
+- E-mail versturen vanuit de gateway: uitnodigings- en koppellinks kopieert Rubert zelf in
+  een mail (later eventueel een e-maildienst).
 - E-mail, WhatsApp of andere kanalen van Unipile.
 - Posts plaatsen, liken of reageren namens klanten.
 - Engagement-scraping (likers/commenters van posts) — blijft voorlopig in Phantombuster.
@@ -327,7 +336,8 @@ welke sequentie het verzoek komt zonder in de database te duiken.
 | 1 Verkennen | Unipile-proefaccount, eigen account koppelen, endpoints uitproberen | Alle acties werken handmatig op Ruberts account |
 | 2 Kern bouwen | Register, koppelflow, webhooks, budgetmotor, wachtrij, nep-Unipile | Tests groen, inclusief 429 en CREDENTIALS |
 | 3 Eigen proef | MCP-server, sequenties, alleen Ruberts account op halve normen | 3 weken zonder waarschuwing |
-| 4 Klanten over | Per klant HeyReach uit, gateway aan: IPknowledge, Aqua, ICT Media, TAG | — |
+| 4 Klanten over | Per klant HeyReach uit, gateway aan: IPknowledge, Aqua, ICT Media, TAG | Eerste klant 3 weken zonder waarschuwing |
+| 5 Product | Onboarding, klantportaal, Stripe-abonnement, voorwaarden en verwerkersovereenkomst (§14) | Eerste betalende klant via de volledige flow |
 
 ## 11. Open vragen
 
@@ -338,3 +348,98 @@ welke sequentie het verzoek komt zonder in de database te duiken.
 - Apart Unipile-account voor productie vóór fase 4? Nu delen ontwikkeling en productie
   één Unipile-account en DSN, en verschillen ze alleen in hun Access Token. Besluiten
   voordat de eerste klantaccounts overgaan.
+
+## 14. Klantportaal, onboarding en abonnement
+
+*Toegevoegd in versie 0.2. Volgorde van bouwen: 14.1 → 14.2 → 14.3 → 14.4.*
+
+### 14.1 Rollen
+
+| Rol | Wie | Waar | Mag |
+| --- | --- | --- | --- |
+| Beheerder | Rubert (MARKaaS) | `/admin/` (bestaand, §12) | Alles: klanten aanmaken, uitnodigen, alle concepten goedkeuren |
+| Klantgebruiker | Meerdere per klant | `/portaal/` (nieuw) | Alleen de accounts van de eigen klant zien; concepten van die accounts goedkeuren of afwijzen; resultaten bekijken; abonnement starten en beheren |
+
+Een klantgebruiker ziet nooit gegevens van een andere klant. Elke query in het portaal filtert
+op `client_id` van de ingelogde gebruiker; tests bewijzen dat een gebruiker van klant A geen
+actie, account of resultaat van klant B kan lezen of goedkeuren.
+
+Goedkeuren kan door de klant én door MARKaaS. `goedgekeurd_door` legt vast wie:
+`rubert` of `klant:<e-mailadres>`.
+
+### 14.2 Onboarding van een nieuwe klant
+
+1. **Klant aanmaken** (`/admin/klanten/nieuw`): klantnaam, slug, naam en e-mail van de
+   accounteigenaar, LinkedIn-abonnement. Maakt `clients` + `accounts` (status `CONNECTING`,
+   nog geen `unipile_account_id`) en een **koppeluitnodiging**.
+2. **Koppeluitnodiging:** een eigen token van de gateway (willekeurig, 32 bytes, in de database
+   alleen als hash), standaard 7 dagen geldig, eenmalig. Rubert kopieert de link
+   `/koppelen/<token>` in een mail aan de accounteigenaar. De Unipile-link zelf wordt pas
+   gemaakt op het moment dat de eigenaar akkoord geeft, omdat die snel verloopt (§6).
+3. **Koppelpagina** (`/koppelen/<token>`, publiek, zonder login): uitleg in gewone taal wat er
+   gebeurt, welke limieten gelden en dat elk bericht eerst wordt goedgekeurd. Drie verplichte
+   vinkjes:
+   - ik ben eigenaar van dit LinkedIn-account of handel met toestemming van de eigenaar;
+   - ik geef toestemming om dit account via de gateway te gebruiken binnen de vastgelegde limieten;
+   - ik heb de voorwaarden en de verwerkersovereenkomst (met versienummer) gelezen.
+4. **Toestemming vastleggen** in `account_consents`: account, naam, e-mail, tekstversie van
+   voorwaarden en verwerkersovereenkomst, tijdstip, gehashte IP (SHA-256 met geheim zout) en
+   user-agent. Bewaard zolang het account bestaat plus 2 jaar.
+5. Daarna maakt de gateway een Unipile hosted-auth-link (`type: create`) en stuurt de browser
+   door. Callback `CREATION_SUCCESS` werkt zoals in §6.
+6. De pagina toont na terugkomst "gekoppeld" of een duidelijke foutmelding met vervolgstap.
+
+### 14.3 Klantportaal
+
+- **Uitnodigen** (`/admin/klanten/<slug>`): Rubert vult naam en e-mail in en krijgt een
+  uitnodigingslink (zelfde tokenregels als 14.2, 7 dagen, eenmalig). De gebruiker kiest
+  daarmee zijn wachtwoord (minimaal 12 tekens, scrypt-hash zoals de admin).
+- **Inloggen** (`/portaal/login`): e-mail + wachtwoord, eigen sessiecookie (`portaal_sessie`,
+  HttpOnly, Secure, SameSite=Strict), CSRF-token per sessie, vertraging na mislukte pogingen
+  zoals bij de admin. Wachtwoord vergeten: Rubert maakt een nieuwe uitnodigingslink (v1).
+- **Concepten** (`/portaal/`): open concepten van de eigen accounts met lead, tekst en stap;
+  goedkeuren, afwijzen met reden, of alles tegelijk goedkeuren. Dezelfde helpers als de admin
+  (`src/queue/acties.ts`), zodat budget, tijdvenster en sequentieregels identiek gelden.
+- **Resultaten** (`/portaal/resultaten`): per account verstuurd, geaccepteerd, gereageerd,
+  per week; status van het account (gekoppeld, opnieuw koppelen nodig met knop voor een
+  reconnect-link, in afkoeling).
+- **Abonnement** (`/portaal/abonnement`): status, proefperiode tot, volgende betaling; knop
+  "Abonnement starten" (Stripe Checkout) of "Abonnement beheren" (Stripe Customer Portal).
+- Sessies van het portaal worden in de database bewaard (tabel `portal_sessions`), omdat er
+  meerdere gebruikers zijn en een herstart ze niet mag uitloggen.
+
+### 14.4 Abonnement via Stripe
+
+- Alle Stripe-aanroepen alleen in `src/stripe/` (zelfde regel als `src/unipile/`). Tests
+  gebruiken `test/fake-stripe/`. Sleutels uit `.env`: `STRIPE_SECRET_KEY`,
+  `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID`.
+- **Prijsmodel:** maandabonnement met **30 dagen proefperiode** (de pilot). Opzeggen vóór het
+  einde van de proef = geen betaling ("geen resultaat, geen factuur"). Prijs en proefduur staan
+  in Stripe en `config/abonnement.json`, nooit in de code.
+- **Checkout:** Stripe Checkout in `subscription`-modus, één Stripe-customer per klant
+  (`metadata.client_id`). Aantal = aantal gekoppelde LinkedIn-accounts als de prijs per
+  account is.
+- **Webhook** `/webhooks/stripe`: handtekening controleren met `STRIPE_WEBHOOK_SECRET`;
+  dedup op event-id in `events`. Verwerkt `checkout.session.completed`,
+  `customer.subscription.created|updated|deleted`, `invoice.paid`, `invoice.payment_failed`.
+- **Tabel `subscriptions`:** client_id, stripe_customer_id, stripe_subscription_id, status
+  (Stripe-status), proef_tot, periode_tot, bijgewerkt_op.
+- **Betaalpoort in de budgetmotor:** voor klanten met `abonnement_vereist = true`:
+  - `trialing`, `active` → normaal;
+  - `past_due` → normaal, met waarschuwing in portaal en ochtendbriefing;
+  - `unpaid`, `canceled`, `incomplete_expired` of geen abonnement → **geen verzending**
+    (`invite`, `message`, `inmail`): de budgetmotor weigert met een NL-reden
+    "Abonnement niet actief". Zoeken en profielen blijven mogelijk voor MARKaaS.
+  - MARKaaS, IPknowledge en TAG krijgen `abonnement_vereist = false` (besluit Rubert,
+    7 okt 2026). Aqua, ICT Media en alle nieuwe klanten krijgen `true`: zij hebben een
+    actief abonnement (of proefperiode) nodig voordat er verzonden wordt.
+
+### 14.5 Juridisch
+
+- Voorwaarden en verwerkersovereenkomst staan als versie-genummerde documenten vast; de
+  koppelpagina toont de actuele versie en `account_consents` legt vast welke versie is
+  geaccepteerd.
+- Subverwerkers (opnemen in de verwerkersovereenkomst): Unipile (LinkedIn-verbinding),
+  Railway (hosting, EU West), Supabase (database, Frankfurt), Stripe (betalingen),
+  Anthropic (Claude, opstellen van concepten en selectie van leads).
+- De documenten worden juridisch getoetst voordat de eerste betalende klant start.
