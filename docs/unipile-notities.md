@@ -226,6 +226,21 @@ Niet geabonneerd: `creation_success`/`creation_fail` (komen via de koppel-callba
 - Ontdubbeling: gateway-event `acceptatie` per account+attendee; een `new_relation` erna
   (of ervoor) beweegt teller en sequentie niet nog eens.
 
+**Correctie 7 okt 2026: payload van `new_relation`.**
+
+- Unipile levert bij `new_relation` **geen** `attendee_provider_id` of `sender`, maar:
+  `event`, `account_id`, `account_type`, `webhook_name`, `user_full_name`,
+  **`user_provider_id`**, `user_public_identifier`, `user_profile_url`, `user_picture_url`
+  (developer.unipile.com, "Detecting accepted invitations"). Ook geen `timestamp`.
+- Tot 7 okt las de gateway alleen `attendee_provider_id`: acceptaties werden niet aan een
+  sequentie gekoppeld (4 gemiste acceptaties op 5–6 okt), terwijl de teller wel daalde.
+- Fix: `relatieProviderId()` leest eerst `user_provider_id`. Zonder provider-id wordt het event
+  alleen opgeslagen; de teller blijft dan staan.
+- Herstel van de gemiste events: `npm run acceptaties:herstel` (dry-run), daarna
+  `-- --uitvoeren`. Raakt de teller niet.
+- `new_relation` kan tot 8 uur na de acceptatie binnenkomen; het eerste eigen bericht blijft het
+  snelste signaal.
+
 ## Hosted auth (koppelen en opnieuw koppelen)
 
 *Getest 30 sep 2026, v1: twee links aangemaakt, niet gebruikt.*

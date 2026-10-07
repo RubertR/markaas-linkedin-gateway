@@ -155,6 +155,32 @@ describe('users.new_relation webhook', () => {
     assert.equal(account?.openstaandeVerzoeken, 0);
   });
 
+  it('echte Unipile-payload met user_provider_id verlaagt de teller', async () => {
+    await db.query('update accounts set openstaande_verzoeken = 3 where id=$1', [accountId]);
+    const uitkomst = await verwerkUnipileWebhook(db, unipile, KOPPEL_OPTIES, {
+      event: 'new_relation',
+      account_id: UNIPILE_ACCOUNT_ID,
+      account_type: 'LINKEDIN',
+      user_provider_id: 'ACo-lead-echt',
+      user_full_name: 'Echte Lead',
+    });
+    assert.equal(uitkomst.verwerkt, true);
+    assert.equal((await vindAccount(db, accountId))?.openstaandeVerzoeken, 2);
+    assert.equal(await tel("events where type='acceptatie'"), 1);
+  });
+
+  it('zonder provider-id: event opgeslagen, teller blijft staan', async () => {
+    await db.query('update accounts set openstaande_verzoeken = 3 where id=$1', [accountId]);
+    const uitkomst = await verwerkUnipileWebhook(db, unipile, KOPPEL_OPTIES, {
+      event: 'new_relation',
+      account_id: UNIPILE_ACCOUNT_ID,
+    });
+    assert.equal(uitkomst.verwerkt, false);
+    assert.match(uitkomst.reden ?? '', /user_provider_id/);
+    assert.equal((await vindAccount(db, accountId))?.openstaandeVerzoeken, 3);
+    assert.equal(await tel("events where type='new_relation'"), 1);
+  });
+
   it('onbekend account: event opgeslagen, geen crash', async () => {
     const uitkomst = await verwerkUnipileWebhook(db, unipile, KOPPEL_OPTIES, {
       event: 'new_relation',

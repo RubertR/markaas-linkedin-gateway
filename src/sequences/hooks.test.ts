@@ -14,6 +14,7 @@ import { startFakeUnipile, type FakeUnipile } from '../../test/fake-unipile/serv
 import { maakUnipileClient, type UnipileClient } from '../unipile/client.ts';
 import { verseDatabaseMetMigraties } from '../../test/helpers/pglite.ts';
 import { verwerkUnipileWebhook } from '../webhooks/unipile.ts';
+import { herstelGemisteAcceptaties } from '../webhooks/acceptatie-herstel.ts';
 
 import { startSequentie, vindSequentie } from './motor.ts';
 import { vasteWerkdagen } from './wachttijd.ts';
@@ -294,5 +295,71 @@ describe('acceptatie via het eerste eigen bericht (sequentie-hook)', () => {
     await verwerkUnipileWebhook(db, unipile, KOPPEL, eigenBericht('M-2'), HOOK());
     const seq = await vindSequentie(db, id);
     assert.equal(seq?.status, 'geaccepteerd');
+  });
+});
+
+const LEAD_ECHT = {
+  providerId: 'ACoAAGC-echte-lead',
+  naam: 'Guus',
+  functie: 'Export Sales Manager',
+  bedrijf: 'Bravilor',
+  linkedinUrl: 'https://www.linkedin.com/in/guus/',
+  waarom: 'Trigger: export',
+};
+const TEKSTEN = { invite: 'Hoi Guus', bericht: 'Dank voor het connecten', opvolging: 'Nog een vraag' };
+
+/** Payload zoals Unipile hem echt levert (docs "Detecting accepted invitations"). */
+function echteNewRelation(providerId: string) {
+  return {
+    event: 'new_relation',
+    account_id: UNIPILE_ID,
+    account_type: 'LINKEDIN',
+    webhook_name: 'gateway-relaties',
+    user_full_name: 'Guus V',
+    user_provider_id: providerId,
+    user_public_identifier: 'guus',
+    user_profile_url: 'https://www.linkedin.com/in/guus/',
+    user_picture_url: null,
+  };
+}
+
+describe('new_relation met de echte Unipile-payload (user_provider_id)', () => {
+  it('zet de lopende sequentie op geaccepteerd', async () => {
+    const uit = await startSequentie(db, { accountId, lead: LEAD_ECHT, teksten: TEKSTEN });
+    const klok = vasteKlok(new Date('2026-10-07T09:00:00Z'));
+    const resultaat = await verwerkUnipileWebhook(db, unipile, KOPPEL, echteNewRelation(LEAD_ECHT.providerId), {
+      db, limieten, klok, werkdagen: vasteWerkdagen(2),
+    });
+    assert.equal(resultaat.verwerkt, true);
+    const seq = await vindSequentie(db, uit.sequentie.id);
+    assert.equal(seq?.status, 'geaccepteerd');
+    assert.equal(seq?.stap, 1);
+  });
+
+  it('herstel: oud opgeslagen event zonder acceptatie wordt alsnog verwerkt (dry-run schrijft niets)', async () => {
+    const uit = await startSequentie(db, { accountId, lead: LEAD_ECHT, teksten: TEKSTEN });
+    await db.query(
+      `insert into events(bron, type, extern_id, account_id, payload)
+       values ('unipile', 'new_relation', 'oud-zonder-acceptatie', $1, $2::jsonb)`,
+      [accountId, JSON.stringify(echteNewRelation(LEAD_ECHT.providerId))],
+    );
+    await db.query('update accounts set openstaande_verzoeken = 4 where id = $1', [accountId]);
+    const klok = vasteKlok(new Date('2026-10-07T09:00:00Z'));
+
+    const plan = await herstelGemisteAcceptaties(db, limieten, klok, vasteWerkdagen(1), { uitvoeren: false });
+    assert.equal(plan.length, 1);
+    assert.equal(plan[0]?.sequentieId, uit.sequentie.id);
+    assert.equal((await vindSequentie(db, uit.sequentie.id))?.status, 'lopend');
+
+    const echt = await herstelGemisteAcceptaties(db, limieten, klok, vasteWerkdagen(1), { uitvoeren: true });
+    assert.equal(echt[0]?.uitgevoerd, true);
+    assert.equal((await vindSequentie(db, uit.sequentie.id))?.status, 'geaccepteerd');
+
+    const teller = await db.query<{ n: number }>('select openstaande_verzoeken as n from accounts where id = $1', [accountId]);
+    assert.equal(Number(teller[0]?.n), 4, 'herstel raakt de teller niet');
+
+    const nogmaals = await herstelGemisteAcceptaties(db, limieten, klok, vasteWerkdagen(1), { uitvoeren: true });
+    assert.equal(nogmaals[0]?.uitgevoerd, false);
+    assert.match(nogmaals[0]?.uitkomst ?? '', /al geregistreerd/i);
   });
 });

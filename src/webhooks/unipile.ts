@@ -13,6 +13,8 @@ export interface UnipileWebhookPayload {
   message_id?: string;
   is_sender?: boolean;
   attendee_provider_id?: string;
+  /** new_relation (bron `users`): provider-id van de nieuwe connectie. */
+  user_provider_id?: string;
   sender?: { attendee_provider_id?: string };
   attendees?: Array<{ attendee_provider_id?: string }>;
   [key: string]: unknown;
@@ -121,6 +123,20 @@ async function verwerkAccountStatus(
   return { verwerkt: true };
 }
 
+/**
+ * Provider-id van de nieuwe connectie in een `new_relation`-webhook.
+ * Unipile levert `user_provider_id` (docs "Detecting accepted invitations",
+ * waarneming 7 okt 2026); de oudere veldnamen blijven als terugval.
+ */
+export function relatieProviderId(payload: UnipileWebhookPayload): string | undefined {
+  const kandidaten = [
+    payload.user_provider_id,
+    payload.attendee_provider_id,
+    payload.sender?.attendee_provider_id,
+  ];
+  return kandidaten.find((k): k is string => typeof k === 'string' && k.trim() !== '');
+}
+
 async function verwerkNewRelation(
   db: Backend,
   payload: UnipileWebhookPayload,
@@ -132,7 +148,8 @@ async function verwerkNewRelation(
   }
   const account = await vindAccountBijUnipileId(db, unipileAccountId);
 
-  const attendee = payload.attendee_provider_id ?? payload.sender?.attendee_provider_id ?? 'onbekend';
+  const attendeeProviderId = relatieProviderId(payload);
+  const attendee = attendeeProviderId ?? 'onbekend';
   const externId = `webhook:new_relation:${unipileAccountId}:${attendee}:${payload.timestamp ?? ''}`;
   const opgeslagen = await bewaarEvent(
     db,
@@ -152,15 +169,20 @@ async function verwerkNewRelation(
     };
   }
 
-  const attendeeProviderId = payload.attendee_provider_id ?? payload.sender?.attendee_provider_id;
-  if (attendeeProviderId) {
-    const nieuw = await registreerAcceptatie(db, account.id, unipileAccountId, attendeeProviderId, 'new_relation');
-    if (!nieuw) {
-      return {
-        verwerkt: false,
-        reden: 'Acceptatie al geregistreerd (eerder signaal); teller en sequentie niet opnieuw bijgewerkt.',
-      };
-    }
+  if (!attendeeProviderId) {
+    // Zonder provider-id weten we niet wie accepteerde: teller en sequentie
+    // blijven ongemoeid, anders loopt de teller weg van de werkelijkheid.
+    return {
+      verwerkt: false,
+      reden: 'new_relation zonder user_provider_id; event opgeslagen, teller en sequentie niet bijgewerkt.',
+    };
+  }
+  const nieuw = await registreerAcceptatie(db, account.id, unipileAccountId, attendeeProviderId, 'new_relation');
+  if (!nieuw) {
+    return {
+      verwerkt: false,
+      reden: 'Acceptatie al geregistreerd (eerder signaal); teller en sequentie niet opnieuw bijgewerkt.',
+    };
   }
   await verwerkAcceptatieGevolgen(db, account.id, unipileAccountId, attendeeProviderId, sequentieHook);
   return { verwerkt: true };
@@ -171,7 +193,7 @@ async function verwerkNewRelation(
  * het eerste eigen bericht in een nieuw gesprek). De unieke extern_id in de
  * events-tabel is de ontdubbeling. Geeft `false` als ze er al was.
  */
-async function registreerAcceptatie(
+export async function registreerAcceptatie(
   db: Backend,
   accountId: string,
   unipileAccountId: string,
@@ -282,7 +304,8 @@ async function verwerkEigenBericht(
     `select count(*)::text as aantal from events
      where account_id = $1
        and type = 'new_relation'
-       and coalesce(payload ->> 'attendee_provider_id', payload -> 'sender' ->> 'attendee_provider_id') = $2`,
+       and coalesce(payload ->> 'user_provider_id', payload ->> 'attendee_provider_id',
+                    payload -> 'sender' ->> 'attendee_provider_id') = $2`,
     [account.id, attendeeProviderId],
   );
   if (Number(oudeRelatie[0]?.aantal ?? '0') > 0) {
