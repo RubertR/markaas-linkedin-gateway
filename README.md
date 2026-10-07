@@ -49,10 +49,29 @@ Nieuwe versie van de voorwaarden of verwerkersovereenkomst: pas `versie` (en eve
 `url`) aan in `config/juridisch.json`. Lege `url` = de pagina meldt dat MARKaaS het document
 meestuurt.
 
+## Klantgebruiker uitnodigen (SPEC §14.3)
+
+1. Log in op `/admin/`, kies **Klanten** en klik op de naam van de klant
+   (`/admin/klanten/<slug>`).
+2. Vul onder **Gebruiker uitnodigen** naam en e-mail in. Een e-mailadres kan maar bij één
+   klant horen.
+3. De volgende pagina toont de uitnodigingslink (`<PUBLIC_BASE_URL>/portaal/uitnodiging/<token>`)
+   en een voorbeeldmail. **Kopieer ze meteen**: de link is daarna niet meer op te vragen. De
+   link is 7 dagen geldig (`config/juridisch.json`) en werkt één keer.
+4. De gebruiker kiest via de link een wachtwoord (minimaal 12 tekens) en is daarna ingelogd op
+   `/portaal/`. Daar keurt hij concepten van de accounts van zijn eigen klant goed of af
+   (`goedgekeurd_door`/`afgewezen_door` = `klant:<e-mail>`) en ziet hij onder **Resultaten**
+   per account en per week de verstuurde verzoeken, acceptaties en reacties. Is een account
+   niet (meer) gekoppeld, dan kan hij daar zelf een (her)koppellink starten.
+5. **Wachtwoord vergeten:** klik bij de gebruiker op **Nieuwe link** en stuur die door. De
+   vorige link vervalt; het nieuwe wachtwoord logt alle oude sessies uit.
+6. **Toegang intrekken:** **Deactiveren** logt de gebruiker direct overal uit en maakt open
+   links ongeldig. **Activeren met nieuwe link** geeft weer toegang (met een nieuw wachtwoord).
+
 ## Scripts
 
 - `npm start` — start de gateway (hono-server met `/health`, `/webhooks/*`,
-  `/mcp`, `/admin/*`, `/koppelen/*`, plus de planner-lus als `PLANNER_ENABLED=true`). Dit is
+  `/mcp`, `/admin/*`, `/koppelen/*`, `/portaal/*`, plus de planner-lus als `PLANNER_ENABLED=true`). Dit is
   het startcommando op Railway; zie [docs/uitrol-railway.md](docs/uitrol-railway.md).
 - `npm run dev` — hetzelfde, maar leest lokaal `.env`.
 - `npm test` — alle tests tegen PGlite.

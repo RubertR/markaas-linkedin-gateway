@@ -474,7 +474,7 @@ export async function verwerkReactie(
 export async function stopSequentieNaAfwijzing(
   db: Backend,
   limieten: Limieten,
-  invoer: { actieId: string; reden: string },
+  invoer: { actieId: string; reden: string; door?: string },
 ): Promise<string | null> {
   const stopReden = `${limieten.sequenties.stop_redenen.afgewezen}: ${invoer.reden}`;
   const rijen = await db.query<{ id: string }>(
@@ -491,9 +491,9 @@ export async function stopSequentieNaAfwijzing(
   if (!sequentieId) return null;
   await db.query(
     `update actions
-       set status = 'rejected'::action_status, reden = $3
+       set status = 'rejected'::action_status, reden = $3, afgewezen_door = $4
      where sequence_id = $1 and id <> $2 and status in ('draft', 'queued', 'approved')`,
-    [sequentieId, invoer.actieId, stopReden],
+    [sequentieId, invoer.actieId, stopReden, invoer.door ?? null],
   );
   return sequentieId;
 }

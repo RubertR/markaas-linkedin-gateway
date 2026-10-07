@@ -20,6 +20,8 @@ export interface Actie {
   reden: string | null;
   goedgekeurdDoor: string | null;
   goedgekeurdOp: Date | null;
+  /** Wie de actie afwees: `rubert` of `klant:<e-mail>` (SPEC §14.1). */
+  afgewezenDoor: string | null;
   geplandOp: Date | null;
   uitgevoerdOp: Date | null;
   unipileResponse: Record<string, unknown> | null;
@@ -35,6 +37,7 @@ interface ActieRij {
   reden: string | null;
   goedgekeurd_door: string | null;
   goedgekeurd_op: string | Date | null;
+  afgewezen_door: string | null;
   gepland_op: string | Date | null;
   uitgevoerd_op: string | Date | null;
   unipile_response: Record<string, unknown> | string | null;
@@ -66,6 +69,7 @@ function map(rij: ActieRij): Actie {
     reden: rij.reden,
     goedgekeurdDoor: rij.goedgekeurd_door,
     goedgekeurdOp: alsDatumOfNull(rij.goedgekeurd_op),
+    afgewezenDoor: rij.afgewezen_door,
     geplandOp: alsDatumOfNull(rij.gepland_op),
     uitgevoerdOp: alsDatumOfNull(rij.uitgevoerd_op),
     unipileResponse: alsJson(rij.unipile_response),
@@ -74,7 +78,7 @@ function map(rij: ActieRij): Actie {
 }
 
 const KOLOMMEN = `id, account_id, type, payload, status, reden,
-    goedgekeurd_door, goedgekeurd_op, gepland_op, uitgevoerd_op,
+    goedgekeurd_door, goedgekeurd_op, afgewezen_door, gepland_op, uitgevoerd_op,
     unipile_response, aangemaakt_op`;
 
 const VEREIST_GOEDKEURING: ReadonlySet<ActieType> = new Set(['invite', 'message', 'inmail']);
@@ -156,6 +160,8 @@ export interface StatusOpties {
   geplandOp?: Date | null;
   uitgevoerdOp?: Date | null;
   unipileResponse?: Record<string, unknown> | null;
+  /** Alleen bij afwijzen: wie wees af (`rubert` of `klant:<e-mail>`). */
+  afgewezenDoor?: string | null;
 }
 
 export async function zetActieStatus(
@@ -182,6 +188,10 @@ export async function zetActieStatus(
   if (Object.prototype.hasOwnProperty.call(opties, 'unipileResponse')) {
     params.push(opties.unipileResponse ? JSON.stringify(opties.unipileResponse) : null);
     sets.push(`unipile_response = $${params.length}::jsonb`);
+  }
+  if (Object.prototype.hasOwnProperty.call(opties, 'afgewezenDoor')) {
+    params.push(opties.afgewezenDoor ?? null);
+    sets.push(`afgewezen_door = $${params.length}`);
   }
 
   const rijen = await db.query<ActieRij>(

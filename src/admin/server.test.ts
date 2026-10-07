@@ -8,6 +8,12 @@ import { maakActie, vindActie } from '../queue/acties.ts';
 import { markeerAccountGekoppeld, registreerAccount } from '../register/accounts.ts';
 import { maakClient, vindClientBijSlug } from '../register/clients.ts';
 import { vindGeldigeUitnodiging } from '../register/uitnodiging.ts';
+import {
+  gebruikUitnodiging,
+  nodigGebruikerUit,
+  vindGeldigeGebruikerUitnodiging,
+} from '../portaal/gebruikers.ts';
+import { maakPortaalSessie, vindPortaalSessie } from '../portaal/sessies.ts';
 import { verseDatabaseMetMigraties } from '../../test/helpers/pglite.ts';
 
 import { maakAdminApp, type AdminDeps } from './server.ts';
@@ -698,3 +704,138 @@ describe('klanten en koppellinks (SPEC §14.2)', () => {
   });
 });
 
+
+describe('klantgebruikers uitnodigen (SPEC §14.3)', () => {
+  const KLOK = vasteKlok(NU);
+
+  function portaalTokenUit(html: string): string {
+    const m = html.match(/https:\/\/gateway\.test\/portaal\/uitnodiging\/([A-Za-z0-9_-]+)/);
+    if (!m) throw new Error('geen uitnodigingslink in de pagina');
+    return m[1]!;
+  }
+
+  async function detail(jar: CookieJar): Promise<{ html: string; csrf: string }> {
+    const r = await get('/admin/klanten/markaas-ui', jar);
+    assert.equal(r.status, 200);
+    const html = await r.text();
+    return { html, csrf: csrfUit(html) };
+  }
+
+  it('detailpagina vereist een sessie en geeft 404 voor een onbekende klant', async () => {
+    const zonder = await get('/admin/klanten/markaas-ui', nieuweJar());
+    assert.equal(zonder.status, 303);
+    const jar = nieuweJar();
+    await logIn(jar);
+    assert.equal((await get('/admin/klanten/bestaat-niet', jar)).status, 404);
+  });
+
+  it('klantenoverzicht linkt naar de detailpagina; detail toont accounts en het uitnodigformulier', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    const lijst = await (await get('/admin/klanten', jar)).text();
+    assert.match(lijst, /href="\/admin\/klanten\/markaas-ui"/);
+    const { html } = await detail(jar);
+    assert.match(html, /Rubert/);
+    assert.match(html, /Gebruiker uitnodigen/);
+    assert.match(html, /Nog geen portaalgebruikers/);
+  });
+
+  it('uitnodigen zonder CSRF: 403 en niets aangemaakt', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    const r = await post(
+      '/admin/klanten/markaas-ui/gebruikers',
+      { csrf: 'fout', naam: 'Eva', email: 'eva@acme.nl' },
+      jar,
+    );
+    assert.equal(r.status, 403);
+    const [t] = await db.query<{ n: number }>('select count(*)::int as n from client_users');
+    assert.equal(t?.n, 0);
+  });
+
+  it('uitnodigen toont de link eenmalig met voorbeeldmail; de link werkt 7 dagen', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    const { csrf } = await detail(jar);
+    const r = await post(
+      '/admin/klanten/markaas-ui/gebruikers',
+      { csrf, naam: 'Eva de Vries', email: 'Eva@Acme.nl' },
+      jar,
+    );
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get('cache-control'), 'no-store');
+    const html = await r.text();
+    const token = portaalTokenUit(html);
+    assert.match(html, /Voorbeeldmail/);
+    assert.match(html, /Beste Eva/);
+    assert.match(html, /eva@acme\.nl/);
+    const u = await vindGeldigeGebruikerUitnodiging(db, token, KLOK);
+    assert.equal(u?.email, 'eva@acme.nl');
+    assert.equal(await vindGeldigeGebruikerUitnodiging(db, token, vasteKlok(NU.getTime() + 8 * 86_400_000)), null);
+    const na = await detail(jar);
+    assert.match(na.html, /Eva de Vries/);
+    assert.doesNotMatch(na.html, new RegExp(token));
+  });
+
+  it('ongeldig e-mailadres of dubbel adres: 400 met NL-melding', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    const { csrf } = await detail(jar);
+    const fout = await post('/admin/klanten/markaas-ui/gebruikers', { csrf, naam: 'Eva', email: 'geen' }, jar);
+    assert.equal(fout.status, 400);
+    assert.match(await fout.text(), /geldig e-mailadres/);
+    await post('/admin/klanten/markaas-ui/gebruikers', { csrf, naam: 'Eva', email: 'eva@acme.nl' }, jar);
+    const dubbel = await post('/admin/klanten/markaas-ui/gebruikers', { csrf, naam: 'Eva', email: 'eva@acme.nl' }, jar);
+    assert.equal(dubbel.status, 400);
+    assert.match(await dubbel.text(), /bestaat al/);
+  });
+
+  it('"Nieuwe link" maakt de vorige link ongeldig; "Deactiveren" logt sessies uit', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    const { csrf } = await detail(jar);
+    const eerste = portaalTokenUit(
+      await (await post('/admin/klanten/markaas-ui/gebruikers', { csrf, naam: 'Eva', email: 'eva@acme.nl' }, jar)).text(),
+    );
+    const [g] = await db.query<{ id: string }>("select id from client_users where email = 'eva@acme.nl'");
+    const id = g!.id;
+
+    const nieuw = await post(`/admin/klanten/markaas-ui/gebruikers/${id}/nieuwe-link`, { csrf }, jar);
+    assert.equal(nieuw.status, 200);
+    const tweede = portaalTokenUit(await nieuw.text());
+    assert.equal(await vindGeldigeGebruikerUitnodiging(db, eerste, KLOK), null);
+    assert.ok(await vindGeldigeGebruikerUitnodiging(db, tweede, KLOK));
+
+    await gebruikUitnodiging(db, tweede, 'hash', KLOK);
+    const sessie = await maakPortaalSessie(db, id, { klok: KLOK });
+    const uit = await post(`/admin/klanten/markaas-ui/gebruikers/${id}/deactiveren`, { csrf }, jar);
+    assert.equal(uit.status, 303);
+    assert.equal(uit.headers.get('location'), '/admin/klanten/markaas-ui');
+    assert.equal(await vindPortaalSessie(db, sessie.token, KLOK), null);
+    const [na] = await db.query<{ actief: boolean }>('select actief from client_users where id = $1', [id]);
+    assert.equal(na?.actief, false);
+    assert.match((await detail(jar)).html, /gedeactiveerd/);
+  });
+
+  it('beheeractie op een gebruiker van een andere klant: melding en niets gewijzigd', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    const ander = await maakClient(db, { naam: 'Ander', slug: 'ander' });
+    const r = await nodigGebruikerUit(db, { clientId: ander.id, naam: 'Ad', email: 'ad@ander.nl' }, { klok: KLOK, geldigDagen: 7 });
+    const { csrf } = await detail(jar);
+    const resp = await post(`/admin/klanten/markaas-ui/gebruikers/${r.gebruiker.id}/deactiveren`, { csrf }, jar);
+    assert.equal(resp.status, 303);
+    const [na] = await db.query<{ actief: boolean }>('select actief from client_users where id = $1', [r.gebruiker.id]);
+    assert.equal(na?.actief, true);
+    assert.match((await detail(jar)).html, /Onbekende gebruiker/);
+  });
+
+  it('afwijzen vanuit de admin legt afgewezen_door = rubert vast', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    const d = await maakActie(db, { accountId, type: 'invite', payload: { providerId: 'X' } });
+    const csrf = csrfUit(await (await get('/admin/', jar)).text());
+    await post('/admin/acties/afwijzen', { csrf, actieId: d.id, reden: 'nee' }, jar);
+    assert.equal((await vindActie(db, d.id))?.afgewezenDoor, 'rubert');
+  });
+});

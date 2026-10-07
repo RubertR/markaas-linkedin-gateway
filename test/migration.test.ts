@@ -11,9 +11,12 @@ const VERWACHTE_TABELLEN = [
   'account_consents',
   'accounts',
   'actions',
+  'client_user_uitnodigingen',
+  'client_users',
   'clients',
   'events',
   'koppel_uitnodigingen',
+  'portal_sessions',
   'schema_migrations',
   'sequences',
   'usage',
@@ -24,6 +27,7 @@ const ALLE_MIGRATIES = [
   '0002_sequences.sql',
   '0003_sequenties_herstart.sql',
   '0004_onboarding.sql',
+  '0005_klantportaal.sql',
 ];
 
 describe('0001_init.sql', () => {
@@ -325,7 +329,7 @@ describe('0004_onboarding.sql', () => {
         "insert into clients(naam, slug) values ('MARKaaS', 'markaas'), ('Aqua', 'aqua')",
       );
       const nieuw = await draaiMigraties(db, MIGRATIE_MAP);
-      assert.deepEqual(nieuw, ['0004_onboarding.sql']);
+      assert.deepEqual(nieuw, ['0004_onboarding.sql', '0005_klantportaal.sql']);
       const rijen = await db.query<{ slug: string; abonnement_vereist: boolean }>(
         'select slug, abonnement_vereist from clients order by slug',
       );
@@ -382,6 +386,86 @@ describe('0004_onboarding.sql', () => {
       );
       // Uitnodigingen gaan mee met het account; toestemming blijft als bewijs bewaard.
       assert.deepEqual(telling, { u: 0, c: 1, z: 1 });
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe('0005_klantportaal.sql', () => {
+  it('dwingt kleine letters en een uniek e-mailadres af voor klantgebruikers', async () => {
+    const { db, close } = await verseDatabaseMetMigraties();
+    try {
+      const [a] = await db.query<{ id: string }>(
+        "insert into clients(naam, slug) values ('A', 'a') returning id",
+      );
+      const [b] = await db.query<{ id: string }>(
+        "insert into clients(naam, slug) values ('B', 'b') returning id",
+      );
+      await db.query(
+        "insert into client_users(client_id, email, naam) values ($1, 'jan@a.nl', 'Jan')",
+        [a!.id],
+      );
+      await assert.rejects(
+        db.query(
+          "insert into client_users(client_id, email, naam) values ($1, 'Piet@A.nl', 'Piet')",
+          [a!.id],
+        ),
+        /check|email/i,
+      );
+      // Uniek over alle klanten heen.
+      await assert.rejects(
+        db.query(
+          "insert into client_users(client_id, email, naam) values ($1, 'jan@a.nl', 'Jan B')",
+          [b!.id],
+        ),
+        /duplicate|unique/i,
+      );
+    } finally {
+      await close();
+    }
+  });
+
+  it('ruimt gebruikers, uitnodigingen en sessies op met de klant en heeft actions.afgewezen_door', async () => {
+    const { db, close } = await verseDatabaseMetMigraties();
+    try {
+      const [k] = await db.query<{ id: string }>(
+        "insert into clients(naam, slug) values ('K', 'k') returning id",
+      );
+      const [u] = await db.query<{ id: string }>(
+        "insert into client_users(client_id, email, naam) values ($1, 'eva@k.nl', 'Eva') returning id",
+        [k!.id],
+      );
+      await db.query(
+        `insert into client_user_uitnodigingen(client_user_id, token_hash, verloopt_op)
+         values ($1, 'h1', now() + interval '7 days')`,
+        [u!.id],
+      );
+      await assert.rejects(
+        db.query(
+          `insert into client_user_uitnodigingen(client_user_id, token_hash, verloopt_op)
+           values ($1, 'h1', now())`,
+          [u!.id],
+        ),
+        /duplicate|unique/i,
+      );
+      await db.query(
+        `insert into portal_sessions(id, client_user_id, csrf_token, verloopt_op)
+         values ('sessiehash', $1, 'csrf', now() + interval '12 hours')`,
+        [u!.id],
+      );
+      await db.query('delete from clients where id = $1', [k!.id]);
+      const [telling] = await db.query<{ u: number; i: number; s: number }>(
+        `select (select count(*)::int from client_users) as u,
+                (select count(*)::int from client_user_uitnodigingen) as i,
+                (select count(*)::int from portal_sessions) as s`,
+      );
+      assert.deepEqual(telling, { u: 0, i: 0, s: 0 });
+      const kolommen = await db.query<{ column_name: string }>(
+        `select column_name from information_schema.columns
+         where table_name = 'actions' and column_name = 'afgewezen_door'`,
+      );
+      assert.equal(kolommen.length, 1);
     } finally {
       await close();
     }

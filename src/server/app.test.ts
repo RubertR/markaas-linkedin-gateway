@@ -222,6 +222,28 @@ describe('koppelpagina in de gateway', () => {
   });
 });
 
+describe('klantportaal in de gateway', () => {
+  it('monteert /portaal/*: zonder sessie naar de login, onbekende uitnodiging geeft 410', async () => {
+    const app = maakApp(leesEnv(GEHEIMEN));
+    const start = await app.request('/portaal/');
+    assert.equal(start.status, 303);
+    assert.equal(start.headers.get('location'), '/portaal/login');
+    assert.equal((await app.request('/portaal/login')).status, 200);
+    assert.equal((await app.request('/portaal/uitnodiging/onbekend')).status, 410);
+  });
+
+  it('logt het pad van de uitnodigingspagina zonder het token', async () => {
+    const regels: string[] = [];
+    const app = maakApp(leesEnv(GEHEIMEN), { regels });
+    const token = 'Portaal-Geheim-Token-1234567890abcdefghijklmn';
+    await app.request(`/portaal/uitnodiging/${token}`);
+    const regel = JSON.parse(regels.at(-1)!);
+    assert.equal(regel.pad, '/portaal/uitnodiging/…');
+    for (const r of regels) assert.ok(!r.includes(token), 'logregel bevat het uitnodigingstoken');
+    assert.equal(maskeerPad('/portaal/resultaten'), '/portaal/resultaten');
+  });
+});
+
 describe('unipileBaseUrl', () => {
   it('maakt een https-URL van de DSN', () => {
     assert.equal(unipileBaseUrl('api68.unipile.com:19841'), 'https://api68.unipile.com:19841');
