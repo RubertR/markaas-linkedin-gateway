@@ -12,7 +12,8 @@ import { binnenWerkuren, isWerkdag } from './tijdvenster.ts';
  * 1. account_gezond — status van het Unipile-account.
  *    1a. abonnement — betaalpoort (SPEC §14.4): bij klanten met
  *    `abonnement_vereist` alleen verzending (invite/message/inmail) als het
- *    abonnement `trialing`, `active` of `past_due` is. Structureel.
+ *    abonnement `trialing`, `active` of `past_due` is. Anders wachtrij: de
+ *    actie blijft geparkeerd tot er een actief abonnement is.
  * 2. goedgekeurd — invite/message/inmail vereist menselijke goedkeuring.
  * 3. dagbudget — vandaag niet over de norm (incl. openstaand ≥ 500 voor
  *    invites en het Unipile-usage-signaal ≥ 75%). Voor InMail is dit het
@@ -149,7 +150,8 @@ function controle1aAbonnement(invoer: BeoordelingsInvoer): Beoordeling | null {
   if (!invoer.betaalpoort) return null;
   if (!VERZENDTYPEN.has(invoer.actieType)) return null;
   if (verzendenToegestaan(invoer.betaalpoort)) return null;
-  return weigering('abonnement', REDEN_NIET_ACTIEF);
+  // Parkeren, niet afwijzen: zodra er een actief abonnement is, gaat de actie alsnog.
+  return wachtrij('abonnement', REDEN_NIET_ACTIEF);
 }
 
 // -- controle 2 --------------------------------------------------------------

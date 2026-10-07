@@ -42,6 +42,14 @@ export class AbonnementFout extends Error {
   }
 }
 
+/** Er loopt al een abonnement: niet opnieuw afrekenen, maar naar "Abonnement beheren". */
+export class AlAbonnementFout extends AbonnementFout {
+  constructor() {
+    super('U heeft al een abonnement. Wijzigen of opzeggen kan via "Abonnement beheren".');
+    this.name = 'AlAbonnementFout';
+  }
+}
+
 interface KlantRij {
   naam: string;
   abonnement_vereist: boolean;
@@ -65,12 +73,13 @@ export async function startAbonnement(
   }
   if (!deps.stripe) throw new AbonnementFout(NIET_INGERICHT);
   const bestaand = await vindAbonnement(deps.db, clientId);
-  if (bestaand?.status && !BEEINDIGDE_STATUSSEN.has(bestaand.status)) {
-    throw new AbonnementFout('U heeft al een abonnement. Wijzigen of opzeggen kan via "Abonnement beheren".');
-  }
+  if (bestaand?.status && !BEEINDIGDE_STATUSSEN.has(bestaand.status)) throw new AlAbonnementFout();
 
   let customerId = bestaand?.stripeCustomerId ?? null;
   if (customerId && !(await deps.stripe.client.haalKlant(customerId))) customerId = null;
+  // Stripe is de bron: ook een abonnement waarvan de webhook nog niet binnen is telt mee.
+  const eerdere = customerId ? await deps.stripe.client.lijstAbonnementen(customerId) : [];
+  if (eerdere.some((a) => !BEEINDIGDE_STATUSSEN.has(a.status))) throw new AlAbonnementFout();
   if (!customerId) {
     const nieuw = await deps.stripe.client.maakKlant({
       clientId,
@@ -81,13 +90,17 @@ export async function startAbonnement(
     await bewaarStripeKlant(deps.db, clientId, customerId, deps.klok.nu());
   }
 
+  // Proefperiode maar één keer (SPEC §14.4): niet als de klant ooit een abonnement had.
+  const hadAlAbonnement =
+    Boolean(bestaand?.stripeSubscriptionId) || bestaand?.proefTot != null || eerdere.length > 0;
+
   const aantal = deps.config.prijs_per === 'account' ? await aantalVoorPrijs(deps.db, clientId) : 1;
   const sessie = await deps.stripe.client.maakCheckoutSessie({
     clientId,
     customerId,
     priceId: deps.stripe.priceId,
     aantal,
-    proefperiodeDagen: deps.config.proefperiode_dagen,
+    proefperiodeDagen: hadAlAbonnement ? 0 : deps.config.proefperiode_dagen,
     successUrl: `${deps.publicBaseUrl}/portaal/abonnement/gelukt`,
     cancelUrl: `${deps.publicBaseUrl}/portaal/abonnement/geannuleerd`,
   });

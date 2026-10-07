@@ -93,8 +93,9 @@ beforeEach(async () => {
   ]) {
     await db.query(`delete from ${t}`);
   }
-  klantA = (await maakClient(db, { naam: 'Acme B.V.', slug: 'acme' })).id;
-  klantB = (await maakClient(db, { naam: 'Bolt NV', slug: 'bolt' })).id;
+  // Betaalpoort staat hier niet ter test (zie abonnement.test.ts).
+  klantA = (await maakClient(db, { naam: 'Acme B.V.', slug: 'acme', abonnementVereist: false })).id;
+  klantB = (await maakClient(db, { naam: 'Bolt NV', slug: 'bolt', abonnementVereist: false })).id;
   accA = (await registreerAccount(db, { clientId: klantA, eigenaarNaam: 'Eva de Vries', abonnement: 'premium_business' })).id;
   accA2 = (await registreerAccount(db, { clientId: klantA, eigenaarNaam: 'Adam Acme', eigenaarEmail: 'adam@acme.nl', abonnement: 'free' })).id;
   accB = (await registreerAccount(db, { clientId: klantB, eigenaarNaam: 'Bob Bolt', abonnement: 'free' })).id;
@@ -305,13 +306,13 @@ describe('portaal: uitnodiging en wachtwoord kiezen', () => {
 // -- login, logout, brute force, sessies ------------------------------------
 
 describe('portaal: inloggen en uitloggen', () => {
-  it('juiste gegevens: 303 en een sessiecookie met HttpOnly, SameSite=Strict en Path=/portaal', async () => {
+  it('juiste gegevens: 303 en een sessiecookie met HttpOnly, SameSite=Lax en Path=/portaal', async () => {
     const { j, resp } = await login('Eva@Acme.nl', WACHTWOORD_A);
     assert.equal(resp.status, 303);
     assert.equal(resp.headers.get('location'), '/portaal/');
     const cookie = j.ruw.find((c) => c.startsWith('portaal_sessie='))!;
     assert.match(cookie, /HttpOnly/i);
-    assert.match(cookie, /SameSite=Strict/i);
+    assert.match(cookie, /SameSite=Lax/i);
     assert.match(cookie, /Path=\/portaal/i);
     assert.doesNotMatch(cookie, /Secure/i); // cookieSecure: false in tests
     const [g] = await db.query<{ laatst_ingelogd_op: unknown }>(
@@ -656,16 +657,44 @@ describe('portaal: resultaten', () => {
     assert.equal(body['reconnect_account'], 'uni-a');
   });
 
-  it('opnieuw koppelen van een nog niet gekoppeld account stuurt naar een nieuwe koppelpagina', async () => {
+  it('nog niet gekoppeld account: geen knop, geen nieuwe uitnodiging; melding "Vraag MARKaaS…"', async () => {
     const { j, csrf } = await ingelogd();
+    const html = await (await get('/portaal/resultaten', j)).text();
+    assert.doesNotMatch(html, new RegExp(`/portaal/accounts/${accA2}/opnieuw-koppelen`));
+    assert.match(html, /Vraag MARKaaS om een nieuwe koppellink voor de accounteigenaar/);
     const resp = await post(`/portaal/accounts/${accA2}/opnieuw-koppelen`, { csrf }, j);
     assert.equal(resp.status, 303);
-    const locatie = resp.headers.get('location') ?? '';
-    const m = locatie.match(/^\/koppelen\/([A-Za-z0-9_-]+)$/);
-    assert.ok(m, `onverwachte doorverwijzing: ${locatie}`);
-    const u = await vindGeldigeUitnodiging(db, m[1]!, klok);
-    assert.equal(u?.accountId, accA2);
+    assert.equal(resp.headers.get('location'), '/portaal/resultaten');
+    assert.match(await (await get('/portaal/resultaten', j)).text(), /Vraag MARKaaS om een nieuwe koppellink/);
+    const [t] = await db.query<{ n: number }>('select count(*)::int as n from koppel_uitnodigingen where account_id = $1', [accA2]);
+    assert.equal(t!.n, 0);
     assert.equal(fake.aanroepen.length, 0);
+  });
+
+  it('rem: maximaal één reconnect-link per account per 5 minuten', async () => {
+    await werkAccountStatusBij(db, accA, 'CREDENTIALS');
+    fake.antwoord('POST', LINK, { status: 200, body: { object: 'HostedAuthUrl', url: UNIPILE_URL } });
+    const { j, csrf } = await ingelogd();
+    assert.equal((await post(`/portaal/accounts/${accA}/opnieuw-koppelen`, { csrf }, j)).headers.get('location'), UNIPILE_URL);
+    nu = new Date(NU.getTime() + 4 * 60 * 1000);
+    const tweede = await post(`/portaal/accounts/${accA}/opnieuw-koppelen`, { csrf }, j);
+    assert.equal(tweede.headers.get('location'), '/portaal/resultaten');
+    assert.match(await (await get('/portaal/resultaten', j)).text(), /over 5 minuten opnieuw/);
+    assert.equal(fake.aanroepen.length, 1);
+    nu = new Date(NU.getTime() + 6 * 60 * 1000);
+    assert.equal((await post(`/portaal/accounts/${accA}/opnieuw-koppelen`, { csrf }, j)).headers.get('location'), UNIPILE_URL);
+    assert.equal(fake.aanroepen.length, 2);
+  });
+
+  it('rem telt niet als Unipile faalt: direct opnieuw proberen kan', async () => {
+    await werkAccountStatusBij(db, accA, 'CREDENTIALS');
+    let keer = 0;
+    fake.antwoord('POST', LINK, () =>
+      ++keer === 1 ? { status: 503, body: {} } : { status: 200, body: { object: 'HostedAuthUrl', url: UNIPILE_URL } },
+    );
+    const { j, csrf } = await ingelogd();
+    assert.equal((await post(`/portaal/accounts/${accA}/opnieuw-koppelen`, { csrf }, j)).headers.get('location'), '/portaal/resultaten');
+    assert.equal((await post(`/portaal/accounts/${accA}/opnieuw-koppelen`, { csrf }, j)).headers.get('location'), UNIPILE_URL);
   });
 
   it('opnieuw koppelen van een werkend account: melding, geen link', async () => {
@@ -688,3 +717,80 @@ describe('portaal: resultaten', () => {
   });
 });
 
+
+describe('portaal: foutmeldingen (alleen bekende fouten letterlijk)', () => {
+  it('te lange tekst (bekende invoerfout) wordt letterlijk getoond', async () => {
+    const d = await draft(accA, 'Lang', 'x'.repeat(400));
+    const { j, csrf } = await ingelogd();
+    await post('/portaal/acties/goedkeuren', { csrf, actieId: d.id }, j);
+    assert.match(await (await get('/portaal/', j)).text(), /Tekst is 400 tekens/);
+    assert.equal(await status(d.id), 'draft');
+  });
+
+  it('onverwachte fout: algemene NL-melding, geen interne details; details in de log', async () => {
+    const d = await draft(accA, 'Kapot');
+    const regels: string[] = [];
+    const kapotteDb: Backend = {
+      ...db,
+      exec: (sql) => db.exec(sql),
+      close: () => db.close(),
+      transaction: (fn) => db.transaction(fn),
+      query: async (sql, params) => {
+        if (/goedgekeurd_door = \$2/.test(sql)) throw new Error('relation "geheim_intern" bestaat niet');
+        return await db.query(sql, params);
+      },
+    };
+    const a = maakPortaalApp(
+      deps({
+        db: kapotteDb,
+        logger: {
+          debug: () => {},
+          info: () => {},
+          warn: (b: string, v?: Record<string, unknown>) => regels.push(`${b} ${JSON.stringify(v ?? {})}`),
+          error: () => {},
+        } as never,
+      }),
+    );
+    const { j } = await login('eva@acme.nl', WACHTWOORD_A, { a });
+    const csrf = csrfUit(await (await get('/portaal/', j, a)).text());
+    await post('/portaal/acties/goedkeuren', { csrf, actieId: d.id }, j, { a });
+    const html = await (await get('/portaal/', j, a)).text();
+    assert.match(html, /Er ging iets mis; probeer het opnieuw of neem contact op met MARKaaS\./);
+    assert.doesNotMatch(html, /geheim_intern/);
+    assert.ok(regels.some((r) => r.includes('geheim_intern')));
+  });
+});
+
+describe('portaal: CSRF op elke POST, geen state-wijzigende GET (SameSite=Lax)', () => {
+  it('alle POST-routes weigeren een verzoek zonder CSRF-token met 403', async () => {
+    const posts = [...new Set(app.routes.filter((r) => r.method === 'POST').map((r) => r.path))];
+    assert.ok(posts.length >= 8, `verwacht alle POST-routes, kreeg ${posts.join(', ')}`);
+    const r = await nodigGebruikerUit(db, { clientId: klantA, naam: 'Nieuw', email: 'nieuw@acme.nl' }, { klok, geldigDagen: 7 });
+    const { j } = await ingelogd();
+    for (const pad of posts) {
+      const concreet = pad.replace(':token', r.uitnodiging.token).replace(':accountId', accA);
+      const resp = await post(concreet, { email: 'eva@acme.nl', wachtwoord: WACHTWOORD_A }, j);
+      assert.equal(resp.status, 403, pad);
+    }
+  });
+
+  it('de GET-routes zijn alleen-lezen pagina\'s (lijst bijhouden bij een nieuwe GET)', () => {
+    const gets = [...new Set(app.routes.filter((r) => r.method === 'GET').map((r) => r.path))].sort();
+    assert.deepEqual(gets, [
+      '/portaal',
+      '/portaal/',
+      '/portaal/abonnement',
+      '/portaal/abonnement/geannuleerd',
+      '/portaal/abonnement/gelukt',
+      '/portaal/login',
+      '/portaal/resultaten',
+      '/portaal/uitnodiging/:token',
+    ]);
+  });
+
+  it('terugkeer van Stripe (cross-site GET met Lax-cookie) toont de pagina, niet de login', async () => {
+    const { j } = await ingelogd();
+    const resp = await get('/portaal/abonnement/gelukt', j);
+    assert.equal(resp.status, 200);
+  });
+});

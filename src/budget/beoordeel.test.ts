@@ -110,21 +110,22 @@ describe('beoordeel — controle 1a: betaalpoort (SPEC §14.4)', () => {
   const verzendtypen: ActieType[] = ['invite', 'message', 'inmail'];
   const reden = 'Abonnement niet actief: de klant moet in het klantportaal een abonnement starten.';
 
-  it('zonder abonnement: invite, message en inmail structureel geweigerd met NL-reden', async () => {
+  it('zonder abonnement: invite, message en inmail geparkeerd (wachtrij, niet structureel) met NL-reden', async () => {
     for (const actieType of verzendtypen) {
       const uitslag = geblokkeerd(
         beoordeel(await invoerVoor({ actieType, betaalpoort: { vereist: true, status: null } })),
       );
-      assert.equal(uitslag.status, 'weigering', actieType);
+      assert.equal(uitslag.status, 'wachtrij', actieType);
+      assert.equal(uitslag.structureel, false);
       assert.equal(uitslag.controle, 'abonnement');
       assert.equal(uitslag.reden, reden);
     }
   });
 
-  it('unpaid, canceled, incomplete_expired, incomplete en paused: geweigerd', async () => {
+  it('unpaid, canceled, incomplete_expired, incomplete en paused: geparkeerd', async () => {
     for (const status of ['unpaid', 'canceled', 'incomplete_expired', 'incomplete', 'paused']) {
       const uitslag = beoordeel(await invoerVoor({ betaalpoort: { vereist: true, status } }));
-      assert.equal(uitslag.status, 'weigering', status);
+      assert.equal(uitslag.status, 'wachtrij', status);
     }
   });
 

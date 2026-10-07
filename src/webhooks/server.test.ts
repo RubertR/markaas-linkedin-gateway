@@ -322,3 +322,36 @@ describe('geheim-check is constante tijd', () => {
     assert.equal(await r1.text(), await r2.text());
   });
 });
+
+describe('POST /webhooks/koppel: nazorg na nieuw gekoppeld account (SPEC §14.4)', () => {
+  async function nieuwAccount(): Promise<string> {
+    const c = await maakClient(db, { naam: 'Nazorg', slug: 'nazorg' });
+    return (await registreerAccount(db, { clientId: c.id, eigenaarNaam: 'N', abonnement: 'free' })).id;
+  }
+
+  it('roept de nazorg aan met het account-id na CREATION_SUCCESS', async () => {
+    const aanroepen: string[] = [];
+    app = maakWebhookApp({
+      db, unipile, webhookSecret: SECRET, koppelOpties: KOPPEL_OPTIES,
+      naNieuwGekoppeld: async (id) => { aanroepen.push(id); },
+    });
+    const id = await nieuwAccount();
+    const res = await verzoek('/webhooks/koppel', { secret: SECRET, body: { status: 'CREATION_SUCCESS', account_id: 'uni-n', name: id } });
+    assert.equal(res.status, 200);
+    assert.deepEqual(aanroepen, [id]);
+    // RECONNECTED is geen nieuw account.
+    await verzoek('/webhooks/koppel', { secret: SECRET, body: { status: 'RECONNECTED', account_id: 'uni-n' } });
+    assert.equal(aanroepen.length, 1);
+  });
+
+  it('een fout in de nazorg laat de koppeling niet falen', async () => {
+    app = maakWebhookApp({
+      db, unipile, webhookSecret: SECRET, koppelOpties: KOPPEL_OPTIES,
+      naNieuwGekoppeld: async () => { throw new Error('Stripe plat'); },
+    });
+    const id = await nieuwAccount();
+    const res = await verzoek('/webhooks/koppel', { secret: SECRET, body: { status: 'CREATION_SUCCESS', account_id: 'uni-m', name: id } });
+    assert.equal(res.status, 200);
+    assert.equal((await vindAccount(db, id))?.unipileAccountId, 'uni-m');
+  });
+});

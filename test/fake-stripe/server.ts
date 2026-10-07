@@ -13,6 +13,8 @@ import { Hono } from 'hono';
  * - POST /v1/checkout/sessions        → checkout.session (`cs_test_…`) met url
  * - POST /v1/billing_portal/sessions  → billing_portal.session (`bps_…`) met url
  * - GET  /v1/subscriptions/:id        → subscription uit `abonnementen`
+ * - GET  /v1/subscriptions?customer=…&status=all → list van de customer
+ * - POST /v1/subscriptions/:id        → items[0][quantity] bijwerken
  *
  * Elke aanroep wordt vastgelegd (`aanroepen`) met de form-velden als platte
  * sleutels (`line_items[0][price]`). Met `storing()` geeft een endpoint een
@@ -163,6 +165,31 @@ export async function startFakeStripe(): Promise<FakeStripe> {
       return_url: v['return_url'],
       url: `${FAKE_PORTAAL_URL}${id}`,
     });
+  });
+
+  app.get('/v1/subscriptions', (c) => {
+    const klant = c.req.query('customer');
+    const status = c.req.query('status');
+    const data = [...abonnementen.values()].filter(
+      (a) =>
+        (!klant || a['customer'] === klant) &&
+        (status === 'all' || (status ? a['status'] === status : a['status'] !== 'canceled')),
+    );
+    return c.json({ object: 'list', url: '/v1/subscriptions', has_more: false, data });
+  });
+
+  app.post('/v1/subscriptions/:id', async (c) => {
+    const s = abonnementen.get(c.req.param('id'));
+    if (!s) return c.json(ontbreekt('subscription', c.req.param('id')), 404);
+    const v = await formVan(c);
+    const items = ((s['items'] as { data?: Array<Record<string, unknown>> } | undefined)?.data ?? []).map((i) =>
+      i['id'] === v['items[0][id]'] && v['items[0][quantity]'] !== undefined
+        ? { ...i, quantity: Number(v['items[0][quantity]']) }
+        : i,
+    );
+    const nieuw = { ...s, items: { object: 'list', data: items } };
+    abonnementen.set(c.req.param('id'), nieuw);
+    return c.json(nieuw);
   });
 
   app.get('/v1/subscriptions/:id', (c) => {

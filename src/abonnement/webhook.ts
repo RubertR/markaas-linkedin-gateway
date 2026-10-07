@@ -1,6 +1,7 @@
 import type { Klok } from '../budget/klok.ts';
 import type { Backend } from '../db/backend.ts';
 import type { StripeAbonnement, StripeClient } from '../stripe/client.ts';
+import { StripeVerzoekFout } from '../stripe/errors.ts';
 
 import { BEEINDIGDE_STATUSSEN } from './abonnementen.ts';
 
@@ -13,16 +14,19 @@ import { BEEINDIGDE_STATUSSEN } from './abonnementen.ts';
  * - `checkout.session.completed`: koppelt customer en subscription aan de klant
  *   (`client_reference_id`, anders `metadata.client_id`) en haalt de actuele
  *   stand van het abonnement op.
- * - `customer.subscription.created|updated|deleted`: stand uit het event
- *   (status, trial_end, current_period_end, cancel_at_period_end).
+ * - `customer.subscription.created|updated|deleted`: het abonnement opnieuw
+ *   ophalen en die actuele stand opslaan (status, trial_end, current_period_end,
+ *   cancel_at_period_end); alleen als Stripe het niet meer kent, de stand uit het event.
  * - `invoice.paid`, `invoice.payment_failed`: het abonnement opnieuw ophalen;
  *   Stripe heeft de status dan al bijgewerkt (bijv. naar `past_due`).
  * - Overige events: alleen opslaan.
  *
- * Volgorde: Stripe garandeert geen volgorde van levering. Een event dat ouder is
- * (`event.created`) dan het event waarmee de rij het laatst werd bijgewerkt,
- * verandert de stand niet. Een beëindigd ander abonnement overschrijft een nieuwer
- * abonnement van dezelfde klant niet.
+ * Volgorde: Stripe garandeert geen volgorde van levering. Omdat de stand steeds
+ * vers wordt opgehaald, maakt de volgorde voor de inhoud weinig uit. Daarnaast:
+ * een event dat ouder is (`event.created`) dan het event waarmee de rij het laatst
+ * werd bijgewerkt, verandert niets — ook bij een ander abonnement-id; een gelijk
+ * tijdstip wel. Een beëindigd ander abonnement overschrijft een lopend abonnement
+ * van dezelfde klant niet.
  */
 
 export interface StripeEvent {
@@ -103,9 +107,14 @@ export async function verwerkStripeEvent(
     }
     case 'customer.subscription.created':
     case 'customer.subscription.updated':
-    case 'customer.subscription.deleted':
-      abonnement = object as unknown as StripeAbonnement;
+    case 'customer.subscription.deleted': {
+      // Altijd de actuele stand bij Stripe ophalen: het event kan verouderd zijn.
+      const subId = idVan(object['id']);
+      abonnement = subId
+        ? await actueelAbonnement(deps.stripe, subId, object as unknown as StripeAbonnement)
+        : null;
       break;
+    }
     case 'invoice.paid':
     case 'invoice.payment_failed': {
       const subId = abonnementIdUitFactuur(object);
@@ -184,8 +193,10 @@ async function pasAbonnementToe(
     if (ander && BEEINDIGDE_STATUSSEN.has(status) && !(b.status !== null && BEEINDIGDE_STATUSSEN.has(b.status))) {
       return { verwerkt: false, reden: 'Event over een eerder, beëindigd abonnement; huidige stand blijft staan.' };
     }
+    // Ouderdomscontrole, ook bij een ander abonnement-id. Gelijk tijdstip mag
+    // (de stand is net bij Stripe opgehaald, dus minstens zo actueel).
     const vorige = b.stripe_event_op === null ? null : new Date(b.stripe_event_op).getTime();
-    if (!ander && vorige !== null && vorige > event.created * 1000) {
+    if (vorige !== null && event.created * 1000 < vorige) {
       return { verwerkt: false, reden: 'Ouder event dan de huidige stand; niets gewijzigd.' };
     }
   }
@@ -215,6 +226,20 @@ async function pasAbonnementToe(
     ],
   );
   return { verwerkt: true };
+}
+
+/** Actuele stand bij Stripe; bestaat het abonnement daar niet (meer), dan de stand uit het event. */
+async function actueelAbonnement(
+  stripe: StripeClient,
+  subId: string,
+  uitEvent: StripeAbonnement,
+): Promise<StripeAbonnement> {
+  try {
+    return await stripe.haalAbonnement(subId);
+  } catch (err) {
+    if (err instanceof StripeVerzoekFout && err.status === 404) return uitEvent;
+    throw err;
+  }
 }
 
 /** `current_period_end` staat op het abonnement (oudere API) of per item (nieuwere API). */

@@ -24,6 +24,11 @@ export interface WebhookDeps {
   sequentieHook?: SequentieHookDeps;
   /** Eén info-regel per webhook met event en uitkomst. */
   logger?: Logger;
+  /**
+   * Na een nieuw gekoppeld account (CREATION_SUCCESS): bijv. het aantal in
+   * Stripe bijwerken (SPEC §14.4). Een fout hierin laat de koppeling nooit falen.
+   */
+  naNieuwGekoppeld?: (accountId: string) => Promise<unknown>;
 }
 
 const WEIGER_TEKST = 'Webhook geweigerd: geheim ontbreekt of klopt niet.';
@@ -85,6 +90,14 @@ export function maakWebhookApp(deps: WebhookDeps) {
       name?: string;
     });
     logUitkomst('koppel', (payload as { status?: unknown }).status, uitkomst);
+    const p = payload as { status?: unknown; name?: unknown };
+    if (uitkomst.verwerkt && p.status === 'CREATION_SUCCESS' && typeof p.name === 'string' && deps.naNieuwGekoppeld) {
+      try {
+        await deps.naNieuwGekoppeld(p.name);
+      } catch (err) {
+        deps.logger?.error('Nazorg na koppelen mislukt; koppeling zelf is gelukt', { fout: (err as Error).message });
+      }
+    }
     return c.json(uitkomst, 200);
   });
 

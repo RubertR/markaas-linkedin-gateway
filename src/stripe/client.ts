@@ -46,7 +46,7 @@ export interface StripeAbonnement {
   current_period_end?: number | null;
   cancel_at_period_end: boolean;
   metadata?: Record<string, string>;
-  items?: { data?: Array<{ current_period_end?: number | null; quantity?: number }> };
+  items?: { data?: Array<{ id?: string; current_period_end?: number | null; quantity?: number }> };
 }
 
 export interface StripeSessie {
@@ -83,6 +83,16 @@ export interface StripeClient {
   maakCheckoutSessie(aanvraag: CheckoutAanvraag): Promise<StripeSessie>;
   maakPortaalSessie(aanvraag: PortaalAanvraag): Promise<StripeSessie>;
   haalAbonnement(subscriptionId: string): Promise<StripeAbonnement>;
+  /** Alle abonnementen van de customer, ook beëindigde (`status=all`). */
+  lijstAbonnementen(customerId: string): Promise<StripeAbonnement[]>;
+  /** Aantal van het (enige) item bijwerken, met naberekening (proration). */
+  werkAantalBij(aanvraag: AantalAanvraag): Promise<StripeAbonnement>;
+}
+
+export interface AantalAanvraag {
+  subscriptionId: string;
+  itemId: string;
+  aantal: number;
 }
 
 const STANDAARD_TIMEOUT_MS = 10_000;
@@ -92,7 +102,7 @@ export function maakStripeClient(opties: StripeOpties): StripeClient {
   const timeoutMs = opties.timeoutMs ?? STANDAARD_TIMEOUT_MS;
 
   async function verzoek<T>(method: 'GET' | 'POST', pad: string, velden?: Record<string, FormWaarde>): Promise<T> {
-    const endpoint = `${method} ${pad.replace(/\/(cus|sub|cs|bps)_[A-Za-z0-9_]+/g, '/{id}')}`;
+    const endpoint = `${method} ${pad.split('?')[0]!.replace(/\/(cus|sub|cs|bps)_[A-Za-z0-9_]+/g, '/{id}')}`;
     const headers: Record<string, string> = {
       Authorization: `Bearer ${opties.secretKey}`,
       Accept: 'application/json',
@@ -209,6 +219,19 @@ export function maakStripeClient(opties: StripeOpties): StripeClient {
 
     async haalAbonnement(subscriptionId) {
       return await verzoek<StripeAbonnement>('GET', `/v1/subscriptions/${encodeURIComponent(subscriptionId)}`);
+    },
+
+    async lijstAbonnementen(customerId) {
+      const query = new URLSearchParams({ customer: customerId, status: 'all', limit: '100' });
+      const lijst = await verzoek<{ data?: StripeAbonnement[] }>('GET', `/v1/subscriptions?${query.toString()}`);
+      return Array.isArray(lijst.data) ? lijst.data : [];
+    },
+
+    async werkAantalBij(a) {
+      return await verzoek<StripeAbonnement>('POST', `/v1/subscriptions/${encodeURIComponent(a.subscriptionId)}`, {
+        items: [{ id: a.itemId, quantity: a.aantal }],
+        proration_behavior: 'create_prorations',
+      });
     },
   };
 }

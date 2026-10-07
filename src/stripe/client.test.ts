@@ -100,6 +100,29 @@ describe('Stripe-client tegen fake-stripe', () => {
   });
 });
 
+describe('Stripe-client: abonnementen opvragen en aantal bijwerken', () => {
+  it('lijst per customer met status=all, ook beëindigde', async () => {
+    fake.abonnementen.set('sub_1', { id: 'sub_1', customer: 'cus_1', status: 'canceled' });
+    fake.abonnementen.set('sub_2', { id: 'sub_2', customer: 'cus_1', status: 'active' });
+    fake.abonnementen.set('sub_3', { id: 'sub_3', customer: 'cus_2', status: 'active' });
+    const lijst = await stripe.lijstAbonnementen('cus_1');
+    assert.deepEqual(lijst.map((a) => a.id).sort(), ['sub_1', 'sub_2']);
+    const a = fake.aanroepen.at(-1)!;
+    assert.equal(a.method, 'GET');
+    assert.equal(a.path, '/v1/subscriptions');
+  });
+
+  it('aantal bijwerken: POST /v1/subscriptions/{id} met items[0][id], items[0][quantity] en proration', async () => {
+    fake.abonnementen.set('sub_1', { id: 'sub_1', customer: 'cus_1', status: 'active', items: { data: [{ id: 'si_1', quantity: 1 }] } });
+    const na = await stripe.werkAantalBij({ subscriptionId: 'sub_1', itemId: 'si_1', aantal: 3 });
+    assert.equal(na.items?.data?.[0]?.quantity, 3);
+    const v = fake.aanroepen.at(-1)!.velden;
+    assert.equal(v['items[0][id]'], 'si_1');
+    assert.equal(v['items[0][quantity]'], '3');
+    assert.equal(v['proration_behavior'], 'create_prorations');
+  });
+});
+
 describe('Stripe-client: fouten naar NL-foutklassen', () => {
   it('401 → StripeSleutelFout zonder de sleutel in de melding', async () => {
     fake.storing('POST', '/v1/customers', { status: 401, body: { error: { message: 'Invalid API Key provided: sk_test_***123' } } });

@@ -30,6 +30,7 @@ const ALLE_MIGRATIES = [
   '0004_onboarding.sql',
   '0005_klantportaal.sql',
   '0006_abonnementen.sql',
+  '0007_toestemming_momentopname.sql',
 ];
 
 describe('0001_init.sql', () => {
@@ -331,7 +332,12 @@ describe('0004_onboarding.sql', () => {
         "insert into clients(naam, slug) values ('MARKaaS', 'markaas'), ('Aqua', 'aqua')",
       );
       const nieuw = await draaiMigraties(db, MIGRATIE_MAP);
-      assert.deepEqual(nieuw, ['0004_onboarding.sql', '0005_klantportaal.sql', '0006_abonnementen.sql']);
+      assert.deepEqual(nieuw, [
+        '0004_onboarding.sql',
+        '0005_klantportaal.sql',
+        '0006_abonnementen.sql',
+        '0007_toestemming_momentopname.sql',
+      ]);
       const rijen = await db.query<{ slug: string; abonnement_vereist: boolean }>(
         'select slug, abonnement_vereist from clients order by slug',
       );
@@ -522,6 +528,43 @@ describe('0006_abonnementen.sql', () => {
         ),
         /duplicate|unique/i,
       );
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe('0007_toestemming_momentopname.sql', () => {
+  it('vult bestaande toestemmingen aan en houdt het bewijs na verwijderen van account en klant', async () => {
+    const { db, close } = await versePglite();
+    try {
+      await db.exec(`create table schema_migrations (
+        naam text primary key, toegepast_op timestamptz not null default now())`);
+      for (const naam of ALLE_MIGRATIES.slice(0, 6)) {
+        await db.exec(await readFile(join(MIGRATIE_MAP, naam), 'utf8'));
+        await db.query('insert into schema_migrations(naam) values ($1)', [naam]);
+      }
+      const [k] = await db.query<{ id: string }>("insert into clients(naam, slug) values ('Aqua', 'aqua') returning id");
+      const [a] = await db.query<{ id: string }>(
+        "insert into accounts(client_id, eigenaar_naam, abonnement, unipile_account_id) values ($1, 'Eva', 'free', 'uni-1') returning id",
+        [k!.id],
+      );
+      await db.query(
+        `insert into account_consents(account_id, naam, email, versie_voorwaarden, versie_verwerkersovereenkomst)
+         values ($1, 'Eva', 'eva@aqua.nl', '0.1', '0.1')`,
+        [a!.id],
+      );
+      assert.deepEqual(await draaiMigraties(db, MIGRATIE_MAP), ['0007_toestemming_momentopname.sql']);
+      const [r] = await db.query<Record<string, unknown>>(
+        'select client_id, klantnaam, account_eigenaar_naam, unipile_account_id from account_consents',
+      );
+      assert.deepEqual(r, { client_id: k!.id, klantnaam: 'Aqua', account_eigenaar_naam: 'Eva', unipile_account_id: 'uni-1' });
+      await db.query('delete from accounts where id = $1', [a!.id]);
+      await db.query('delete from clients where id = $1', [k!.id]);
+      const [na] = await db.query<Record<string, unknown>>(
+        'select account_id, client_id, klantnaam, account_eigenaar_naam from account_consents',
+      );
+      assert.deepEqual(na, { account_id: null, client_id: null, klantnaam: 'Aqua', account_eigenaar_naam: 'Eva' });
     } finally {
       await close();
     }

@@ -59,6 +59,12 @@ async function verwerk(type: string, object: Record<string, unknown>, opties: { 
   return await verwerkStripeEvent({ db, stripe, klok }, event);
 }
 
+/** Stripe kent het abonnement in deze stand (wat de gateway ophaalt), en stuurt het event. */
+async function verwerkSub(type: string, object: Record<string, unknown>, opties: { id?: string; created?: number } = {}) {
+  fake.abonnementen.set(object['id'] as string, object);
+  return await verwerk(type, object, opties);
+}
+
 async function eventTelling(): Promise<number> {
   const [r] = await db.query<{ n: number }>("select count(*)::int as n from events where bron = 'stripe'");
   return r!.n;
@@ -109,7 +115,7 @@ describe('Stripe-webhook: checkout.session.completed', () => {
 
 describe('Stripe-webhook: customer.subscription.*', () => {
   it('created → trialing met proef_tot en periode_tot', async () => {
-    await verwerk('customer.subscription.created', sub());
+    await verwerkSub('customer.subscription.created', sub());
     const a = await vindAbonnement(db, klant);
     assert.equal(a?.status, 'trialing');
     assert.equal(a?.stripeCustomerId, 'cus_1');
@@ -118,8 +124,8 @@ describe('Stripe-webhook: customer.subscription.*', () => {
   });
 
   it('updated → active; cancel_at_period_end wordt opgezegd_per_einde', async () => {
-    await verwerk('customer.subscription.created', sub());
-    await verwerk('customer.subscription.updated', sub({ status: 'active', trial_end: null, cancel_at_period_end: true }), { created: T + 10 });
+    await verwerkSub('customer.subscription.created', sub());
+    await verwerkSub('customer.subscription.updated', sub({ status: 'active', trial_end: null, cancel_at_period_end: true }), { created: T + 10 });
     const a = await vindAbonnement(db, klant);
     assert.equal(a?.status, 'active');
     assert.equal(a?.proefTot, null);
@@ -127,7 +133,7 @@ describe('Stripe-webhook: customer.subscription.*', () => {
   });
 
   it('nieuwere API-vorm: current_period_end per item', async () => {
-    await verwerk('customer.subscription.updated', sub({
+    await verwerkSub('customer.subscription.updated', sub({
       status: 'active', current_period_end: undefined,
       items: { object: 'list', data: [{ id: 'si_1', current_period_end: T + 31 * DAG }] },
     }));
@@ -135,41 +141,41 @@ describe('Stripe-webhook: customer.subscription.*', () => {
   });
 
   it('deleted → canceled', async () => {
-    await verwerk('customer.subscription.created', sub({ status: 'active' }));
-    await verwerk('customer.subscription.deleted', sub({ status: 'canceled' }), { created: T + 5 });
+    await verwerkSub('customer.subscription.created', sub({ status: 'active' }));
+    await verwerkSub('customer.subscription.deleted', sub({ status: 'canceled' }), { created: T + 5 });
     assert.equal((await vindAbonnement(db, klant))?.status, 'canceled');
   });
 
   it('zonder metadata: klant gevonden via bekende customer-id', async () => {
     await db.query("insert into subscriptions(client_id, stripe_customer_id) values ($1, 'cus_9')", [klant]);
-    await verwerk('customer.subscription.created', sub({ id: 'sub_9', customer: 'cus_9', metadata: {} }));
+    await verwerkSub('customer.subscription.created', sub({ id: 'sub_9', customer: 'cus_9', metadata: {} }));
     assert.equal((await vindAbonnement(db, klant))?.stripeSubscriptionId, 'sub_9');
   });
 
   it('onbekende klant: opgeslagen, verder niets', async () => {
-    const u = await verwerk('customer.subscription.created', sub({ customer: 'cus_onbekend', metadata: {} }));
+    const u = await verwerkSub('customer.subscription.created', sub({ customer: 'cus_onbekend', metadata: {} }));
     assert.equal(u.verwerkt, false);
     assert.equal(await eventTelling(), 1);
   });
 
   it('ouder event na een nieuwer event verandert niets', async () => {
-    await verwerk('customer.subscription.updated', sub({ status: 'past_due' }), { created: T + 100 });
-    const u = await verwerk('customer.subscription.updated', sub({ status: 'active' }), { created: T });
+    await verwerkSub('customer.subscription.updated', sub({ status: 'past_due' }), { created: T + 100 });
+    const u = await verwerkSub('customer.subscription.updated', sub({ status: 'active' }), { created: T });
     assert.equal(u.verwerkt, false);
     assert.equal((await vindAbonnement(db, klant))?.status, 'past_due');
   });
 
   it('beëindigen van een eerder abonnement overschrijft een nieuw abonnement niet', async () => {
-    await verwerk('customer.subscription.created', sub({ id: 'sub_nieuw', status: 'active' }), { created: T + 100 });
-    await verwerk('customer.subscription.deleted', sub({ id: 'sub_oud', status: 'canceled' }), { created: T + 200 });
+    await verwerkSub('customer.subscription.created', sub({ id: 'sub_nieuw', status: 'active' }), { created: T + 100 });
+    await verwerkSub('customer.subscription.deleted', sub({ id: 'sub_oud', status: 'canceled' }), { created: T + 200 });
     const a = await vindAbonnement(db, klant);
     assert.equal(a?.stripeSubscriptionId, 'sub_nieuw');
     assert.equal(a?.status, 'active');
   });
 
   it('een nieuw abonnement na een beëindigd abonnement neemt het over', async () => {
-    await verwerk('customer.subscription.deleted', sub({ id: 'sub_oud', status: 'canceled' }), { created: T });
-    await verwerk('customer.subscription.created', sub({ id: 'sub_nieuw', status: 'trialing' }), { created: T + 50 });
+    await verwerkSub('customer.subscription.deleted', sub({ id: 'sub_oud', status: 'canceled' }), { created: T });
+    await verwerkSub('customer.subscription.created', sub({ id: 'sub_nieuw', status: 'trialing' }), { created: T + 50 });
     const a = await vindAbonnement(db, klant);
     assert.equal(a?.stripeSubscriptionId, 'sub_nieuw');
     assert.equal(a?.status, 'trialing');
@@ -178,14 +184,14 @@ describe('Stripe-webhook: customer.subscription.*', () => {
 
 describe('Stripe-webhook: invoice.*', () => {
   it('invoice.payment_failed → status opnieuw opgehaald (past_due)', async () => {
-    await verwerk('customer.subscription.created', sub({ status: 'active' }));
+    await verwerkSub('customer.subscription.created', sub({ status: 'active' }));
     fake.abonnementen.set('sub_1', sub({ status: 'past_due' }));
     await verwerk('invoice.payment_failed', { id: 'in_1', object: 'invoice', customer: 'cus_1', subscription: 'sub_1' }, { created: T + 10 });
     assert.equal((await vindAbonnement(db, klant))?.status, 'past_due');
   });
 
   it('invoice.paid (nieuwere vorm: parent.subscription_details) → active', async () => {
-    await verwerk('customer.subscription.created', sub({ status: 'past_due' }));
+    await verwerkSub('customer.subscription.created', sub({ status: 'past_due' }));
     fake.abonnementen.set('sub_1', sub({ status: 'active' }));
     await verwerk(
       'invoice.paid',
@@ -229,7 +235,42 @@ describe('Stripe-webhook: opslag en dubbele levering', () => {
   });
 
   it('klant B wordt niet geraakt door events van klant A', async () => {
-    await verwerk('customer.subscription.created', sub());
+    await verwerkSub('customer.subscription.created', sub());
     assert.equal(await vindAbonnement(db, ander), null);
+  });
+});
+
+describe('Stripe-webhook: actuele stand ophalen en volgorde (review punt 5)', () => {
+  it('subscription-event: de actuele stand bij Stripe wint van een verouderd event-object', async () => {
+    fake.abonnementen.set('sub_1', sub({ status: 'past_due' }));
+    await verwerk('customer.subscription.updated', sub({ status: 'active' }));
+    assert.equal((await vindAbonnement(db, klant))?.status, 'past_due');
+    assert.ok(fake.aanroepen.some((a) => a.method === 'GET' && a.path === '/v1/subscriptions/sub_1'));
+  });
+
+  it('kent Stripe het abonnement niet (404), dan de stand uit het event', async () => {
+    await verwerk('customer.subscription.deleted', sub({ status: 'canceled' }));
+    assert.equal((await vindAbonnement(db, klant))?.status, 'canceled');
+  });
+
+  it('Stripe onbereikbaar: fout, niets opgeslagen (Stripe levert opnieuw)', async () => {
+    fake.storing('GET', '/v1/subscriptions/sub_1', { status: 503 });
+    await assert.rejects(verwerk('customer.subscription.updated', sub(), { id: 'evt_503' }));
+    assert.equal(await eventTelling(), 0);
+  });
+
+  it('ouderdomscontrole ook bij een ander abonnement-id', async () => {
+    await verwerkSub('customer.subscription.created', sub({ id: 'sub_nieuw', status: 'trialing' }), { created: T + 100 });
+    const u = await verwerkSub('customer.subscription.updated', sub({ id: 'sub_ander', status: 'active' }), { created: T + 50 });
+    assert.equal(u.verwerkt, false);
+    assert.equal((await vindAbonnement(db, klant))?.stripeSubscriptionId, 'sub_nieuw');
+  });
+
+  it('gelijk tijdstip wordt wel toegepast (>=-veilig)', async () => {
+    await verwerkSub('customer.subscription.created', sub({ status: 'trialing' }), { created: T });
+    fake.abonnementen.set('sub_1', sub({ status: 'active' }));
+    const u = await verwerk('customer.subscription.updated', sub({ status: 'active' }), { created: T });
+    assert.equal(u.verwerkt, true);
+    assert.equal((await vindAbonnement(db, klant))?.status, 'active');
   });
 });

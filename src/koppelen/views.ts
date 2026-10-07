@@ -77,6 +77,8 @@ export interface KoppelLimieten {
 export interface KoppelPaginaOpties {
   token: string;
   csrf: string;
+  /** Double-submit-waarde, gelijk aan de cookie `koppel_csrf`. */
+  csrfCookie: string;
   klantNaam: string;
   naam: string;
   email: string;
@@ -144,6 +146,7 @@ export function koppelPaginaView(o: KoppelPaginaOpties): string {
     ${o.foutmelding ? `<p class="melding fout">${h(o.foutmelding)}</p>` : ''}
     <form method="post" action="/koppelen/${h(o.token)}">
       <input type="hidden" name="csrf" value="${h(o.csrf)}">
+      <input type="hidden" name="csrf_cookie" value="${h(o.csrfCookie)}">
       <label class="veld" for="naam">Uw naam</label>
       <input id="naam" name="naam" type="text" required maxlength="200"
              autocomplete="name" value="${h(o.naam)}">

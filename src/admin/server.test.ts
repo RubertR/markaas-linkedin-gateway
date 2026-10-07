@@ -916,3 +916,36 @@ describe('abonnement per klant (SPEC §14.4)', () => {
     assert.doesNotMatch(zonderPoort, /Abonnement niet actief/);
   });
 });
+
+describe('aantal in Stripe vanuit de admin (SPEC §14.4)', () => {
+  it('knop roept de sync aan (CSRF) en een mislukte sync is zichtbaar op de klantpagina', async () => {
+    const klant = await vindClientBijSlug(db, 'markaas-ui');
+    await db.query("insert into subscriptions(client_id, stripe_subscription_id, status) values ($1, 'sub_ui', 'active')", [klant!.id]);
+    const aanroepen: string[] = [];
+    app = maakAdminApp({
+      ...deps,
+      stripeIngericht: true,
+      aantalSync: async (clientId, aanleiding) => {
+        aanroepen.push(`${clientId}:${aanleiding}`);
+        await db.query(
+          `insert into events(bron, type, payload) values ('gateway', 'stripe_aantal_mislukt', $1::jsonb)`,
+          [JSON.stringify({ client_id: clientId, fout: 'Stripe-serverfout (HTTP 500)' })],
+        );
+        return { resultaat: 'mislukt', reden: 'Stripe-serverfout (HTTP 500)' };
+      },
+    });
+    const jar = nieuweJar();
+    await logIn(jar);
+    const html = await (await get('/admin/klanten/markaas-ui', jar)).text();
+    assert.match(html, /Aantal in Stripe bijwerken/);
+    const csrf = csrfUit(html);
+    assert.equal((await post('/admin/klanten/markaas-ui/abonnement-aantal', { csrf: 'fout' }, jar)).status, 403);
+    assert.equal(aanroepen.length, 0);
+    const r = await post('/admin/klanten/markaas-ui/abonnement-aantal', { csrf }, jar);
+    assert.equal(r.status, 303);
+    assert.deepEqual(aanroepen, [`${klant!.id}:admin`]);
+    const na = await (await get('/admin/klanten/markaas-ui', jar)).text();
+    assert.match(na, /bijwerken mislukt op/);
+    assert.match(na, /Stripe-serverfout \(HTTP 500\)/);
+  });
+});

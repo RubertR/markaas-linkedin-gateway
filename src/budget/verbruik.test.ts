@@ -280,13 +280,13 @@ describe('reserveerEnVerbruik — betaalpoort (SPEC §14.4)', () => {
     });
   }
 
-  it('klant met abonnementsplicht zonder abonnement: invite geweigerd, niets geteld', async () => {
+  it('klant met abonnementsplicht zonder abonnement: invite geparkeerd, niets geteld', async () => {
     const h = await versAccount({ abonnementVereist: true });
     try {
       const uitslag = await probeer(h, 'invite');
-      assert.equal(uitslag.status, 'weigering');
-      assert.equal(uitslag.status === 'weigering' && uitslag.controle, 'abonnement');
-      assert.match(uitslag.status === 'weigering' ? uitslag.reden : '', /Abonnement niet actief/);
+      assert.equal(uitslag.status, 'wachtrij');
+      assert.equal(uitslag.status === 'wachtrij' && uitslag.controle, 'abonnement');
+      assert.match(uitslag.status === 'wachtrij' ? uitslag.reden : '', /Abonnement niet actief/);
       assert.equal(await telGebruikOpDag(h.db, h.accountId, 'invite', '2026-10-06'), 0);
       // Zoeken en profielen blijven mogelijk.
       assert.equal((await probeer(h, 'search')).status, 'toegestaan');
@@ -305,10 +305,10 @@ describe('reserveerEnVerbruik — betaalpoort (SPEC §14.4)', () => {
     }
   });
 
-  it('beëindigd abonnement: geweigerd', async () => {
+  it('beëindigd abonnement: geparkeerd', async () => {
     const h = await versAccount({ abonnementVereist: true, abonnementStatus: 'canceled' });
     try {
-      assert.equal((await probeer(h, 'invite')).status, 'weigering');
+      assert.equal((await probeer(h, 'invite')).status, 'wachtrij');
     } finally {
       await h.close();
     }

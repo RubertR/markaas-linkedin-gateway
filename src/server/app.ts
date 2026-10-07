@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 
+import { synchroniseerAantal, synchroniseerAantalVoorAccount } from '../abonnement/aantal.ts';
 import { maakAdminApp } from '../admin/server.ts';
 import type { Klok } from '../budget/klok.ts';
 import type { Limieten } from '../budget/limits.ts';
@@ -85,6 +86,8 @@ export function maakGatewayApp(deps: GatewayDeps) {
     ? (deps.stripe ?? maakStripeClient({ secretKey: env.stripe.secretKey }))
     : null;
 
+  const aantalDeps = { db: deps.db, stripe: stripeClient, config: deps.abonnement, klok: deps.klok, logger };
+
   // Vóór de Unipile-webhooks: /webhooks/stripe heeft een eigen handtekening.
   app.route(
     '/',
@@ -113,6 +116,7 @@ export function maakGatewayApp(deps: GatewayDeps) {
         werkdagen: deps.werkdagen,
       },
       logger,
+      naNieuwGekoppeld: (accountId) => synchroniseerAantalVoorAccount(aantalDeps, accountId, 'koppeling'),
     }),
   );
 
@@ -140,6 +144,7 @@ export function maakGatewayApp(deps: GatewayDeps) {
       publicBaseUrl: env.publicBaseUrl,
       koppeluitnodigingGeldigDagen: deps.juridisch.koppeluitnodiging_geldig_dagen,
       stripeIngericht: stripeClient !== null,
+      aantalSync: (clientId, aanleiding) => synchroniseerAantal(aantalDeps, clientId, aanleiding),
     }),
   );
 
@@ -159,6 +164,7 @@ export function maakGatewayApp(deps: GatewayDeps) {
       },
       webhookSecret: env.webhookSecret,
       vertrouwProxy: productie,
+      cookieSecure: productie,
       logger,
     }),
   );

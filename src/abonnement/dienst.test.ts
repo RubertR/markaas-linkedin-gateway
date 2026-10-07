@@ -20,6 +20,7 @@ import {
 } from './abonnementen.ts';
 import {
   AbonnementFout,
+  AlAbonnementFout,
   NIET_INGERICHT,
   beheerAbonnement,
   startAbonnement,
@@ -118,6 +119,54 @@ describe('startAbonnement', () => {
     await assert.rejects(startAbonnement(deps(), klant), (e: Error) => e instanceof AbonnementFout && /al een abonnement/.test(e.message));
     await db.query("update subscriptions set status = 'canceled' where client_id = $1", [klant]);
     await assert.doesNotReject(startAbonnement(deps(), klant));
+  });
+
+  it('lopend abonnement bij Stripe (webhook nog niet binnen): AlAbonnementFout, geen Checkout', async () => {
+    await startAbonnement(deps(), klant); // maakt de customer
+    const cus = (await vindAbonnement(db, klant))!.stripeCustomerId!;
+    fake.abonnementen.set('sub_live', { id: 'sub_live', customer: cus, status: 'active', trial_end: null, cancel_at_period_end: false });
+    const voor = fake.aanroepen.filter((a) => a.path === '/v1/checkout/sessions').length;
+    await assert.rejects(startAbonnement(deps(), klant), AlAbonnementFout);
+    assert.equal(fake.aanroepen.filter((a) => a.path === '/v1/checkout/sessions').length, voor);
+    assert.ok(fake.aanroepen.some((a) => a.path === '/v1/subscriptions' && a.method === 'GET'));
+  });
+
+  it('ook incomplete, past_due, unpaid of paused bij Stripe tellen als lopend', async () => {
+    await startAbonnement(deps(), klant);
+    const cus = (await vindAbonnement(db, klant))!.stripeCustomerId!;
+    for (const status of ['incomplete', 'past_due', 'unpaid', 'paused', 'trialing']) {
+      fake.abonnementen.set('sub_x', { id: 'sub_x', customer: cus, status, trial_end: null, cancel_at_period_end: false });
+      await assert.rejects(startAbonnement(deps(), klant), AlAbonnementFout, status);
+    }
+  });
+
+  it('proefperiode maar één keer: na een eerder (beëindigd) abonnement bij Stripe geen trial_period_days', async () => {
+    await startAbonnement(deps(), klant);
+    const eerste = fake.aanroepen.filter((a) => a.path === '/v1/checkout/sessions').at(-1)!.velden;
+    assert.equal(eerste['subscription_data[trial_period_days]'], '30');
+    const cus = (await vindAbonnement(db, klant))!.stripeCustomerId!;
+    fake.abonnementen.set('sub_oud', { id: 'sub_oud', customer: cus, status: 'canceled', trial_end: null, cancel_at_period_end: false });
+    await startAbonnement(deps(), klant);
+    const tweede = fake.aanroepen.filter((a) => a.path === '/v1/checkout/sessions').at(-1)!.velden;
+    assert.equal(tweede['subscription_data[trial_period_days]'], undefined);
+    assert.equal(tweede['line_items[0][price]'], 'price_maand');
+  });
+
+  it('proefperiode maar één keer: ook niet als de tabel een eerder abonnement of proef_tot kent', async () => {
+    await db.query(
+      "insert into subscriptions(client_id, stripe_subscription_id, status) values ($1, 'sub_weg', 'canceled')",
+      [klant],
+    );
+    await startAbonnement(deps(), klant);
+    assert.equal(fake.aanroepen.find((a) => a.path === '/v1/checkout/sessions')!.velden['subscription_data[trial_period_days]'], undefined);
+    await db.query('delete from subscriptions');
+    fake.reset();
+    await db.query(
+      "insert into subscriptions(client_id, status, proef_tot) values ($1, 'incomplete_expired', '2026-09-01T00:00:00Z')",
+      [klant],
+    );
+    await startAbonnement(deps(), klant);
+    assert.equal(fake.aanroepen.find((a) => a.path === '/v1/checkout/sessions')!.velden['subscription_data[trial_period_days]'], undefined);
   });
 
   it('Stripe uit: nette melding "Betalen is nog niet ingericht", geen aanroep', async () => {

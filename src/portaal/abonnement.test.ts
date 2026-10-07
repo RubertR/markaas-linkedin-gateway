@@ -6,6 +6,7 @@ import type { Klok } from '../budget/klok.ts';
 import { laadLimieten, type Limieten } from '../budget/limits.ts';
 import type { AbonnementConfig } from '../config/abonnement.ts';
 import type { Backend } from '../db/backend.ts';
+import { maakActie, vindActie } from '../queue/acties.ts';
 import { markeerAccountGekoppeld, registreerAccount } from '../register/accounts.ts';
 import { maakClient } from '../register/clients.ts';
 import { maakStripeClient } from '../stripe/client.ts';
@@ -72,7 +73,7 @@ after(async () => {
 
 beforeEach(async () => {
   fake.reset();
-  for (const t of ['portal_sessions', 'client_user_uitnodigingen', 'client_users', 'subscriptions', 'accounts', 'clients']) {
+  for (const t of ['portal_sessions', 'client_user_uitnodigingen', 'client_users', 'subscriptions', 'usage', 'actions', 'events', 'accounts', 'clients']) {
     await db.query(`delete from ${t}`);
   }
   klantA = (await maakClient(db, { naam: 'Acme B.V.', slug: 'acme' })).id;
@@ -281,12 +282,25 @@ describe('portaal: abonnement starten en beheren', () => {
     assert.equal(fake.aanroepen.length, 0);
   });
 
-  it('starten bij een lopend abonnement: melding, geen Checkout', async () => {
+  it('starten bij een lopend abonnement: geen Checkout, door naar Abonnement beheren met melding', async () => {
+    fake.klanten.set('cus_a', { id: 'cus_a', object: 'customer' });
     await zetAbonnement(klantA, { customer: 'cus_a', status: 'active' });
     const { j, csrf } = await ingelogd();
     const r = await post('/portaal/abonnement/starten', { csrf }, j);
-    assert.equal(r.headers.get('location'), '/portaal/abonnement');
+    assert.equal(r.status, 303);
+    assert.ok(r.headers.get('location')!.startsWith(FAKE_PORTAAL_URL));
+    assert.ok(!fake.aanroepen.some((x) => x.path === '/v1/checkout/sessions'));
+    // Na terugkeer staat de melding op de pagina.
     assert.match(await pagina(j), /al een abonnement/);
+  });
+
+  it('starten terwijl Stripe al een abonnement kent dat de webhook nog niet meldde: door naar beheren', async () => {
+    fake.klanten.set('cus_a', { id: 'cus_a', object: 'customer' });
+    fake.abonnementen.set('sub_a', { id: 'sub_a', customer: 'cus_a', status: 'trialing', trial_end: null, cancel_at_period_end: false });
+    await zetAbonnement(klantA, { customer: 'cus_a' });
+    const { j, csrf } = await ingelogd();
+    const r = await post('/portaal/abonnement/starten', { csrf }, j);
+    assert.ok(r.headers.get('location')!.startsWith(FAKE_PORTAAL_URL));
     assert.ok(!fake.aanroepen.some((x) => x.path === '/v1/checkout/sessions'));
   });
 
@@ -341,5 +355,64 @@ describe('portaal: terugkeerpagina\'s na Stripe', () => {
     assert.match(await (await get('/portaal/abonnement/geannuleerd', j)).text(), /niets afgeschreven/);
     const r = await app.request('/portaal/abonnement/gelukt');
     assert.equal(r.headers.get('location'), '/portaal/login');
+  });
+});
+
+describe('portaal: goedkeuren vereist een actief abonnement (SPEC §14.4)', () => {
+  async function concept(): Promise<string> {
+    const [acc] = await db.query<{ id: string }>('select id from accounts where client_id = $1 limit 1', [klantA]);
+    const a = await maakActie(db, {
+      accountId: acc!.id,
+      type: 'invite',
+      payload: { providerId: 'ACo-1', message: 'Hoi, zullen we kennismaken?', ontvanger_naam: 'Nina' },
+    });
+    return a.id;
+  }
+
+  it('zonder abonnement: goedkeuren geblokkeerd met NL-melding, concept blijft open', async () => {
+    const id = await concept();
+    const { j, csrf } = await ingelogd();
+    const html = await (await get('/portaal/', j)).text();
+    assert.match(html, /goedkeuren kan pas na het starten van een abonnement/);
+    const r = await post('/portaal/acties/goedkeuren', { csrf, actieId: id }, j);
+    assert.equal(r.status, 303);
+    assert.equal((await vindActie(db, id))?.status, 'draft');
+    assert.match(await (await get('/portaal/', j)).text(), /Goedkeuren kan pas als uw organisatie een actief abonnement heeft/);
+  });
+
+  it('alles goedkeuren zonder abonnement: niets goedgekeurd, melding', async () => {
+    const id1 = await concept();
+    const id2 = await concept();
+    const { j, csrf } = await ingelogd();
+    const form = new URLSearchParams([['csrf', csrf], ['ids', id1], ['ids', id2]]);
+    const r = await app.request('/portaal/acties/goedkeuren-alles', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', ...cookie(j) },
+      body: form.toString(),
+    });
+    vang(r, j);
+    assert.equal(r.status, 303);
+    assert.equal((await vindActie(db, id1))?.status, 'draft');
+    assert.equal((await vindActie(db, id2))?.status, 'draft');
+    assert.match(await (await get('/portaal/', j)).text(), /actief abonnement/);
+  });
+
+  it('met proefperiode, actief of past_due: goedkeuren lukt', async () => {
+    for (const status of ['trialing', 'active', 'past_due']) {
+      await db.query('delete from subscriptions');
+      await zetAbonnement(klantA, { status });
+      const id = await concept();
+      const { j, csrf } = await ingelogd();
+      await post('/portaal/acties/goedkeuren', { csrf, actieId: id }, j);
+      assert.equal((await vindActie(db, id))?.status, 'approved', status);
+    }
+  });
+
+  it('abonnement_vereist = false: goedkeuren lukt zonder abonnement', async () => {
+    await db.query('update clients set abonnement_vereist = false where id = $1', [klantA]);
+    const id = await concept();
+    const { j, csrf } = await ingelogd();
+    await post('/portaal/acties/goedkeuren', { csrf, actieId: id }, j);
+    assert.equal((await vindActie(db, id))?.status, 'approved');
   });
 });

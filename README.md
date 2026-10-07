@@ -84,7 +84,8 @@ daarna in live-modus met de live-sleutels.
    prijs *Recurring*, *Monthly*, in EUR. Prijs per LinkedIn-account (standaard,
    `prijs_per: "account"` in `config/abonnement.json`: aantal = gekoppelde accounts, minimaal 1)
    of per klant (`prijs_per: "klant"`: aantal 1). De proefperiode (30 dagen) komt uit
-   `config/abonnement.json`; zet géén proefperiode op de prijs zelf.
+   `config/abonnement.json`; zet géén proefperiode op de prijs zelf. Een klant krijgt de
+   proefperiode maar één keer.
 3. **Price ID:** open de prijs en kopieer de id (`price_…`) → `STRIPE_PRICE_ID`.
 4. **Webhook-endpoint:** *Developers* → *Webhooks* → *Add endpoint*, URL
    `https://<domein>/webhooks/stripe`, met deze zes events:
@@ -101,7 +102,11 @@ daarna in live-modus met de live-sleutels.
 7. **Customer Portal activeren:** *Settings* → *Billing* → *Customer portal* → opslaan (ook in
    testmodus apart). Zet daar aan: betaalmethode bijwerken, facturen bekijken en opzeggen
    (aan het einde van de periode). Zonder deze stap geeft "Abonnement beheren" een foutmelding.
-8. **Proef:** log in op het portaal als testklant, *Abonnement* → *Abonnement starten*, betaal
+8. **Aantal accounts:** bij prijs per account werkt de gateway het aantal in Stripe zelf bij
+   als er een account gekoppeld wordt. Na ontkoppelen of verwijderen (buiten de gateway):
+   klik op de klantpagina in de admin op **Aantal in Stripe bijwerken**. Mislukt het bijwerken,
+   dan staat dat daar ook.
+9. **Proef:** log in op het portaal als testklant, *Abonnement* → *Abonnement starten*, betaal
    met testkaart `4242 4242 4242 4242`. Na terugkeer staat de stand op "Proefperiode tot …";
    in *Developers* → *Webhooks* zie je de leveringen met status 200. Test ook een mislukte
    betaling (kaart `4000 0000 0000 0341`) en opzeggen via *Abonnement beheren*.

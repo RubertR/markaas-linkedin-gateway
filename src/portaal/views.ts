@@ -242,7 +242,7 @@ function conceptKaart(d: DraftWeergave, csrfToken: string): string {
   <h3>${h(etiket(d.type))} namens ${h(d.eigenaarNaam)}</h3>
   ${
     d.betaalpoortReden
-      ? '<p class="melding fout">Er is geen actief abonnement; na goedkeuring wordt dit niet verstuurd. Start eerst een abonnement via <a href="/portaal/abonnement">Abonnement</a>.</p>'
+      ? '<p class="melding fout">Er is geen actief abonnement; goedkeuren kan pas na het starten van een abonnement via <a href="/portaal/abonnement">Abonnement</a>.</p>'
       : ''
   }
   ${stap}
@@ -328,7 +328,7 @@ const STAND_TEKST: Record<AccountStand, { label: string; klasse: string; uitleg:
   niet_gekoppeld: {
     label: 'Nog niet gekoppeld',
     klasse: 'actie',
-    uitleg: 'Dit account is nog niet aan MARKaaS gekoppeld.',
+    uitleg: 'Dit account is nog niet aan MARKaaS gekoppeld. Vraag MARKaaS om een nieuwe koppellink voor de accounteigenaar.',
   },
   storing: {
     label: 'Storing',
@@ -354,7 +354,7 @@ function accountKaart(a: AccountResultaat, csrfToken: string): string {
   const knop = kanOpnieuwKoppelen(a.stand)
     ? `<form method="post" action="/portaal/accounts/${h(a.accountId)}/opnieuw-koppelen">
     <input type="hidden" name="csrf" value="${h(csrfToken)}">
-    <button type="submit">${a.stand === 'niet_gekoppeld' ? 'Account koppelen' : 'Opnieuw koppelen'}</button>
+    <button type="submit">Opnieuw koppelen</button>
   </form>`
     : '';
   const rijen = [...a.weken]

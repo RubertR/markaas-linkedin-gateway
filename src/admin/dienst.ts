@@ -243,6 +243,18 @@ export async function lijstOnzeker(
   return uit;
 }
 
+/**
+ * Fout door invoer van de gebruiker (te lange tekst, ontbrekende reden). De
+ * melding is in gewone taal en mag letterlijk aan een klant getoond worden;
+ * andere fouten niet (SPEC §14.3).
+ */
+export class AdminInvoerFout extends Error {
+  constructor(bericht: string) {
+    super(bericht);
+    this.name = 'AdminInvoerFout';
+  }
+}
+
 export interface GoedkeurenOpties {
   nieuweTekst?: string;
   klok?: Klok;
@@ -272,7 +284,8 @@ export async function goedkeur(
 
 export interface GoedkeurBatchResultaat {
   goedgekeurd: string[];
-  overgeslagen: Array<{ actieId: string; reden: string }>;
+  /** `bekend`: de reden is een AdminInvoerFout en mag letterlijk aan een klant getoond worden. */
+  overgeslagen: Array<{ actieId: string; reden: string; bekend: boolean }>;
 }
 
 export async function goedkeurBatch(
@@ -289,7 +302,11 @@ export async function goedkeurBatch(
       await keurActieGoed(db, id, opts.door ?? GOEDKEURDER_RUBERT, nu);
       resultaat.goedgekeurd.push(id);
     } catch (err) {
-      resultaat.overgeslagen.push({ actieId: id, reden: (err as Error).message });
+      resultaat.overgeslagen.push({
+        actieId: id,
+        reden: (err as Error).message,
+        bekend: err instanceof AdminInvoerFout,
+      });
     }
   }
   return resultaat;
@@ -309,7 +326,7 @@ export async function wijsAf(
   const door = opts.door ?? GOEDKEURDER_RUBERT;
   const schoongemaakt = reden.trim();
   if (!schoongemaakt) {
-    throw new Error('Reden voor afwijzen is verplicht.');
+    throw new AdminInvoerFout('Reden voor afwijzen is verplicht.');
   }
   const actie = await vindActie(db, actieId);
   if (!actie) throw new Error(`Actie ${actieId} bestaat niet.`);
@@ -474,7 +491,7 @@ async function werkTekstBij(
   if (limieten) {
     const max = tekenMaxVoorType(actie.type, limieten);
     if (schoon.length > max) {
-      throw new Error(
+      throw new AdminInvoerFout(
         `Tekst is ${schoon.length} tekens; maximum voor ${actie.type} is ${max} tekens. Korter maken vóór goedkeuren.`,
       );
     }
@@ -501,7 +518,7 @@ async function controleerBestaandeTekst(
   const tekst = tekstUitPayload(actie.type, payload);
   const max = tekenMaxVoorType(actie.type, limieten);
   if (tekst.length > max) {
-    throw new Error(
+    throw new AdminInvoerFout(
       `Tekst is ${tekst.length} tekens; maximum voor ${actie.type} is ${max} tekens. Korter maken vóór goedkeuren.`,
     );
   }

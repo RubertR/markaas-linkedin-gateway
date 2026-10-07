@@ -66,7 +66,9 @@ export function bepaalStand(a: StandInvoer, nu: Date): AccountStand {
 
 /** Mag de klant via het portaal een (her)koppellink maken? */
 export function kanOpnieuwKoppelen(stand: AccountStand): boolean {
-  return stand === 'niet_gekoppeld' || stand === 'opnieuw_koppelen';
+  // Alleen een verlopen sessie: een nog niet gekoppeld account krijgt een nieuwe
+  // koppeluitnodiging via MARKaaS (toestemming van de eigenaar, SPEC §14.2/§14.3).
+  return stand === 'opnieuw_koppelen';
 }
 
 /** De maandagen van de laatste `aantal` weken, oudste eerst. */

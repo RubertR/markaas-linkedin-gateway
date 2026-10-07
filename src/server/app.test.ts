@@ -13,7 +13,10 @@ import { vasteWerkdagen } from '../sequences/wachttijd.ts';
 import { maakStripeClient, type StripeClient } from '../stripe/client.ts';
 import { maakUnipileClient } from '../unipile/client.ts';
 import { koppelSleutel } from '../webhooks/geheim.ts';
+import { startFakeStripe } from '../../test/fake-stripe/server.ts';
 import { maakStripeEvent, ondertekendVerzoek } from '../../test/fake-stripe/webhook.ts';
+import { maakClient } from '../register/clients.ts';
+import { registreerAccount } from '../register/accounts.ts';
 import { verseDatabaseMetMigraties } from '../../test/helpers/pglite.ts';
 
 import { maakGatewayApp, maskeerPad, unipileBaseUrl } from './app.ts';
@@ -329,6 +332,43 @@ describe('Stripe-webhook in de gateway (SPEC §14.4)', () => {
     for (const r of regels) {
       assert.ok(!r.includes(STRIPE.STRIPE_WEBHOOK_SECRET));
       assert.ok(!r.includes(STRIPE.STRIPE_SECRET_KEY));
+    }
+  });
+});
+
+describe('aantal in Stripe na een nieuw gekoppeld account (SPEC §14.4)', () => {
+  it('CREATION_SUCCESS via /webhooks/koppel werkt de quantity van het lopende abonnement bij', async () => {
+    const fake = await startFakeStripe();
+    try {
+      const env = leesEnv({
+        ...GEHEIMEN,
+        STRIPE_SECRET_KEY: 'sk_test_x',
+        STRIPE_WEBHOOK_SECRET: 'whsec_x',
+        STRIPE_PRICE_ID: 'price_x',
+      });
+      const app = maakApp(env, { stripe: maakStripeClient({ secretKey: 'sk_test_x', baseUrl: fake.baseUrl, timeoutMs: 500 }) });
+      const klant = await maakClient(db, { naam: 'Quantity BV', slug: 'quantity' });
+      await db.query(
+        "insert into subscriptions(client_id, stripe_customer_id, stripe_subscription_id, status) values ($1, 'cus_q', 'sub_q', 'active')",
+        [klant.id],
+      );
+      fake.abonnementen.set('sub_q', {
+        id: 'sub_q', customer: 'cus_q', status: 'active', trial_end: null, cancel_at_period_end: false,
+        items: { object: 'list', data: [{ id: 'si_q', quantity: 1 }] },
+      });
+      for (const naam of ['Een', 'Twee']) {
+        const acc = await registreerAccount(db, { clientId: klant.id, eigenaarNaam: naam, abonnement: 'free' });
+        const r = await app.request('/webhooks/koppel', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-webhook-secret': GEHEIMEN.WEBHOOK_SECRET },
+          body: JSON.stringify({ status: 'CREATION_SUCCESS', account_id: `uni-q-${naam}`, name: acc.id }),
+        });
+        assert.equal(r.status, 200);
+      }
+      const items = fake.abonnementen.get('sub_q')!['items'] as { data: Array<{ quantity: number }> };
+      assert.equal(items.data[0]!.quantity, 2);
+    } finally {
+      await fake.stop();
     }
   });
 });

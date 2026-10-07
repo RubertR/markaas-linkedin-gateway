@@ -1,3 +1,4 @@
+import type { LaatsteAantalSync } from '../abonnement/aantal.ts';
 import type { KlantAbonnement } from '../abonnement/abonnementen.ts';
 import { datumTekst, type AbonnementWeergave } from '../abonnement/weergave.ts';
 
@@ -227,7 +228,7 @@ function draftKaart(d: DraftWeergave, csrfToken: string): string {
   return `
 <article class="actie-kaart" data-type="${h(d.type)}">
   <h3>${h(etiket(d.type))}</h3>
-  ${d.betaalpoortReden ? `<p class="melding fout">${h(d.betaalpoortReden)} Na goedkeuring wordt dit concept geweigerd.</p>` : ''}
+  ${d.betaalpoortReden ? `<p class="melding fout">${h(d.betaalpoortReden)} Na goedkeuring blijft dit concept in de wachtrij tot er een actief abonnement is.</p>` : ''}
   ${d.sequentie ? sequentieBanner(d.sequentie) : ''}
   ${ontvangerBlok(d.ontvanger)}
   <div class="waarom">
@@ -602,6 +603,7 @@ export interface KlantAbonnementWeergave {
   weergave: AbonnementWeergave;
   abonnement: KlantAbonnement | null;
   stripeIngericht: boolean;
+  laatsteAantalSync?: LaatsteAantalSync | null;
 }
 
 export interface KlantDetailViewOpties {
@@ -754,6 +756,16 @@ function abonnementSectie(basis: string, csrfToken: string, vereist: boolean, a:
   if (ab?.periodeTot) regels.push(`<dt>Periode tot</dt><dd>${h(datumTekst(ab.periodeTot))}</dd>`);
   if (ab?.opgezegdPerEinde) regels.push('<dt>Opgezegd</dt><dd>per einde van de periode</dd>');
   if (ab?.stripeCustomerId) regels.push(`<dt>Stripe-klant</dt><dd><small>${h(ab.stripeCustomerId)}</small></dd>`);
+  const sync = a.laatsteAantalSync;
+  if (sync) {
+    regels.push(
+      `<dt>Aantal in Stripe</dt><dd>${
+        sync.gelukt
+          ? `bijgewerkt op ${h(formatteerAmsterdam(sync.op))}`
+          : `<strong>bijwerken mislukt op ${h(formatteerAmsterdam(sync.op))}</strong>: ${h(sync.fout ?? 'onbekende fout')}`
+      }</dd>`,
+    );
+  }
   return `
   <section>
     <h2>Abonnement</h2>
@@ -767,6 +779,11 @@ function abonnementSectie(basis: string, csrfToken: string, vereist: boolean, a:
         <button type="submit" class="secundair">Opslaan</button>
       </form>
       <p class="uitleg">Uit voor eigen organisaties (MARKaaS, IPknowledge, TAG): dan wordt er nooit tegengehouden.</p>
+      <form method="post" action="${basis}/abonnement-aantal">
+        <input type="hidden" name="csrf" value="${h(csrfToken)}">
+        <button type="submit" class="secundair">Aantal in Stripe bijwerken</button>
+      </form>
+      <p class="uitleg">Zet het aantal in Stripe gelijk aan het aantal gekoppelde accounts (bijv. na ontkoppelen).</p>
     </div>
   </section>`;
 }
