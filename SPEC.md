@@ -1,6 +1,10 @@
 # SPEC — MARKaaS LinkedIn-gateway
 
-Versie 0.2 · 7 oktober 2026 · eigenaar: Rubert Rietkerk (MARKaaS)
+Versie 0.3 (concept) · 8 oktober 2026 · eigenaar: Rubert Rietkerk (MARKaaS)
+
+> **Wijziging 0.3 (8 okt 2026, voorstel, nog niet vastgesteld):** na het aanmelden vult de klant
+> in het portaal een intake in voor zijn klantprofiel en ICP. MARKaaS stelt het profiel vast;
+> de prospectieskill leest het via de MCP. Zie §14.6.
 
 > **Wijziging 0.2 (7 okt 2026, besluit Rubert):** de gateway wordt een betaald product. Klanten
 > krijgen een eigen portaal met login, keuren zelf concepten goed en betalen een abonnement via
@@ -152,6 +156,7 @@ verzoeken ≥ 30%; maximaal 1.0.
 | `queue_action` | Verzoek, bericht of InMail als **concept** (status `draft`) | ja, bij uitvoering |
 | `start_sequence` | Start een sequentie voor één lead; maakt alleen het **concept** voor stap 1 (invite) | ja, bij uitvoering |
 | `get_results` | Status van acties, acceptaties, reacties, en lopende sequenties | nee |
+| `get_klantprofiel` | Laatste vastgestelde klantprofiel van één klant (§14.6), plus de status van een nieuwere versie | nee |
 
 Er is **geen** tool die direct verstuurt of een vrije API-aanroep doet. Er is ook **geen**
 MCP-tool die een actie kan goedkeuren, afwijzen of op `approved` zetten; `queue_action`
@@ -481,3 +486,78 @@ Goedkeuren kan door de klant én door MARKaaS. `goedgekeurd_door` legt vast wie:
   Railway (hosting, EU West), Supabase (database, Frankfurt), Stripe (betalingen),
   Anthropic (Claude, opstellen van concepten en selectie van leads).
 - De documenten worden juridisch getoetst voordat de eerste betalende klant start.
+
+### 14.6 Klantprofiel en ICP-intake
+
+*Toegevoegd in versie 0.3 (concept). Bouwen na 14.4.*
+
+**Doel.** De klant ervaart dat er voor hem een eigen klantprofiel en ICP wordt opgesteld, en
+MARKaaS krijgt de antwoorden gestructureerd binnen in plaats van via losse gesprekken. Het
+vastgestelde profiel is de bron voor de prospectieskill (`klanten/<slug>.md` wordt daarvan
+afgeleid of vervalt).
+
+**Flow**
+
+1. **Na de eerste login** (wachtwoord gekozen, §14.3) gaat een klantgebruiker naar
+   `/portaal/profiel` zolang zijn klant nog geen ingediend of vastgesteld profiel heeft.
+   Daarna toont elke portaalpagina een balk "Stap 1: vul uw klantprofiel in" tot het profiel is
+   ingediend. De intake blokkeert goedkeuren en de andere pagina's niet.
+2. **Intake in korte rondes**, één scherm per ronde, met keuzes plus "Anders, namelijk …".
+   Elke ronde wordt bij "Volgende" als concept opgeslagen; terug kan altijd; een collega van
+   dezelfde klant kan verdergaan waar de ander stopte.
+   1. *Propositie:* wat verkoopt u, welk probleem lost het op, wat levert het de klant op.
+   2. *Doelgroep:* sectoren, omvang (medewerkers), regio, functies van de beslissers.
+   3. *Signalen en uitsluitingen:* wanneer is een bedrijf nu rijp (triggers); wie benaderen we
+      niet (concurrenten, B2C, overheid, bestaande klanten met een lijst van namen).
+   4. *Afzender en toon:* per gekoppeld LinkedIn-account wie de afzender is en hoe die
+      ondertekent; welke naam in de berichten staat (eigen merk of partner); je of u; taal;
+      ervaring van de afzender in een paar zinnen.
+   5. *Bewijs en aanbod:* wat mag genoemd worden (resultaten, klantnamen, garanties, ervaring)
+      en wat het aanbod is (bijv. vrijblijvend gesprek). Elke claim krijgt een verplicht
+      vinkje "Dit klopt en mag in berichten gebruikt worden"; zonder vinkje wordt de claim niet
+      opgeslagen.
+   6. *Overzicht:* de antwoorden in gewone taal, met "Wijzigen" per ronde en de knop
+      "Indienen bij MARKaaS".
+3. **Vaststellen door MARKaaS** op `/admin/klanten/<slug>/profiel`: antwoorden lezen, een
+   interne aanvulling toevoegen (zoekfilters, extra uitsluitingen, haken en sectoren voor het
+   dashboard; nooit zichtbaar voor de klant) en "Vaststellen". Terugsturen met een vraag aan
+   de klant kan ook: de versie gaat dan terug naar concept met de vraag zichtbaar in het
+   portaal.
+4. **Na vaststellen** ziet de klant op `/portaal/profiel` "Uw klantprofiel is vastgesteld" met
+   een samenvatting (alleen lezen) en de knop "Wijziging aanvragen", die een nieuwe
+   conceptversie opent op basis van de vastgestelde. Tot de nieuwe versie is vastgesteld,
+   blijft de vorige gelden.
+5. **MARKaaS kan namens de klant invullen** via de admin (voor bestaande klanten zoals TAG);
+   `ingediend_door` legt dan `rubert` vast.
+
+**Vragen in configuratie.** De rondes, vragen en keuzes staan in `config/intake.json` met een
+versienummer, niet in de code. Een profiel bewaart de `intake_versie` waarmee het is ingevuld.
+
+**Opslag** (migratie 0008, tabel `klantprofielen`): id, client_id, versie (oplopend per
+klant), status (`concept` | `ingediend` | `vastgesteld` | `vervangen`), intake_versie,
+antwoorden (jsonb), interne_aanvulling (jsonb, alleen admin en MCP), vraag_van_markaas,
+ingediend_door, ingediend_op, vastgesteld_door, vastgesteld_op, bijgewerkt_op. Per klant
+hooguit één `concept`/`ingediend` en één `vastgesteld`; bij vaststellen wordt de vorige
+`vastgesteld` → `vervangen`. Opslaan van een ronde vergelijkt `bijgewerkt_op` (optimistisch):
+heeft een collega intussen opgeslagen, dan een NL-melding en de nieuwste stand, geen stille
+overschrijving.
+
+**Rechten en veiligheid.** Zoals §14.3: elke query filtert op `client_id` van de ingelogde
+gebruiker; tests bewijzen dat klant A het profiel van klant B niet kan lezen of wijzigen. CSRF
+op elke POST, geen GET die iets wijzigt. Vrije tekstvelden maximaal 1.000 tekens, als tekst
+opgeslagen en altijd ge-escaped getoond. Antwoorden zijn bedrijfsgegevens; persoonsgegevens
+alleen van de afzenders (naam, ervaring) en de lijst bestaande klanten (bedrijfsnamen).
+
+**MCP-tool `get_klantprofiel`** (`clientSlug`): geeft de laatste vastgestelde versie
+(antwoorden + interne aanvulling + versie + vastgesteld_op) en, als die er is, de status van
+een nieuwere versie (`concept` of `ingediend`). Geen vastgesteld profiel → NL-melding "Er is
+nog geen vastgesteld klantprofiel voor <klant>; laat de klant de intake invullen of stel het
+ingediende profiel vast." Er is geen MCP-tool die een profiel schrijft of vaststelt.
+
+**Prospectieskill.** Leest bij stap 0 `get_klantprofiel`; zonder vastgesteld profiel geen
+ronde. Bewijs uit het profiel mag alleen gebruikt worden als het met het vinkje is bevestigd.
+
+**Later (niet in v1).** Doorvragen door Claude tijdens de intake (vervolgvragen op vage
+antwoorden), voorstellen voor zoekfilters op basis van de antwoorden, en de klant zelf
+voorbeeldteksten laten beoordelen vóór de eerste ronde.
+
