@@ -15,6 +15,7 @@ const VERWACHTE_TABELLEN = [
   'client_users',
   'clients',
   'events',
+  'klantprofielen',
   'koppel_uitnodigingen',
   'portal_sessions',
   'schema_migrations',
@@ -31,6 +32,7 @@ const ALLE_MIGRATIES = [
   '0005_klantportaal.sql',
   '0006_abonnementen.sql',
   '0007_toestemming_momentopname.sql',
+  '0008_klantprofielen.sql',
 ];
 
 describe('0001_init.sql', () => {
@@ -337,6 +339,7 @@ describe('0004_onboarding.sql', () => {
         '0005_klantportaal.sql',
         '0006_abonnementen.sql',
         '0007_toestemming_momentopname.sql',
+        '0008_klantprofielen.sql',
       ]);
       const rijen = await db.query<{ slug: string; abonnement_vereist: boolean }>(
         'select slug, abonnement_vereist from clients order by slug',
@@ -554,7 +557,10 @@ describe('0007_toestemming_momentopname.sql', () => {
          values ($1, 'Eva', 'eva@aqua.nl', '0.1', '0.1')`,
         [a!.id],
       );
-      assert.deepEqual(await draaiMigraties(db, MIGRATIE_MAP), ['0007_toestemming_momentopname.sql']);
+      assert.deepEqual(await draaiMigraties(db, MIGRATIE_MAP), [
+        '0007_toestemming_momentopname.sql',
+        '0008_klantprofielen.sql',
+      ]);
       const [r] = await db.query<Record<string, unknown>>(
         'select client_id, klantnaam, account_eigenaar_naam, unipile_account_id from account_consents',
       );
@@ -565,6 +571,34 @@ describe('0007_toestemming_momentopname.sql', () => {
         'select account_id, client_id, klantnaam, account_eigenaar_naam from account_consents',
       );
       assert.deepEqual(na, { account_id: null, client_id: null, klantnaam: 'Aqua', account_eigenaar_naam: 'Eva' });
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe('0008_klantprofielen.sql', () => {
+  it('staat per klant hooguit één open en één vastgestelde versie toe; verwijderen van de klant ruimt op', async () => {
+    const { db, close } = await verseDatabaseMetMigraties();
+    try {
+      const [k] = await db.query<{ id: string }>("insert into clients(naam, slug) values ('TAG', 'tag') returning id");
+      const nieuw = (versie: number, status: string) =>
+        db.query(
+          "insert into klantprofielen(client_id, versie, status, intake_versie) values ($1, $2, $3, '1')",
+          [k!.id, versie, status],
+        );
+      await nieuw(1, 'vastgesteld');
+      await nieuw(2, 'concept');
+      await assert.rejects(() => nieuw(3, 'ingediend'), /unique|duplicate/i);
+      await assert.rejects(() => nieuw(3, 'vastgesteld'), /unique|duplicate/i);
+      await assert.rejects(() => nieuw(2, 'vervangen'), /unique|duplicate/i);
+      await assert.rejects(() => nieuw(4, 'gek'), /check/i);
+      await nieuw(3, 'vervangen');
+      await db.query('delete from clients where id = $1', [k!.id]);
+      const [{ aantal }] = (await db.query<{ aantal: number }>('select count(*)::int as aantal from klantprofielen')) as [
+        { aantal: number },
+      ];
+      assert.equal(aantal, 0);
     } finally {
       await close();
     }

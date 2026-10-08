@@ -131,7 +131,7 @@ describe('authenticatie', () => {
 });
 
 describe('tools/list', () => {
-  it('geeft precies de acht tools uit SPEC §7 terug', async () => {
+  it('geeft precies de negen tools uit SPEC §7 terug', async () => {
     const res = await postMcp(
       { jsonrpc: '2.0', id: 1, method: 'tools/list' },
       { token: TOKEN },
@@ -143,6 +143,7 @@ describe('tools/list', () => {
     assert.deepEqual(namen, [
       'account_health',
       'get_budget',
+      'get_klantprofiel',
       'get_profile',
       'get_results',
       'list_accounts',

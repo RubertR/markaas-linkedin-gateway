@@ -6,6 +6,7 @@ import { laadLimieten, type Limieten } from '../budget/limits.ts';
 import { laadAbonnementConfig, type AbonnementConfig } from '../config/abonnement.ts';
 import { leesEnv, type Env } from '../config/env.ts';
 import { laadJuridisch, type Juridisch } from '../config/juridisch.ts';
+import { laadIntake, type Intake } from '../config/intake.ts';
 import type { Backend } from '../db/backend.ts';
 import { maakLogger } from '../log/logger.ts';
 import { vastePauze } from '../queue/pauze.ts';
@@ -49,7 +50,10 @@ after(async () => {
   await close();
 });
 
-function maakApp(env: Env, opties: { db?: Backend; regels?: string[]; stripe?: StripeClient } = {}) {
+function maakApp(
+  env: Env,
+  opties: { db?: Backend; regels?: string[]; stripe?: StripeClient; intake?: Intake } = {},
+) {
   return maakGatewayApp({
     env,
     db: opties.db ?? db,
@@ -68,6 +72,7 @@ function maakApp(env: Env, opties: { db?: Backend; regels?: string[]; stripe?: S
     versie: leesVersie(),
     abonnement,
     ...(opties.stripe ? { stripe: opties.stripe } : {}),
+    ...(opties.intake ? { intake: opties.intake } : {}),
   });
 }
 
@@ -240,6 +245,17 @@ describe('klantportaal in de gateway', () => {
     assert.equal(start.headers.get('location'), '/portaal/login');
     assert.equal((await app.request('/portaal/login')).status, 200);
     assert.equal((await app.request('/portaal/uitnodiging/onbekend')).status, 410);
+  });
+
+  it('klantprofiel (SPEC §14.6) alleen met intake-configuratie: portaal en admin', async () => {
+    const zonder = maakApp(leesEnv(GEHEIMEN));
+    assert.equal((await zonder.request('/portaal/profiel')).status, 404);
+    const met = maakApp(leesEnv(GEHEIMEN), { intake: await laadIntake() });
+    const portaal = await met.request('/portaal/profiel');
+    assert.equal(portaal.status, 303);
+    assert.equal(portaal.headers.get('location'), '/portaal/login');
+    const admin = await met.request('/admin/klanten/tag/profiel');
+    assert.equal(admin.headers.get('location'), '/admin/login');
   });
 
   it('logt het pad van de uitnodigingspagina zonder het token', async () => {

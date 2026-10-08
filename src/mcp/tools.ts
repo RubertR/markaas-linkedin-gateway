@@ -13,7 +13,10 @@ import type {
 } from '../budget/limits.ts';
 import { geschaaldeNorm, weekBudgetMetBonus } from '../budget/opbouw.ts';
 import { dagenInMaand, formatteerLokaal, lokaleDag, lokaleDagen } from '../budget/tijdvenster.ts';
+import type { Intake } from '../config/intake.ts';
 import type { Backend } from '../db/backend.ts';
+import { samenvatting } from '../profiel/invoer.ts';
+import { profielVoorSlug } from '../profiel/profielen.ts';
 import { maakActie, type ActieStatus } from '../queue/acties.ts';
 import type { PauzeKiezer } from '../queue/pauze.ts';
 import {
@@ -46,6 +49,8 @@ export interface McpToolsDeps {
   limieten: Limieten;
   klok: Klok;
   pauzeKiezer: PauzeKiezer;
+  /** config/intake.json, voor de leesbare samenvatting in get_klantprofiel. */
+  intake?: Intake;
 }
 
 export class McpToolInvoerFout extends Error {
@@ -86,6 +91,8 @@ export async function voerTool(
       return await startSequenceTool(deps, argumenten);
     case 'get_results':
       return await getResults(deps, argumenten);
+    case 'get_klantprofiel':
+      return await getKlantprofiel(deps, argumenten);
   }
 }
 
@@ -712,6 +719,50 @@ interface SequentieResultaatRij {
 }
 
 // -- hulpjes -----------------------------------------------------------------
+
+// -- get_klantprofiel (SPEC §14.6) --------------------------------------------
+
+async function getKlantprofiel(deps: McpToolsDeps, args: Record<string, unknown>) {
+  const slug = vereistString(args, 'clientSlug');
+  const p = await profielVoorSlug(deps.db, slug);
+  if (!p) {
+    throw new McpToolInvoerFout(
+      `Onbekende of niet-actieve klant "${slug}"; vraag list_accounts op om de juiste clientSlug te vinden.`,
+    );
+  }
+  const v = p.vastgesteld;
+  return {
+    clientSlug: p.clientSlug,
+    klantNaam: p.klantNaam,
+    vastgesteld: v
+      ? {
+          versie: v.versie,
+          vastgesteldOp: v.vastgesteldOp ? v.vastgesteldOp.toISOString() : null,
+          intakeVersie: v.intakeVersie,
+          antwoorden: v.antwoorden,
+          ...(deps.intake
+            ? {
+                samenvatting: samenvatting(deps.intake, v.antwoorden).map((r) => ({
+                  ronde: r.titel,
+                  regels: r.regels.map((regel) => ({ vraag: regel.label, antwoord: regel.waarde })),
+                })),
+              }
+            : {}),
+          bevestigdeClaims: Object.values(v.antwoorden)
+            .flatMap((a) => a.claims ?? [])
+            .filter((c) => c.bevestigd)
+            .map((c) => c.tekst),
+          interneAanvulling: v.interneAanvulling,
+        }
+      : null,
+    nieuwereVersie: p.nieuwereVersie,
+    ...(v
+      ? {}
+      : {
+          melding: `Er is nog geen vastgesteld klantprofiel voor ${p.klantNaam}; laat de klant de intake in het portaal invullen of stel het ingediende profiel vast op /admin/klanten/${p.clientSlug}/profiel.`,
+        }),
+  };
+}
 
 function vereistString(args: Record<string, unknown>, veld: string): string {
   const waarde = args[veld];

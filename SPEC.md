@@ -1,8 +1,8 @@
 # SPEC — MARKaaS LinkedIn-gateway
 
-Versie 0.3 (concept) · 8 oktober 2026 · eigenaar: Rubert Rietkerk (MARKaaS)
+Versie 0.3 · 8 oktober 2026 · eigenaar: Rubert Rietkerk (MARKaaS)
 
-> **Wijziging 0.3 (8 okt 2026, voorstel, nog niet vastgesteld):** na het aanmelden vult de klant
+> **Wijziging 0.3 (8 okt 2026, besluit Rubert):** na het aanmelden vult de klant
 > in het portaal een intake in voor zijn klantprofiel en ICP. MARKaaS stelt het profiel vast;
 > de prospectieskill leest het via de MCP. Zie §14.6.
 
@@ -489,7 +489,7 @@ Goedkeuren kan door de klant én door MARKaaS. `goedgekeurd_door` legt vast wie:
 
 ### 14.6 Klantprofiel en ICP-intake
 
-*Toegevoegd in versie 0.3 (concept). Bouwen na 14.4.*
+*Toegevoegd in versie 0.3 (besluit Rubert, 8 okt 2026). Bouwen na 14.4.*
 
 **Doel.** De klant ervaart dat er voor hem een eigen klantprofiel en ICP wordt opgesteld, en
 MARKaaS krijgt de antwoorden gestructureerd binnen in plaats van via losse gesprekken. Het
@@ -509,18 +509,19 @@ afgeleid of vervalt).
    2. *Doelgroep:* sectoren, omvang (medewerkers), regio, functies van de beslissers.
    3. *Signalen en uitsluitingen:* wanneer is een bedrijf nu rijp (triggers); wie benaderen we
       niet (concurrenten, B2C, overheid, bestaande klanten met een lijst van namen).
-   4. *Afzender en toon:* per gekoppeld LinkedIn-account wie de afzender is en hoe die
-      ondertekent; welke naam in de berichten staat (eigen merk of partner); je of u; taal;
+   4. *Afzender en toon:* wie de afzenders zijn en hoe ze ondertekenen (de gekoppelde
+      LinkedIn-accounts staan erbij als geheugensteun); welke naam in de berichten staat (eigen merk of partner); je of u; taal;
       ervaring van de afzender in een paar zinnen.
    5. *Bewijs en aanbod:* wat mag genoemd worden (resultaten, klantnamen, garanties, ervaring)
       en wat het aanbod is (bijv. vrijblijvend gesprek). Elke claim krijgt een verplicht
-      vinkje "Dit klopt en mag in berichten gebruikt worden"; zonder vinkje wordt de claim niet
-      opgeslagen.
+      vinkje "Dit klopt en mag in berichten gebruikt worden"; een ingevulde claim zonder vinkje
+      geeft een NL-melding en de ronde wordt niet opgeslagen.
    6. *Overzicht:* de antwoorden in gewone taal, met "Wijzigen" per ronde en de knop
       "Indienen bij MARKaaS".
 3. **Vaststellen door MARKaaS** op `/admin/klanten/<slug>/profiel`: antwoorden lezen, een
-   interne aanvulling toevoegen (zoekfilters, extra uitsluitingen, haken en sectoren voor het
-   dashboard; nooit zichtbaar voor de klant) en "Vaststellen". Terugsturen met een vraag aan
+   interne aanvulling toevoegen (vrije tekst: zoekfilters, extra uitsluitingen, haken en sectoren
+   voor het dashboard; nooit zichtbaar voor de klant) en "Vaststellen". De interne aanvulling van
+   een vastgesteld profiel kan later worden bijgewerkt zonder nieuwe versie. Terugsturen met een vraag aan
    de klant kan ook: de versie gaat dan terug naar concept met de vraag zichtbaar in het
    portaal.
 4. **Na vaststellen** ziet de klant op `/portaal/profiel` "Uw klantprofiel is vastgesteld" met
@@ -535,10 +536,11 @@ versienummer, niet in de code. Een profiel bewaart de `intake_versie` waarmee he
 
 **Opslag** (migratie 0008, tabel `klantprofielen`): id, client_id, versie (oplopend per
 klant), status (`concept` | `ingediend` | `vastgesteld` | `vervangen`), intake_versie,
-antwoorden (jsonb), interne_aanvulling (jsonb, alleen admin en MCP), vraag_van_markaas,
-ingediend_door, ingediend_op, vastgesteld_door, vastgesteld_op, bijgewerkt_op. Per klant
+antwoorden (jsonb), interne_aanvulling (tekst, alleen admin en MCP), vraag_van_markaas,
+revisie (teller per wijziging), ingediend_door, ingediend_op, vastgesteld_door, vastgesteld_op,
+aangemaakt_op, bijgewerkt_op. Per klant
 hooguit één `concept`/`ingediend` en één `vastgesteld`; bij vaststellen wordt de vorige
-`vastgesteld` → `vervangen`. Opslaan van een ronde vergelijkt `bijgewerkt_op` (optimistisch):
+`vastgesteld` → `vervangen`. Opslaan van een ronde vergelijkt de `revisie` uit het formulier (optimistisch):
 heeft een collega intussen opgeslagen, dan een NL-melding en de nieuwste stand, geen stille
 overschrijving.
 
