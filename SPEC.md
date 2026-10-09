@@ -1,8 +1,8 @@
 # SPEC — MARKaaS LinkedIn-gateway
 
-Versie 0.4 (concept) · 9 oktober 2026 · eigenaar: Rubert Rietkerk (MARKaaS)
+Versie 0.4 · 9 oktober 2026 · eigenaar: Rubert Rietkerk (MARKaaS)
 
-> **Wijziging 0.4 (9 okt 2026, voorstel, nog niet vastgesteld):** de klant beantwoordt een vraag van
+> **Wijziging 0.4 (9 okt 2026, besluit Rubert):** de klant beantwoordt een vraag van
 > MARKaaS over het klantprofiel in het portaal (gesprek per profielversie, §14.6), en MARKaaS kan in
 > de admin het portaal van een klant alleen-lezen bekijken (§14.7).
 >
@@ -578,7 +578,7 @@ voorbeeldteksten laten beoordelen vóór de eerste ronde.
 
 ### 14.7 Portaal bekijken als klant (alleen lezen)
 
-*Toegevoegd in versie 0.4 (concept).*
+*Toegevoegd in versie 0.4 (besluit Rubert, 9 okt 2026).*
 
 - Op de klantpagina in de admin staat de knop **"Bekijk als klant"**. Die opent
   `/admin/klanten/<slug>/als-klant` met dezelfde pagina's als het portaal: concepten, resultaten,

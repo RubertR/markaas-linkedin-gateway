@@ -15,6 +15,7 @@ const VERWACHTE_TABELLEN = [
   'client_users',
   'clients',
   'events',
+  'klantprofiel_berichten',
   'klantprofielen',
   'koppel_uitnodigingen',
   'portal_sessions',
@@ -33,6 +34,7 @@ const ALLE_MIGRATIES = [
   '0006_abonnementen.sql',
   '0007_toestemming_momentopname.sql',
   '0008_klantprofielen.sql',
+  '0009_klantprofiel_berichten.sql',
 ];
 
 describe('0001_init.sql', () => {
@@ -340,6 +342,7 @@ describe('0004_onboarding.sql', () => {
         '0006_abonnementen.sql',
         '0007_toestemming_momentopname.sql',
         '0008_klantprofielen.sql',
+        '0009_klantprofiel_berichten.sql',
       ]);
       const rijen = await db.query<{ slug: string; abonnement_vereist: boolean }>(
         'select slug, abonnement_vereist from clients order by slug',
@@ -560,6 +563,7 @@ describe('0007_toestemming_momentopname.sql', () => {
       assert.deepEqual(await draaiMigraties(db, MIGRATIE_MAP), [
         '0007_toestemming_momentopname.sql',
         '0008_klantprofielen.sql',
+        '0009_klantprofiel_berichten.sql',
       ]);
       const [r] = await db.query<Record<string, unknown>>(
         'select client_id, klantnaam, account_eigenaar_naam, unipile_account_id from account_consents',

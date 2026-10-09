@@ -63,6 +63,36 @@ export class ProfielConflictFout extends ProfielFout {
 
 export const MAX_INTERNE_AANVULLING = 10_000;
 export const MAX_VRAAG = 1000;
+export const MAX_ANTWOORD = 1000;
+
+export interface ProfielBericht {
+  id: string;
+  van: 'markaas' | 'klant';
+  tekst: string;
+  door: string;
+  op: Date;
+}
+
+/** Gesprek bij één profielversie, oudste eerst; altijd gefilterd op de klant. */
+export async function berichtenVoorProfiel(db: Backend, clientId: string, profielId: string): Promise<ProfielBericht[]> {
+  const rijen = await db.query<{ id: string; van: 'markaas' | 'klant'; tekst: string; door: string; op: string | Date }>(
+    `select id, van, tekst, door, op from klantprofiel_berichten
+      where client_id = $1 and profiel_id = $2
+      order by nr`,
+    [clientId, profielId],
+  );
+  return rijen.map((r) => ({ id: r.id, van: r.van, tekst: r.tekst, door: r.door, op: datum(r.op)! }));
+}
+
+async function voegBerichtToe(
+  db: Backend,
+  o: { profielId: string; clientId: string; van: 'markaas' | 'klant'; tekst: string; door: string; op: string },
+): Promise<void> {
+  await db.query(
+    `insert into klantprofiel_berichten(profiel_id, client_id, van, tekst, door, op) values ($1, $2, $3, $4, $5, $6)`,
+    [o.profielId, o.clientId, o.van, o.tekst, o.door, o.op],
+  );
+}
 
 const KOLOMMEN = `id, client_id, versie, status, intake_versie, antwoorden, interne_aanvulling,
   vraag_van_markaas, revisie, ingediend_door, ingediend_op, vastgesteld_door, vastgesteld_op, bijgewerkt_op`;
@@ -195,8 +225,20 @@ export async function slaRondeOp(db: Backend, o: RondeOpslag): Promise<Klantprof
 
 export async function dienIn(
   db: Backend,
-  o: { clientId: string; revisie: number; door: string; intake: Intake; klok: Klok },
+  o: {
+    clientId: string;
+    revisie: number;
+    door: string;
+    intake: Intake;
+    klok: Klok;
+    /** Optioneel antwoord aan MARKaaS (SPEC 0.4); leeg = geen bericht. */
+    antwoord?: string;
+  },
 ): Promise<Klantprofiel> {
+  const antwoord = (o.antwoord ?? '').replace(/\r\n/g, '\n').trim();
+  if (antwoord.length > MAX_ANTWOORD) {
+    throw new ProfielFout(`Uw antwoord is te lang (maximaal ${MAX_ANTWOORD} tekens).`);
+  }
   return await db.transaction(async (tx) => {
     const { open } = await profielStand(tx, o.clientId);
     if (!open) throw new ProfielFout('Er is nog geen klantprofiel om in te dienen. Vul eerst de vragen in.');
@@ -215,6 +257,16 @@ export async function dienIn(
       [open.id, o.door, o.klok.nu().toISOString(), o.revisie],
     );
     if (!rij) throw new ProfielConflictFout();
+    if (antwoord) {
+      await voegBerichtToe(tx, {
+        profielId: open.id,
+        clientId: o.clientId,
+        van: 'klant',
+        tekst: antwoord,
+        door: o.door,
+        op: o.klok.nu().toISOString(),
+      });
+    }
     return map(rij);
   });
 }
@@ -222,21 +274,25 @@ export async function dienIn(
 /** Beheerder: ingediend profiel terug naar concept, met een vraag aan de klant. */
 export async function stuurTerug(
   db: Backend,
-  o: { clientId: string; vraag: string; klok: Klok },
+  o: { clientId: string; vraag: string; klok: Klok; door?: string },
 ): Promise<Klantprofiel> {
-  const vraag = o.vraag.trim().slice(0, MAX_VRAAG);
+  const vraag = o.vraag.replace(/\r\n/g, '\n').trim().slice(0, MAX_VRAAG);
   if (!vraag) throw new ProfielFout('Vul een vraag of toelichting in voor de klant.');
-  const { open } = await profielStand(db, o.clientId);
-  if (open?.status !== 'ingediend') throw new ProfielFout('Er is geen ingediend klantprofiel om terug te sturen.');
-  const [rij] = await db.query<ProfielRij>(
-    `update klantprofielen
-        set status = 'concept', vraag_van_markaas = $2, bijgewerkt_op = $3, revisie = revisie + 1
-      where id = $1 and status = 'ingediend'
-      returning ${KOLOMMEN}`,
-    [open.id, vraag, o.klok.nu().toISOString()],
-  );
-  if (!rij) throw new ProfielFout('Het klantprofiel is intussen gewijzigd; laad de pagina opnieuw.');
-  return map(rij);
+  return await db.transaction(async (tx) => {
+    const { open } = await profielStand(tx, o.clientId);
+    if (open?.status !== 'ingediend') throw new ProfielFout('Er is geen ingediend klantprofiel om terug te sturen.');
+    const nu = o.klok.nu().toISOString();
+    const [rij] = await tx.query<ProfielRij>(
+      `update klantprofielen
+          set status = 'concept', vraag_van_markaas = $2, bijgewerkt_op = $3, revisie = revisie + 1
+        where id = $1 and status = 'ingediend'
+        returning ${KOLOMMEN}`,
+      [open.id, vraag, nu],
+    );
+    if (!rij) throw new ProfielFout('Het klantprofiel is intussen gewijzigd; laad de pagina opnieuw.');
+    await voegBerichtToe(tx, { profielId: open.id, clientId: o.clientId, van: 'markaas', tekst: vraag, door: o.door ?? 'rubert', op: nu });
+    return map(rij);
+  });
 }
 
 /** Beheerder: ingediend profiel vaststellen; de vorige vastgestelde versie wordt vervangen. */

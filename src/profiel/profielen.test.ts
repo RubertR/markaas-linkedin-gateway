@@ -11,6 +11,7 @@ import type { Antwoorden } from './invoer.ts';
 import {
   ProfielConflictFout,
   ProfielFout,
+  berichtenVoorProfiel,
   dienIn,
   profielActie,
   profielStand,
@@ -210,5 +211,45 @@ describe('klantprofielen: afscherming en skill', () => {
     const p = await profielVoorSlug(db, 'tag');
     assert.equal(p!.vastgesteld!.versie, 1);
     assert.deepEqual(p!.nieuwereVersie, { versie: 2, status: 'concept' });
+  });
+});
+
+describe('klantprofielen: vraag en antwoord (SPEC 0.4)', () => {
+  it('terugsturen bewaart de vraag als bericht van MARKaaS; indienen met antwoord als bericht van de klant', async () => {
+    await ingediend();
+    const terug = await stuurTerug(db, { clientId: klantA, vraag: 'Welke sector eerst?', klok });
+    const na = await dienIn(db, {
+      clientId: klantA,
+      revisie: terug.revisie,
+      door: 'klant:eva@tag.nl',
+      intake,
+      klok,
+      antwoord: '  Energie, daarna facilitair.  ',
+    });
+    const gesprek = await berichtenVoorProfiel(db, klantA, na.id);
+    assert.deepEqual(
+      gesprek.map((b) => [b.van, b.tekst, b.door]),
+      [
+        ['markaas', 'Welke sector eerst?', 'rubert'],
+        ['klant', 'Energie, daarna facilitair.', 'klant:eva@tag.nl'],
+      ],
+    );
+  });
+
+  it('indienen zonder antwoord maakt geen bericht; een te lang antwoord geeft een NL-melding', async () => {
+    const p = await slaRondeOp(db, { clientId: klantA, antwoorden: VOLLEDIG, revisie: 0, intake, klok });
+    await assert.rejects(
+      () => dienIn(db, { clientId: klantA, revisie: p.revisie, door: 'klant:eva@tag.nl', intake, klok, antwoord: 'x'.repeat(1001) }),
+      /antwoord is te lang/,
+    );
+    const na = await dienIn(db, { clientId: klantA, revisie: p.revisie, door: 'klant:eva@tag.nl', intake, klok, antwoord: '   ' });
+    assert.deepEqual(await berichtenVoorProfiel(db, klantA, na.id), []);
+  });
+
+  it('berichten van klant A zijn niet op te vragen met de klant-id van klant B', async () => {
+    await ingediend();
+    const terug = await stuurTerug(db, { clientId: klantA, vraag: 'Vraag?', klok });
+    assert.equal((await berichtenVoorProfiel(db, klantA, terug.id)).length, 1);
+    assert.equal((await berichtenVoorProfiel(db, klantB, terug.id)).length, 0);
   });
 });

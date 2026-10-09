@@ -30,6 +30,7 @@ import { leesRondeUitFormulier } from '../profiel/invoer.ts';
 import {
   ProfielConflictFout,
   ProfielFout,
+  berichtenVoorProfiel,
   dienIn,
   profielActie,
   profielStand,
@@ -513,6 +514,8 @@ export function maakPortaalApp(deps: PortaalDeps) {
         actie: profielActie(stand),
         betalingMislukt: await betalingMislukt(deps, sessie.clientId),
       };
+      const getoond = stand.open ?? stand.vastgesteld;
+      if (getoond) opts.berichten = await berichtenVoorProfiel(deps.db, sessie.clientId, getoond.id);
       const melding = leesFlash(c);
       if (melding) opts.melding = melding;
       return c.html(profielOverzichtView(opts));
@@ -530,6 +533,7 @@ export function maakPortaalApp(deps: PortaalDeps) {
           door: `klant:${sessie.email}`,
           intake,
           klok: deps.klok,
+          antwoord: tekst(form, 'antwoord'),
         });
         deps.logger?.info('Klantportaal: klantprofiel ingediend', { client_id: sessie.clientId });
         zetFlash(c, deps, {

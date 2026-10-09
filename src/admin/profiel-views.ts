@@ -1,11 +1,18 @@
 import type { Intake, IntakeRonde } from '../config/intake.ts';
 import type { Antwoorden } from '../profiel/invoer.ts';
 import { ontbrekendeVerplichte } from '../profiel/invoer.ts';
-import { MAX_INTERNE_AANVULLING, MAX_VRAAG, type ProfielActie, type ProfielStand } from '../profiel/profielen.ts';
+import {
+  MAX_INTERNE_AANVULLING,
+  MAX_VRAAG,
+  type ProfielActie,
+  type ProfielBericht,
+  type ProfielStand,
+} from '../profiel/profielen.ts';
 import {
   PROFIEL_CSS,
   datumTekst,
   eersteOpenRonde,
+  gesprekHtml,
   rondeFormulier,
   rondeLijst,
   samenvattingHtml,
@@ -36,6 +43,9 @@ export interface AdminProfielOpties {
   stand: ProfielStand;
   actie: ProfielActie;
   melding?: Melding;
+  /** Gesprek bij de open versie en bij de vastgestelde versie (SPEC 0.4). */
+  berichtenOpen?: readonly ProfielBericht[];
+  berichtenVastgesteld?: readonly ProfielBericht[];
 }
 
 function basisVan(slug: string): string {
@@ -55,6 +65,7 @@ export function adminProfielView(o: AdminProfielOpties): string {
     <h3>Ingediende versie ${h(open.versie)} (${h(datumTekst(open.ingediendOp))}, door ${h(open.ingediendDoor ?? '—')})</h3>
     ${samenvattingHtml(o.intake, open.antwoorden)}
   </section>
+  ${gesprekHtml(o.berichtenOpen ?? [], 'admin')}
   <section class="actie-kaart">
     <h3>Vaststellen</h3>
     <form method="post" action="${basis}/vaststellen" class="formulier">
@@ -77,7 +88,7 @@ export function adminProfielView(o: AdminProfielOpties): string {
   } else if (open) {
     const ontbreekt = ontbrekendeVerplichte(o.intake, open.antwoorden);
     delen.push(`
-  ${open.vraagVanMarkaas ? `<div class="vraag-markaas"><strong>Uw vraag aan de klant:</strong> ${h(open.vraagVanMarkaas)}</div>` : ''}
+  ${gesprekHtml(o.berichtenOpen ?? [], 'admin')}
   <section class="actie-kaart">
     <h3>Concept, versie ${h(open.versie)}</h3>
     <p class="uitleg">De klant vult dit in het portaal in. U kunt ook namens de klant invullen en indienen.</p>
@@ -105,6 +116,7 @@ export function adminProfielView(o: AdminProfielOpties): string {
   <section class="actie-kaart">
     <h3>Vastgestelde versie ${h(vastgesteld.versie)} (${h(datumTekst(vastgesteld.vastgesteldOp))}, door ${h(vastgesteld.vastgesteldDoor ?? '—')})</h3>
     ${samenvattingHtml(o.intake, vastgesteld.antwoorden)}
+    ${gesprekHtml(o.berichtenVastgesteld ?? [], 'admin')}
     <form method="post" action="${basis}/aanvulling" class="formulier">
       ${csrf}
       <label for="aanvulling_vast">Interne aanvulling (alleen MARKaaS en de skill)</label>

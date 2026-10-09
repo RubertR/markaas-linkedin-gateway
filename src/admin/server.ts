@@ -13,6 +13,7 @@ import { leesRondeUitFormulier } from '../profiel/invoer.ts';
 import {
   ProfielConflictFout,
   ProfielFout,
+  berichtenVoorProfiel,
   dienIn,
   profielActie,
   profielStand,
@@ -53,6 +54,7 @@ import {
 import { PogingenTracker } from './pogingen.ts';
 import { SessieStore, type Sessie } from './sessie.ts';
 import { verifieerWachtwoord } from './wachtwoord.ts';
+import { registreerAlsKlant } from './als-klant.ts';
 import { haalAccountVoorKoppellink, lijstKlanten } from './klanten.ts';
 import { PROFIEL_STATUS_TEKST, adminProfielRondeView, adminProfielView } from './profiel-views.ts';
 import {
@@ -112,6 +114,8 @@ export interface AdminDeps {
   aantalSync?: (clientId: string, aanleiding: string) => Promise<AantalUitkomst>;
   /** Klantprofiel-intake (SPEC §14.6). Ontbreekt: geen klantprofiel in de admin. */
   intake?: Intake;
+  /** Proefperiode uit config/abonnement.json, voor "Bekijk als klant" (SPEC §14.7). */
+  proefperiodeDagen?: number;
   /** Standaard: in-memory stores. Tests kunnen eigen instances meegeven. */
   sessies?: SessieStore;
   pogingen?: PogingenTracker;
@@ -553,6 +557,30 @@ export function maakAdminApp(deps: AdminDeps) {
     return c.redirect(`/admin/klanten/${encodeURIComponent(slug)}`, 303);
   });
 
+  // -- bekijk als klant (SPEC §14.7): alleen GET-routes ---------------------
+
+  registreerAlsKlant(
+    app,
+    {
+      db: deps.db,
+      limieten: deps.limieten,
+      klok: deps.klok,
+      ...(deps.intake ? { intake: deps.intake } : {}),
+      stripeIngericht: deps.stripeIngericht ?? false,
+      proefperiodeDagen: deps.proefperiodeDagen ?? 0,
+    },
+    async (c) => {
+      const sessie = laadSessie(c, sessies);
+      if (!sessie) return c.redirect('/admin/login', 303) as Response;
+      const klant = await vindKlant(c.req.param('slug') ?? '');
+      if (!klant) {
+        c.status(404);
+        return c.text('Onbekende klant.') as Response;
+      }
+      return { id: klant.id, naam: klant.naam, slug: klant.slug, abonnementVereist: klant.abonnementVereist };
+    },
+  );
+
   // -- klantprofiel (SPEC §14.6) --------------------------------------------
 
   if (deps.intake) {
@@ -578,6 +606,10 @@ export function maakAdminApp(deps: AdminDeps) {
           stand,
           actie: profielActie(stand),
           ...(melding ? { melding } : {}),
+          ...(stand.open ? { berichtenOpen: await berichtenVoorProfiel(deps.db, klant.id, stand.open.id) } : {}),
+          ...(stand.vastgesteld
+            ? { berichtenVastgesteld: await berichtenVoorProfiel(deps.db, klant.id, stand.vastgesteld.id) }
+            : {}),
         }),
       );
     });
