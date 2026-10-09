@@ -74,8 +74,9 @@ export function profielOverzichtView(o: ProfielOverzichtOpties): string {
       o.actie === 'wijziging' && vastgesteld
         ? `<p class="uitleg">U werkt aan een nieuwe versie. Tot die is vastgesteld, blijft versie ${h(vastgesteld.versie)} gelden.</p>`
         : '';
+    const compleet = Boolean(open) && ontbreekt.length === 0;
     const indienen =
-      ontbreekt.length === 0 && open
+      compleet && open
         ? `<form method="post" action="${BASIS}/indienen">
       <input type="hidden" name="csrf" value="${h(o.csrfToken)}">
       <input type="hidden" name="revisie" value="${h(open.revisie)}">
@@ -90,7 +91,13 @@ export function profielOverzichtView(o: ProfielOverzichtOpties): string {
       wat we in berichten mogen noemen. MARKaaS maakt daar uw eigen klantprofiel en doelgroep (ICP) van. Uw antwoorden
       worden per ronde bewaard; een collega kan verdergaan waar u stopte.</p>
     ${wijziging}
-    <p><a class="knop" href="${BASIS}/${h(start.id)}">${open ? 'Verder invullen' : 'Beginnen'}</a></p>
+    ${
+      compleet
+        ? `<p><strong>Alle verplichte vragen zijn beantwoord.</strong> Controleer het overzicht hieronder en dien het profiel
+      in bij MARKaaS, of pas eerst nog iets aan.</p>
+    <div class="knoppen">${indienen}<p><a class="knop secundair" href="${BASIS}/${h(start.id)}">Wijzigen</a></p></div>`
+        : `<p><a class="knop" href="${BASIS}/${h(start.id)}">${open ? 'Verder invullen' : 'Beginnen'}</a></p>`
+    }
   </section>
   ${rondeLijst(BASIS, o.intake, antwoorden, true)}
   ${open ? `<h2>Overzicht van uw antwoorden</h2>${samenvattingHtml(o.intake, antwoorden)}` : ''}
