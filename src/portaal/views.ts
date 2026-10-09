@@ -3,6 +3,8 @@ import { formatteerAmsterdam } from '../admin/datum.ts';
 import type { DraftWeergave } from '../admin/dienst.ts';
 import { BASIS_CSS, h } from '../admin/views.ts';
 
+import type { ProfielActie } from '../profiel/profielen.ts';
+
 import { MINIMALE_WACHTWOORDLENGTE } from './gebruikers.ts';
 import { kanOpnieuwKoppelen, type AccountResultaat, type AccountStand } from './resultaten.ts';
 
@@ -27,6 +29,9 @@ table.weken tr.totaal td { font-weight: 600; border-top: 2px solid #c4c9cf; }
 .stand.actie { background: #fdebe8; color: #8a2a1f; }
 .alles { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; margin: 0 0 1rem; }
 .alles button { background: #197a3d; }
+.profielbalk { max-width: 60rem; margin: 0 auto 1rem; padding: 0.6rem 0.8rem; border-radius: 4px;
+               background: #e8f1fb; border: 1px solid #0b63b7; color: #0b2f55; }
+.profielbalk a { color: inherit; font-weight: 600; }
 .waarschuwing { max-width: 60rem; margin: 0 auto 1rem; padding: 0.6rem 0.8rem; border-radius: 4px;
                 background: #fff4d6; border: 1px solid #c99a00; color: #4a3500; }
 .waarschuwing a { color: inherit; font-weight: 600; }
@@ -35,7 +40,7 @@ dl.abonnement dt { font-weight: 600; color: #333; }
 dl.abonnement dd { margin: 0; }
 `;
 
-function layout(titel: string, inhoud: string): string {
+export function layout(titel: string, inhoud: string): string {
   return `<!doctype html>
 <html lang="nl">
 <head>
@@ -57,7 +62,7 @@ function meldingBlok(m?: Melding): string {
   return m ? `<p class="melding ${m.soort}">${h(m.tekst)}</p>` : '';
 }
 
-export type PortaalPagina = 'concepten' | 'resultaten' | 'abonnement';
+export type PortaalPagina = 'concepten' | 'resultaten' | 'abonnement' | 'profiel';
 
 /** Gedeelde velden van elke ingelogde portaalpagina. */
 export interface PortaalPaginaOpties {
@@ -66,16 +71,30 @@ export interface PortaalPaginaOpties {
   melding?: Melding;
   /** Waarschuwingsbalk bij een mislukte betaling (Stripe-status past_due). */
   betalingMislukt?: boolean;
+  /**
+   * Klantprofiel-intake (SPEC §14.6). Ontbreekt: geen tabblad en geen balk
+   * (intake niet ingericht). `invullen` en `vraag` tonen een balk.
+   */
+  profielActie?: ProfielActie;
 }
 
 const WAARSCHUWING_PAST_DUE = `<div class="waarschuwing" role="alert">De laatste betaling van uw abonnement is mislukt.
   Werk uw betaalgegevens bij via <a href="/portaal/abonnement">Abonnement</a>; anders stopt het versturen.</div>`;
 
-function portaalHeader(
+const PROFIEL_BALK: Partial<Record<ProfielActie, string>> = {
+  invullen: `<div class="profielbalk" role="status"><strong>Stap 1: vul uw klantprofiel in.</strong>
+  Daarmee stemt MARKaaS de doelgroep en de berichten af op uw bedrijf.
+  <a href="/portaal/profiel">Naar het klantprofiel</a></div>`,
+  vraag: `<div class="profielbalk" role="status"><strong>MARKaaS heeft een vraag over uw klantprofiel.</strong>
+  <a href="/portaal/profiel">Bekijk de vraag</a></div>`,
+};
+
+export function portaalHeader(
   klantNaam: string,
   csrfToken: string,
   actief: PortaalPagina,
   betalingMislukt = false,
+  profielActie?: ProfielActie,
 ): string {
   const knop = (pad: string, label: string, naam: typeof actief) =>
     `<a class="knop${actief === naam ? '' : ' secundair'}" href="${pad}"${
@@ -91,12 +110,15 @@ function portaalHeader(
     ${knop('/portaal/', 'Concepten', 'concepten')}
     ${knop('/portaal/resultaten', 'Resultaten', 'resultaten')}
     ${knop('/portaal/abonnement', 'Abonnement', 'abonnement')}
+    ${profielActie ? knop('/portaal/profiel', 'Klantprofiel', 'profiel') : ''}
     <form method="post" action="/portaal/logout">
       <input type="hidden" name="csrf" value="${h(csrfToken)}">
       <button type="submit" class="secundair">Uitloggen</button>
     </form>
   </nav>
-</header>${betalingMislukt ? `\n${WAARSCHUWING_PAST_DUE}` : ''}`;
+</header>${betalingMislukt ? `\n${WAARSCHUWING_PAST_DUE}` : ''}${
+    profielActie && actief !== 'profiel' && PROFIEL_BALK[profielActie] ? `\n${PROFIEL_BALK[profielActie]}` : ''
+  }`;
 }
 
 // -- login en uitnodiging --------------------------------------------------
@@ -294,7 +316,7 @@ export function conceptenView(o: ConceptenViewOpties): string {
   return layout(
     'Concepten',
     `
-${portaalHeader(o.klantNaam, o.csrfToken, 'concepten', o.betalingMislukt)}
+${portaalHeader(o.klantNaam, o.csrfToken, 'concepten', o.betalingMislukt, o.profielActie)}
 <main>
   ${meldingBlok(o.melding)}
   <h2>Concepten om goed te keuren (${o.concepten.length})</h2>
@@ -387,7 +409,7 @@ export function resultatenView(o: ResultatenViewOpties): string {
   return layout(
     'Resultaten',
     `
-${portaalHeader(o.klantNaam, o.csrfToken, 'resultaten', o.betalingMislukt)}
+${portaalHeader(o.klantNaam, o.csrfToken, 'resultaten', o.betalingMislukt, o.profielActie)}
 <main>
   ${meldingBlok(o.melding)}
   <h2>Resultaten per LinkedIn-account</h2>
@@ -440,7 +462,7 @@ export function abonnementView(o: AbonnementViewOpties): string {
   return layout(
     'Abonnement',
     `
-${portaalHeader(o.klantNaam, o.csrfToken, 'abonnement', o.betalingMislukt)}
+${portaalHeader(o.klantNaam, o.csrfToken, 'abonnement', o.betalingMislukt, o.profielActie)}
 <main>
   ${meldingBlok(o.melding)}
   <h2>Abonnement</h2>
@@ -467,7 +489,7 @@ export function abonnementTerugView(o: PortaalPaginaOpties & { soort: 'gelukt' |
   return layout(
     o.soort === 'gelukt' ? 'Abonnement gestart' : 'Afrekenen afgebroken',
     `
-${portaalHeader(o.klantNaam, o.csrfToken, 'abonnement', o.betalingMislukt)}
+${portaalHeader(o.klantNaam, o.csrfToken, 'abonnement', o.betalingMislukt, o.profielActie)}
 <main>
   <section class="actie-kaart">
     ${tekst}

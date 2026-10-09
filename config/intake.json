@@ -1,0 +1,119 @@
+{
+  "$toelichting": "Vragen van de klantprofiel-intake in het portaal (SPEC §14.6). Verhoog `versie` bij elke inhoudelijke wijziging; een profiel bewaart de versie waarmee het is ingevuld. Vraagtypes: tekst (vrij, max 1000 tekens), keuze (één optie), keuzes (meerdere opties), claims (bewijs met verplicht vinkje). `anders: true` voegt een veld \"Anders, namelijk …\" toe. Id's alleen kleine letters, cijfers en _; nooit hergebruiken met een andere betekenis.",
+  "versie": "1",
+  "rondes": [
+    {
+      "id": "propositie",
+      "titel": "Propositie",
+      "uitleg": "Wat u verkoopt en wat het uw klanten oplevert. Dit bepaalt waarom iemand met u in gesprek wil.",
+      "vragen": [
+        { "id": "wat_verkoopt", "type": "tekst", "label": "Wat verkoopt u? Beschrijf uw product of dienst in een paar zinnen.", "verplicht": true },
+        { "id": "probleem", "type": "tekst", "label": "Welk probleem lost het op voor uw klanten?", "verplicht": true },
+        {
+          "id": "kernwaarde",
+          "type": "keuzes",
+          "label": "Wat levert het uw klanten vooral op?",
+          "opties": ["Meer omzet of nieuwe klanten", "Kostenbesparing", "Minder risico of beter voldoen aan regels", "Tijdwinst of efficiëntie", "Kwaliteit of continuïteit"],
+          "anders": true,
+          "verplicht": true
+        }
+      ]
+    },
+    {
+      "id": "doelgroep",
+      "titel": "Doelgroep",
+      "uitleg": "Welke bedrijven en welke mensen we voor u benaderen.",
+      "vragen": [
+        {
+          "id": "sectoren",
+          "type": "keuzes",
+          "label": "In welke sectoren zitten uw beste klanten?",
+          "opties": ["Maakindustrie en machinebouw", "Energie", "Bouw en installatie", "Telecom en infra", "Facilitair", "Zakelijke dienstverlening", "Logistiek en transport", "ICT en software", "Zorg", "Overheid en onderwijs"],
+          "anders": true,
+          "verplicht": true
+        },
+        {
+          "id": "omvang",
+          "type": "keuzes",
+          "label": "Hoe groot zijn die bedrijven (medewerkers)?",
+          "opties": ["1–10", "11–50", "51–200", "201–500", "501–1.000", "1.001–5.000", "Meer dan 5.000"],
+          "verplicht": true
+        },
+        {
+          "id": "regio",
+          "type": "keuze",
+          "label": "In welke regio?",
+          "opties": ["Nederland", "Nederland en België", "Europa"],
+          "anders": true,
+          "verplicht": true
+        },
+        {
+          "id": "functies",
+          "type": "keuzes",
+          "label": "Wie zijn de beslissers die we benaderen?",
+          "opties": ["Eigenaar, CEO of algemeen directeur", "Sales director of CCO", "Commercieel directeur van een divisie", "Marketing director", "Operationeel directeur of COO", "Financieel directeur of CFO", "IT-manager of CIO", "Inkoop", "HR-directeur"],
+          "anders": true,
+          "verplicht": true
+        }
+      ]
+    },
+    {
+      "id": "signalen",
+      "titel": "Signalen en uitsluitingen",
+      "uitleg": "Wanneer een bedrijf nu in de markt is, en wie we juist niet benaderen.",
+      "vragen": [
+        {
+          "id": "triggers",
+          "type": "keuzes",
+          "label": "Wanneer is een bedrijf nu rijp voor uw aanbod?",
+          "opties": ["Nieuwe rol of nieuwe directie", "Groei, uitbreiding of een nieuwe vestiging", "Overname of fusie", "Nieuwe markt of export", "Vacatures in een bepaald vakgebied", "Reorganisatie of druk op de resultaten", "Investering of financiering", "Nieuwe wet- of regelgeving"],
+          "anders": true,
+          "verplicht": true
+        },
+        {
+          "id": "uitsluiten",
+          "type": "keuzes",
+          "label": "Wie benaderen we niet?",
+          "opties": ["Concurrenten", "Bedrijven die vooral aan consumenten verkopen", "Overheid en non-profit", "Bestaande klanten"],
+          "anders": true
+        },
+        { "id": "niet_benaderen", "type": "tekst", "label": "Welke bedrijven benaderen we in elk geval niet (bijvoorbeeld bestaande klanten of lopende trajecten)? Eén per regel." }
+      ]
+    },
+    {
+      "id": "afzender",
+      "titel": "Afzender en toon",
+      "uitleg": "Namens wie de berichten gaan en hoe ze klinken.",
+      "vragen": [
+        { "id": "afzenders", "type": "tekst", "label": "Wie zijn de afzenders, en met welke naam ondertekenen ze?", "verplicht": true, "toonAccounts": true },
+        {
+          "id": "merk",
+          "type": "keuze",
+          "label": "Welke bedrijfsnaam staat in de berichten?",
+          "opties": ["Onze eigen bedrijfsnaam", "De naam van een partner"],
+          "anders": true,
+          "verplicht": true
+        },
+        { "id": "aanspreekvorm", "type": "keuze", "label": "Hoe spreken we de lead aan?", "opties": ["Je", "U"], "verplicht": true },
+        { "id": "taal", "type": "keuze", "label": "In welke taal?", "opties": ["Nederlands", "Engels", "Nederlands en Engels"], "anders": true, "verplicht": true },
+        { "id": "ervaring", "type": "tekst", "label": "Welke ervaring van de afzender(s) mogen we noemen? Een paar zinnen." }
+      ]
+    },
+    {
+      "id": "bewijs",
+      "titel": "Bewijs en aanbod",
+      "uitleg": "Wat we als bewijs mogen noemen en wat we de lead aanbieden. We gebruiken alleen wat u hier bevestigt.",
+      "vragen": [
+        { "id": "claims", "type": "claims", "label": "Welke resultaten, klantnamen of garanties mogen in de berichten? Eén per veld.", "maxClaims": 5 },
+        {
+          "id": "aanbod",
+          "type": "keuze",
+          "label": "Wat bieden we de lead aan als eerste stap?",
+          "opties": ["Vrijblijvend gesprek van een half uur", "Demo", "Gratis scan of analyse", "Pilot"],
+          "anders": true,
+          "verplicht": true
+        }
+      ]
+    }
+  ]
+}

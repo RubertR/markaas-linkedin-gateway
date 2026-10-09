@@ -18,6 +18,7 @@ import { maakWachtwoordHash, verifieerWachtwoord } from '../admin/wachtwoord.ts'
 import type { Klok } from '../budget/klok.ts';
 import type { Limieten } from '../budget/limits.ts';
 import type { AbonnementConfig } from '../config/abonnement.ts';
+import type { Intake } from '../config/intake.ts';
 import type { Backend } from '../db/backend.ts';
 import type { Logger } from '../log/logger.ts';
 import { KoppelflowFout, type KoppelflowOpties } from '../register/koppelflow.ts';
@@ -25,6 +26,17 @@ import { NieuweKlantFout } from '../register/nieuweklant.ts';
 import { clientIp } from '../server/clientip.ts';
 import { StripeFout } from '../stripe/errors.ts';
 import type { UnipileClient } from '../unipile/client.ts';
+import { leesRondeUitFormulier } from '../profiel/invoer.ts';
+import {
+  ProfielConflictFout,
+  ProfielFout,
+  dienIn,
+  profielActie,
+  profielStand,
+  slaRondeOp,
+  vraagWijzigingAan,
+  type ProfielActie,
+} from '../profiel/profielen.ts';
 
 import { AdminInvoerFout } from '../admin/dienst.ts';
 import {
@@ -45,6 +57,7 @@ import {
   vindGebruikerVoorLogin,
   vindGeldigeGebruikerUitnodiging,
 } from './gebruikers.ts';
+import { profielOverzichtView, profielRondeView } from './profiel-pagina.ts';
 import { resultatenVoorKlant } from './resultaten.ts';
 import {
   PORTAAL_SESSIE_DUUR_MS,
@@ -114,6 +127,11 @@ export interface PortaalDeps {
     /** Publieke basis-URL zonder slash aan het eind (success/cancel/return-URL's). */
     publicBaseUrl: string;
   };
+  /**
+   * Klantprofiel-intake (SPEC §14.6), uit config/intake.json. Ontbreekt dit,
+   * dan is er geen tabblad Klantprofiel en gaat de login naar de concepten.
+   */
+  intake?: Intake;
 }
 
 type PortaalContext = Context;
@@ -185,7 +203,7 @@ export function maakPortaalApp(deps: PortaalDeps) {
     pogingen.reset(ipSleutel);
     pogingen.reset(emailSleutel);
     await registreerLogin(deps.db, gevonden.gebruiker.id, deps.klok);
-    return await startSessie(c, deps, gevonden.gebruiker.id);
+    return await startSessie(c, deps, gevonden.gebruiker.id, gevonden.gebruiker.clientId);
   });
 
   app.post(`${PAD}/logout`, async (c) => {
@@ -239,7 +257,7 @@ export function maakPortaalApp(deps: PortaalDeps) {
     if (!gebruiker) return ongeldig(c);
     deps.logger?.info('Klantportaal: wachtwoord gekozen via uitnodiging', { client_user_id: gebruiker.id });
     await registreerLogin(deps.db, gebruiker.id, deps.klok);
-    return await startSessie(c, deps, gebruiker.id);
+    return await startSessie(c, deps, gebruiker.id, gebruiker.clientId);
   });
 
   // -- concepten -----------------------------------------------------------
@@ -257,6 +275,8 @@ export function maakPortaalApp(deps: PortaalDeps) {
       concepten,
       betalingMislukt: await betalingMislukt(deps, sessie.clientId),
     };
+    const actie = await profielActieVoor(deps, sessie.clientId);
+    if (actie) opts.profielActie = actie;
     const melding = leesFlash(c);
     if (melding) opts.melding = melding;
     return c.html(conceptenView(opts));
@@ -342,6 +362,8 @@ export function maakPortaalApp(deps: PortaalDeps) {
       accounts: await resultatenVoorKlant(deps.db, sessie.clientId, deps.klok),
       betalingMislukt: await betalingMislukt(deps, sessie.clientId),
     };
+    const actie = await profielActieVoor(deps, sessie.clientId);
+    if (actie) opts.profielActie = actie;
     const melding = leesFlash(c);
     if (melding) opts.melding = melding;
     return c.html(resultatenView(opts));
@@ -404,6 +426,8 @@ export function maakPortaalApp(deps: PortaalDeps) {
       proefperiodeDagen: deps.abonnement?.config.proefperiode_dagen ?? 0,
       betalingMislukt: await betalingMislukt(deps, sessie.clientId),
     };
+    const actie = await profielActieVoor(deps, sessie.clientId);
+    if (actie) opts.profielActie = actie;
     const melding = leesFlash(c);
     if (melding) opts.melding = melding;
     return c.html(abonnementView(opts));
@@ -459,18 +483,178 @@ export function maakPortaalApp(deps: PortaalDeps) {
     app.get(`${PAD}/abonnement/${soort}`, async (c) => {
       const sessie = await laadSessie(c, deps);
       if (!sessie) return naarLogin(c);
+      const actie = await profielActieVoor(deps, sessie.clientId);
       return c.html(
         abonnementTerugView({
           soort,
           klantNaam: sessie.klantNaam,
           csrfToken: sessie.csrfToken,
           betalingMislukt: await betalingMislukt(deps, sessie.clientId),
+          ...(actie ? { profielActie: actie } : {}),
         }),
       );
     });
   }
 
+  // -- klantprofiel (SPEC §14.6) --------------------------------------------
+
+  if (deps.intake) {
+    const intake = deps.intake;
+
+    app.get(`${PAD}/profiel`, async (c) => {
+      const sessie = await laadSessie(c, deps);
+      if (!sessie) return naarLogin(c);
+      const stand = await profielStand(deps.db, sessie.clientId);
+      const opts: Parameters<typeof profielOverzichtView>[0] = {
+        klantNaam: sessie.klantNaam,
+        csrfToken: sessie.csrfToken,
+        intake,
+        stand,
+        actie: profielActie(stand),
+        betalingMislukt: await betalingMislukt(deps, sessie.clientId),
+      };
+      const melding = leesFlash(c);
+      if (melding) opts.melding = melding;
+      return c.html(profielOverzichtView(opts));
+    });
+
+    app.post(`${PAD}/profiel/indienen`, async (c) => {
+      const sessie = await laadSessie(c, deps);
+      if (!sessie) return naarLogin(c);
+      const form = await c.req.parseBody();
+      if (!gelijk(tekst(form, 'csrf'), sessie.csrfToken)) return csrfFout(c);
+      try {
+        await dienIn(deps.db, {
+          clientId: sessie.clientId,
+          revisie: geheelGetal(tekst(form, 'revisie')),
+          door: `klant:${sessie.email}`,
+          intake,
+          klok: deps.klok,
+        });
+        deps.logger?.info('Klantportaal: klantprofiel ingediend', { client_id: sessie.clientId });
+        zetFlash(c, deps, {
+          soort: 'ok',
+          tekst: 'Uw klantprofiel is ingediend bij MARKaaS. U ziet het hier zodra het is vastgesteld of als er een vraag is.',
+        });
+      } catch (err) {
+        if (!(err instanceof ProfielFout)) throw err;
+        zetFlash(c, deps, { soort: 'fout', tekst: err.message });
+      }
+      return c.redirect(`${PAD}/profiel`, 303);
+    });
+
+    app.post(`${PAD}/profiel/wijziging`, async (c) => {
+      const sessie = await laadSessie(c, deps);
+      if (!sessie) return naarLogin(c);
+      const form = await c.req.parseBody();
+      if (!gelijk(tekst(form, 'csrf'), sessie.csrfToken)) return csrfFout(c);
+      try {
+        await vraagWijzigingAan(deps.db, { clientId: sessie.clientId, klok: deps.klok });
+        return c.redirect(`${PAD}/profiel/${intake.rondes[0]!.id}`, 303);
+      } catch (err) {
+        if (!(err instanceof ProfielFout)) throw err;
+        zetFlash(c, deps, { soort: 'fout', tekst: err.message });
+        return c.redirect(`${PAD}/profiel`, 303);
+      }
+    });
+
+    app.get(`${PAD}/profiel/:ronde`, async (c) => {
+      const sessie = await laadSessie(c, deps);
+      if (!sessie) return naarLogin(c);
+      const ronde = intake.rondes.find((r) => r.id === c.req.param('ronde'));
+      if (!ronde) return nietGevonden(c, new Error('Deze ronde van het klantprofiel bestaat niet.'));
+      const stand = await profielStand(deps.db, sessie.clientId);
+      const actie = profielActie(stand);
+      // Alleen bewerkbaar zonder ingediende versie en zonder vastgesteld profiel zonder open wijziging.
+      if (actie === 'ingediend' || actie === 'klaar') return c.redirect(`${PAD}/profiel`, 303);
+      const opts: Parameters<typeof profielRondeView>[0] = {
+        klantNaam: sessie.klantNaam,
+        csrfToken: sessie.csrfToken,
+        intake,
+        ronde,
+        antwoorden: stand.open?.antwoorden ?? {},
+        revisie: stand.open?.revisie ?? 0,
+        accountNamen: await accountNamen(deps, sessie.clientId),
+        actie,
+        vraagVanMarkaas: stand.open?.vraagVanMarkaas ?? null,
+        betalingMislukt: await betalingMislukt(deps, sessie.clientId),
+      };
+      const melding = leesFlash(c);
+      if (melding) opts.melding = melding;
+      return c.html(profielRondeView(opts));
+    });
+
+    app.post(`${PAD}/profiel/:ronde`, async (c) => {
+      const sessie = await laadSessie(c, deps);
+      if (!sessie) return naarLogin(c);
+      const index = intake.rondes.findIndex((r) => r.id === c.req.param('ronde'));
+      const ronde = intake.rondes[index];
+      if (!ronde) return nietGevonden(c, new Error('Deze ronde van het klantprofiel bestaat niet.'));
+      const form = await c.req.parseBody({ all: true });
+      if (!gelijk(tekst(form, 'csrf'), sessie.csrfToken)) return csrfFout(c);
+      const revisie = geheelGetal(tekst(form, 'revisie'));
+      const invoer = leesRondeUitFormulier(ronde, form);
+      if (invoer.fouten.length > 0) {
+        // Ingevulde waarden terugtonen, niets opslaan.
+        const stand = await profielStand(deps.db, sessie.clientId);
+        c.status(400);
+        return c.html(
+          profielRondeView({
+            klantNaam: sessie.klantNaam,
+            csrfToken: sessie.csrfToken,
+            intake,
+            ronde,
+            antwoorden: { ...(stand.open?.antwoorden ?? {}), ...invoer.weergave },
+            revisie,
+            accountNamen: await accountNamen(deps, sessie.clientId),
+            actie: profielActie(stand),
+            vraagVanMarkaas: stand.open?.vraagVanMarkaas ?? null,
+            melding: { soort: 'fout', tekst: invoer.fouten.join(' ') },
+          }),
+        );
+      }
+      try {
+        await slaRondeOp(deps.db, {
+          clientId: sessie.clientId,
+          antwoorden: invoer.antwoorden,
+          revisie,
+          intake,
+          klok: deps.klok,
+        });
+      } catch (err) {
+        if (err instanceof ProfielConflictFout) {
+          zetFlash(c, deps, { soort: 'fout', tekst: err.message });
+          return c.redirect(`${PAD}/profiel/${ronde.id}`, 303);
+        }
+        if (!(err instanceof ProfielFout)) throw err;
+        zetFlash(c, deps, { soort: 'fout', tekst: err.message });
+        return c.redirect(`${PAD}/profiel`, 303);
+      }
+      const richting = tekst(form, 'richting');
+      const doel =
+        richting === 'vorige' && index > 0
+          ? `${PAD}/profiel/${intake.rondes[index - 1]!.id}`
+          : index < intake.rondes.length - 1
+            ? `${PAD}/profiel/${intake.rondes[index + 1]!.id}`
+            : `${PAD}/profiel`;
+      return c.redirect(doel, 303);
+    });
+  }
+
   return app;
+}
+
+async function accountNamen(deps: PortaalDeps, clientId: string): Promise<string[]> {
+  const rijen = await deps.db.query<{ eigenaar_naam: string }>(
+    'select eigenaar_naam from accounts where client_id = $1 order by eigenaar_naam',
+    [clientId],
+  );
+  return rijen.map((r) => r.eigenaar_naam);
+}
+
+function geheelGetal(w: string): number {
+  const n = Number.parseInt(w, 10);
+  return Number.isFinite(n) && n >= 0 ? n : -1;
 }
 
 // -- hulpjes ---------------------------------------------------------------
@@ -509,7 +693,12 @@ async function laadSessie(c: PortaalContext, deps: PortaalDeps): Promise<Portaal
   return await vindPortaalSessie(deps.db, getCookie(c, SESSIE_COOKIE), deps.klok);
 }
 
-async function startSessie(c: PortaalContext, deps: PortaalDeps, gebruikerId: string): Promise<Response> {
+async function startSessie(
+  c: PortaalContext,
+  deps: PortaalDeps,
+  gebruikerId: string,
+  clientId: string,
+): Promise<Response> {
   // Verlopen sessies opruimen bij elke nieuwe login (weinig gebruikers, goedkoop).
   await ruimVerlopenSessiesOp(deps.db, deps.klok);
   // Altijd een nieuw token (geen session fixation).
@@ -525,7 +714,16 @@ async function startSessie(c: PortaalContext, deps: PortaalDeps, gebruikerId: st
     maxAge: Math.floor(PORTAAL_SESSIE_DUUR_MS / 1000),
   });
   deleteCookie(c, CSRF_COOKIE, { path: PAD });
-  return c.redirect(`${PAD}/`, 303) as Response;
+  // SPEC §14.6: zolang het klantprofiel niet is ingediend (of er een vraag van
+  // MARKaaS ligt), begint de klant na het inloggen bij het klantprofiel.
+  const actie = await profielActieVoor(deps, clientId);
+  const doel = actie === 'invullen' || actie === 'vraag' ? `${PAD}/profiel` : `${PAD}/`;
+  return c.redirect(doel, 303) as Response;
+}
+
+async function profielActieVoor(deps: PortaalDeps, clientId: string): Promise<ProfielActie | undefined> {
+  if (!deps.intake) return undefined;
+  return profielActie(await profielStand(deps.db, clientId));
 }
 
 function naarLogin(c: PortaalContext): Response {

@@ -685,3 +685,61 @@ describe('get_budget — betaalpoort (SPEC §14.4)', () => {
     assert.ok(r.budget['invite']!.dag!.norm > 0);
   });
 });
+
+describe('get_klantprofiel (SPEC §14.6)', () => {
+  it('weigert een onbekende klant met een NL-melding', async () => {
+    await assert.rejects(
+      () => voerTool(deps, 'get_klantprofiel', { clientSlug: 'bestaat-niet' }),
+      (err: Error) => err instanceof McpToolInvoerFout && /list_accounts/.test(err.message),
+    );
+    await assert.rejects(() => voerTool(deps, 'get_klantprofiel', {}), McpToolInvoerFout);
+  });
+
+  it('zonder vastgesteld profiel: vastgesteld null en een melding met de vervolgstap', async () => {
+    const res = (await voerTool(deps, 'get_klantprofiel', { clientSlug })) as Record<string, unknown>;
+    assert.equal(res['vastgesteld'], null);
+    assert.match(String(res['melding']), /nog geen vastgesteld klantprofiel/);
+  });
+
+  it('geeft de vastgestelde versie met samenvatting, bevestigde claims en interne aanvulling', async () => {
+    const { laadIntake } = await import('../config/intake.ts');
+    const { dienIn, slaRondeOp, stelVast } = await import('../profiel/profielen.ts');
+    const intake = await laadIntake();
+    const [klant] = await db.query<{ id: string }>('select id from clients where slug = $1', [clientSlug]);
+    const antwoorden = {
+      wat_verkoopt: { tekst: 'Leadgeneratie' },
+      probleem: { tekst: 'Weinig gesprekken' },
+      kernwaarde: { keuzes: ['Meer omzet of nieuwe klanten'] },
+      sectoren: { keuzes: ['Energie'] },
+      omvang: { keuzes: ['51–200'] },
+      regio: { keuzes: ['Nederland'] },
+      functies: { keuzes: ['Sales director of CCO'] },
+      triggers: { keuzes: ['Nieuwe rol of nieuwe directie'] },
+      afzenders: { tekst: 'Rubert' },
+      merk: { keuzes: ['Onze eigen bedrijfsnaam'] },
+      aanspreekvorm: { keuzes: ['Je'] },
+      taal: { keuzes: ['Nederlands'] },
+      claims: { claims: [{ tekst: 'Geen resultaat, geen factuur', bevestigd: true }] },
+      aanbod: { keuzes: ['Vrijblijvend gesprek van een half uur'] },
+    };
+    const p = await slaRondeOp(db, { clientId: klant!.id, antwoorden, revisie: 0, intake, klok: deps.klok });
+    await dienIn(db, { clientId: klant!.id, revisie: p.revisie, door: 'rubert', intake, klok: deps.klok });
+    await stelVast(db, { clientId: klant!.id, interneAanvulling: 'company_headcount 51-200', door: 'rubert', klok: deps.klok });
+
+    const res = (await voerTool({ ...deps, intake }, 'get_klantprofiel', { clientSlug })) as {
+      vastgesteld: {
+        versie: number;
+        bevestigdeClaims: string[];
+        interneAanvulling: string;
+        samenvatting: Array<{ ronde: string; regels: Array<{ vraag: string; antwoord: string }> }>;
+      };
+      nieuwereVersie: unknown;
+    };
+    assert.equal(res.vastgesteld.versie, 1);
+    assert.deepEqual(res.vastgesteld.bevestigdeClaims, ['Geen resultaat, geen factuur']);
+    assert.equal(res.vastgesteld.interneAanvulling, 'company_headcount 51-200');
+    assert.equal(res.nieuwereVersie, null);
+    const doelgroep = res.vastgesteld.samenvatting.find((r) => r.ronde === 'Doelgroep')!;
+    assert.ok(doelgroep.regels.some((r) => r.antwoord === 'Energie'));
+  });
+});

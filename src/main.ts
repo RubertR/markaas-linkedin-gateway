@@ -14,6 +14,7 @@ import { laadLimieten } from './budget/limits.ts';
 import { verwerkVerzoekenSyncTick } from './budget/verzoekensync.ts';
 import { laadAbonnementConfig } from './config/abonnement.ts';
 import { EnvFout, leesEnv, type Env } from './config/env.ts';
+import { laadIntake } from './config/intake.ts';
 import { laadJuridisch } from './config/juridisch.ts';
 import { postgresBackend } from './db/postgres-backend.ts';
 import { maakLogger, type Logger } from './log/logger.ts';
@@ -70,6 +71,7 @@ async function main(): Promise<void> {
   const limieten = await laadLimieten();
   const juridisch = await laadJuridisch();
   const abonnement = await laadAbonnementConfig();
+  const intake = await laadIntake();
   const db = postgresBackend({ databaseUrl: env.databaseUrl });
   const baseUrl = unipileBaseUrl(env.unipileDsn);
   const unipile = maakUnipileClient({ baseUrl, apiKey: env.unipileApiKey });
@@ -87,6 +89,7 @@ async function main(): Promise<void> {
     logger,
     versie,
     abonnement,
+    intake,
   });
 
   const server = serve({ fetch: app.fetch, port: env.port }, (info) => {

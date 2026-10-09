@@ -143,7 +143,7 @@ document.querySelectorAll('textarea[data-maxtekens]').forEach(function (ta) {
 });
 `.trim();
 
-function layout(titel: string, inhoud: string, metScript = false): string {
+export function layout(titel: string, inhoud: string, metScript = false): string {
   return `<!doctype html>
 <html lang="nl">
 <head>
@@ -364,7 +364,7 @@ export function overzichtView(opts: OverzichtViewOpties): string {
 
 // -- klanten en koppellinks (SPEC §14.2) -----------------------------------
 
-function adminHeader(titel: string, csrfToken: string): string {
+export function adminHeader(titel: string, csrfToken: string): string {
   return `
 <header>
   <h1>${h(titel)}</h1>
@@ -614,6 +614,8 @@ export interface KlantDetailViewOpties {
   abonnement?: KlantAbonnementWeergave;
   melding?: { soort: 'ok' | 'fout'; tekst: string };
   waarden?: GebruikerWaarden;
+  /** Klantprofiel (SPEC §14.6) in gewone taal; ontbreekt: intake niet ingericht. */
+  profielStatus?: string;
 }
 
 export function klantDetailView(o: KlantDetailViewOpties): string {
@@ -668,6 +670,14 @@ ${adminHeader(k.naam, o.csrfToken)}
   ${o.melding ? `<p class="melding ${o.melding.soort}">${h(o.melding.tekst)}</p>` : ''}
   <p class="uitleg">${h(k.slug)} · abonnement ${k.abonnementVereist ? 'vereist' : 'niet vereist'}</p>
   ${o.abonnement ? abonnementSectie(basis, o.csrfToken, k.abonnementVereist, o.abonnement) : ''}
+  ${
+    o.profielStatus
+      ? `<section>
+    <h2>Klantprofiel en ICP</h2>
+    <p>${h(o.profielStatus)} <a class="knop secundair" href="${basis}/profiel">Klantprofiel openen</a></p>
+  </section>`
+      : ''
+  }
   <section>
     <h2>LinkedIn-accounts</h2>
     ${accounts}

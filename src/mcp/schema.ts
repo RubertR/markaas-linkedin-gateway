@@ -24,6 +24,7 @@ export const TOOL_NAMEN = [
   'queue_action',
   'start_sequence',
   'get_results',
+  'get_klantprofiel',
 ] as const;
 
 export type ToolNaam = (typeof TOOL_NAMEN)[number];
@@ -201,6 +202,19 @@ export const TOOL_DEFINITIES: readonly ToolDefinitie[] = [
         accountId: { type: 'string' },
         limit: { type: 'integer', minimum: 1, maximum: 200 },
       },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'get_klantprofiel',
+    description:
+      'Laatste vastgestelde klantprofiel en ICP van één klant (SPEC §14.6): antwoorden uit de intake in het portaal, een leesbare samenvatting, de door de klant bevestigde claims en de interne aanvulling van MARKaaS. Alleen lezen; verbruikt geen LinkedIn-budget. Gebruik alleen bewijs uit "bevestigdeClaims".',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        clientSlug: { type: 'string', description: 'Slug van de klant, zoals in list_accounts.' },
+      },
+      required: ['clientSlug'],
       additionalProperties: false,
     },
   },

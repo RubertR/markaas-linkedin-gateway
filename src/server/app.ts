@@ -6,6 +6,7 @@ import type { Klok } from '../budget/klok.ts';
 import type { Limieten } from '../budget/limits.ts';
 import type { AbonnementConfig } from '../config/abonnement.ts';
 import type { Env } from '../config/env.ts';
+import type { Intake } from '../config/intake.ts';
 import type { Juridisch } from '../config/juridisch.ts';
 import type { Backend } from '../db/backend.ts';
 import { maakKoppelApp } from '../koppelen/server.ts';
@@ -43,6 +44,8 @@ export interface GatewayDeps {
   versie: string;
   /** config/abonnement.json (SPEC §14.4). */
   abonnement: AbonnementConfig;
+  /** config/intake.json (SPEC §14.6). main.ts zet dit altijd; zonder: geen klantprofiel. */
+  intake?: Intake;
   /**
    * Alleen voor tests (fake-stripe). Productie: gemaakt uit `env.stripe`.
    * Zonder `env.stripe` staat Stripe altijd uit, ook als dit gezet is.
@@ -129,6 +132,7 @@ export function maakGatewayApp(deps: GatewayDeps) {
       klok: deps.klok,
       pauzeKiezer: deps.pauzeKiezer,
       mcpToken: env.mcpToken,
+      ...(deps.intake ? { intake: deps.intake } : {}),
     }),
   );
 
@@ -145,6 +149,7 @@ export function maakGatewayApp(deps: GatewayDeps) {
       koppeluitnodigingGeldigDagen: deps.juridisch.koppeluitnodiging_geldig_dagen,
       stripeIngericht: stripeClient !== null,
       aantalSync: (clientId, aanleiding) => synchroniseerAantal(aantalDeps, clientId, aanleiding),
+      ...(deps.intake ? { intake: deps.intake } : {}),
     }),
   );
 
@@ -188,6 +193,7 @@ export function maakGatewayApp(deps: GatewayDeps) {
         config: deps.abonnement,
         publicBaseUrl: env.publicBaseUrl,
       },
+      ...(deps.intake ? { intake: deps.intake } : {}),
       logger,
     }),
   );

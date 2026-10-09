@@ -8,6 +8,20 @@ import { vindAbonnement, zetAbonnementVereist } from '../abonnement/abonnementen
 import { beschrijfAbonnement } from '../abonnement/weergave.ts';
 import type { Klok } from '../budget/klok.ts';
 import type { Limieten } from '../budget/limits.ts';
+import type { Intake } from '../config/intake.ts';
+import { leesRondeUitFormulier } from '../profiel/invoer.ts';
+import {
+  ProfielConflictFout,
+  ProfielFout,
+  dienIn,
+  profielActie,
+  profielStand,
+  slaRondeOp,
+  stelVast,
+  stuurTerug,
+  vraagWijzigingAan,
+  werkInterneAanvullingBij,
+} from '../profiel/profielen.ts';
 import type { Backend } from '../db/backend.ts';
 import type { Abonnement } from '../register/accounts.ts';
 import {
@@ -40,6 +54,7 @@ import { PogingenTracker } from './pogingen.ts';
 import { SessieStore, type Sessie } from './sessie.ts';
 import { verifieerWachtwoord } from './wachtwoord.ts';
 import { haalAccountVoorKoppellink, lijstKlanten } from './klanten.ts';
+import { PROFIEL_STATUS_TEKST, adminProfielRondeView, adminProfielView } from './profiel-views.ts';
 import {
   gebruikerLinkView,
   klantDetailView,
@@ -95,6 +110,8 @@ export interface AdminDeps {
   stripeIngericht?: boolean;
   /** Aantal in Stripe gelijkzetten met de gekoppelde accounts (knop op de klantpagina). */
   aantalSync?: (clientId: string, aanleiding: string) => Promise<AantalUitkomst>;
+  /** Klantprofiel-intake (SPEC §14.6). Ontbreekt: geen klantprofiel in de admin. */
+  intake?: Intake;
   /** Standaard: in-memory stores. Tests kunnen eigen instances meegeven. */
   sessies?: SessieStore;
   pogingen?: PogingenTracker;
@@ -423,6 +440,7 @@ export function maakAdminApp(deps: AdminDeps) {
     };
     if (extra.melding) opts.melding = extra.melding;
     if (extra.waarden) opts.waarden = extra.waarden;
+    if (deps.intake) opts.profielStatus = PROFIEL_STATUS_TEKST[profielActie(await profielStand(deps.db, klant.id))];
     return c.html(klantDetailView(opts)) as Response;
   }
 
@@ -535,6 +553,180 @@ export function maakAdminApp(deps: AdminDeps) {
     return c.redirect(`/admin/klanten/${encodeURIComponent(slug)}`, 303);
   });
 
+  // -- klantprofiel (SPEC §14.6) --------------------------------------------
+
+  if (deps.intake) {
+    const intake = deps.intake;
+    const profielPad = (slug: string) => `/admin/klanten/${encodeURIComponent(slug)}/profiel`;
+
+    app.get('/admin/klanten/:slug/profiel', async (c) => {
+      const sessie = laadSessie(c, sessies);
+      if (!sessie) return c.redirect('/admin/login', 303);
+      const klant = await vindKlant(c.req.param('slug'));
+      if (!klant) {
+        c.status(404);
+        return c.text('Onbekende klant.');
+      }
+      const stand = await profielStand(deps.db, klant.id);
+      const melding = flashUitCookie(c);
+      return c.html(
+        adminProfielView({
+          csrfToken: sessie.csrfToken,
+          klantNaam: klant.naam,
+          slug: klant.slug,
+          intake,
+          stand,
+          actie: profielActie(stand),
+          ...(melding ? { melding } : {}),
+        }),
+      );
+    });
+
+    // Vaste acties vóór de route met :ronde.
+    const acties: Record<string, (clientId: string, form: Record<string, unknown>) => Promise<string>> = {
+      vaststellen: async (clientId, form) => {
+        await stelVast(deps.db, {
+          clientId,
+          interneAanvulling: getString(form, 'interne_aanvulling'),
+          door: 'rubert',
+          klok: deps.klok,
+        });
+        return 'Klantprofiel vastgesteld. De prospectieskill gebruikt vanaf nu deze versie.';
+      },
+      terugsturen: async (clientId, form) => {
+        await stuurTerug(deps.db, { clientId, vraag: getString(form, 'vraag'), klok: deps.klok });
+        return 'Teruggestuurd; de klant ziet uw vraag in het portaal.';
+      },
+      aanvulling: async (clientId, form) => {
+        await werkInterneAanvullingBij(deps.db, {
+          clientId,
+          interneAanvulling: getString(form, 'interne_aanvulling'),
+          klok: deps.klok,
+        });
+        return 'Interne aanvulling bijgewerkt.';
+      },
+      indienen: async (clientId, form) => {
+        await dienIn(deps.db, {
+          clientId,
+          revisie: geheelGetal(getString(form, 'revisie')),
+          door: 'rubert',
+          intake,
+          klok: deps.klok,
+        });
+        return 'Ingediend namens de klant. Controleer het profiel en stel het vast.';
+      },
+      wijziging: async (clientId) => {
+        await vraagWijzigingAan(deps.db, { clientId, klok: deps.klok });
+        return 'Nieuwe conceptversie gemaakt op basis van de vastgestelde.';
+      },
+    };
+    for (const [actie, uitvoeren] of Object.entries(acties)) {
+      app.post(`/admin/klanten/:slug/profiel/${actie}`, async (c) => {
+        const sessie = laadSessie(c, sessies);
+        if (!sessie) return c.redirect('/admin/login', 303);
+        const form = await c.req.parseBody();
+        if (!csrfConstanteTijdGelijk(getString(form, 'csrf'), sessie.csrfToken)) {
+          c.status(403);
+          return c.text('CSRF-token ontbreekt of klopt niet.');
+        }
+        const klant = await vindKlant(c.req.param('slug'));
+        if (!klant) {
+          c.status(404);
+          return c.text('Onbekende klant.');
+        }
+        try {
+          zetFlash(c, deps, { soort: 'ok', tekst: await uitvoeren(klant.id, form) });
+        } catch (err) {
+          if (!(err instanceof ProfielFout)) throw err;
+          zetFlash(c, deps, { soort: 'fout', tekst: err.message });
+        }
+        return c.redirect(profielPad(klant.slug), 303);
+      });
+    }
+
+    app.get('/admin/klanten/:slug/profiel/:ronde', async (c) => {
+      const sessie = laadSessie(c, sessies);
+      if (!sessie) return c.redirect('/admin/login', 303);
+      const klant = await vindKlant(c.req.param('slug'));
+      const ronde = intake.rondes.find((r) => r.id === c.req.param('ronde'));
+      if (!klant || !ronde) {
+        c.status(404);
+        return c.text('Onbekende klant of ronde.');
+      }
+      const stand = await profielStand(deps.db, klant.id);
+      const actie = profielActie(stand);
+      if (actie === 'ingediend' || actie === 'klaar') return c.redirect(profielPad(klant.slug), 303);
+      const melding = flashUitCookie(c);
+      return c.html(
+        adminProfielRondeView({
+          csrfToken: sessie.csrfToken,
+          klantNaam: klant.naam,
+          slug: klant.slug,
+          intake,
+          ronde,
+          antwoorden: stand.open?.antwoorden ?? {},
+          revisie: stand.open?.revisie ?? 0,
+          accountNamen: klant.accounts.map((a) => a.eigenaarNaam),
+          ...(melding ? { melding } : {}),
+        }),
+      );
+    });
+
+    app.post('/admin/klanten/:slug/profiel/:ronde', async (c) => {
+      const sessie = laadSessie(c, sessies);
+      if (!sessie) return c.redirect('/admin/login', 303);
+      const form = await c.req.parseBody({ all: true });
+      if (!csrfConstanteTijdGelijk(getString(form, 'csrf'), sessie.csrfToken)) {
+        c.status(403);
+        return c.text('CSRF-token ontbreekt of klopt niet.');
+      }
+      const klant = await vindKlant(c.req.param('slug'));
+      const index = intake.rondes.findIndex((r) => r.id === c.req.param('ronde'));
+      const ronde = intake.rondes[index];
+      if (!klant || !ronde) {
+        c.status(404);
+        return c.text('Onbekende klant of ronde.');
+      }
+      const revisie = geheelGetal(getString(form, 'revisie'));
+      const invoer = leesRondeUitFormulier(ronde, form);
+      if (invoer.fouten.length > 0) {
+        const stand = await profielStand(deps.db, klant.id);
+        c.status(400);
+        return c.html(
+          adminProfielRondeView({
+            csrfToken: sessie.csrfToken,
+            klantNaam: klant.naam,
+            slug: klant.slug,
+            intake,
+            ronde,
+            antwoorden: { ...(stand.open?.antwoorden ?? {}), ...invoer.weergave },
+            revisie,
+            accountNamen: klant.accounts.map((a) => a.eigenaarNaam),
+            melding: { soort: 'fout', tekst: invoer.fouten.join(' ') },
+          }),
+        );
+      }
+      try {
+        await slaRondeOp(deps.db, { clientId: klant.id, antwoorden: invoer.antwoorden, revisie, intake, klok: deps.klok });
+      } catch (err) {
+        if (!(err instanceof ProfielFout)) throw err;
+        zetFlash(c, deps, { soort: 'fout', tekst: err.message });
+        return c.redirect(
+          err instanceof ProfielConflictFout ? `${profielPad(klant.slug)}/${ronde.id}` : profielPad(klant.slug),
+          303,
+        );
+      }
+      const richting = getString(form, 'richting');
+      const doel =
+        richting === 'vorige' && index > 0
+          ? `${profielPad(klant.slug)}/${intake.rondes[index - 1]!.id}`
+          : index < intake.rondes.length - 1
+            ? `${profielPad(klant.slug)}/${intake.rondes[index + 1]!.id}`
+            : profielPad(klant.slug);
+      return c.redirect(doel, 303);
+    });
+  }
+
   app.post('/admin/klanten/:slug/abonnement-vereist', async (c) => {
     const sessie = laadSessie(c, sessies);
     if (!sessie) return c.redirect('/admin/login', 303);
@@ -641,6 +833,11 @@ function krijgOfMaakPreCsrf(c: AdminContext, deps: AdminDeps): string {
 /** Zelfde voorstel als het formulier-script: accenten weg, dan maakSlug. */
 function slugVoorstel(naam: string): string {
   return maakSlug(naam.normalize('NFD').replace(/[\u0300-\u036f]/g, ''));
+}
+
+function geheelGetal(w: string): number {
+  const n = Number.parseInt(w, 10);
+  return Number.isFinite(n) && n >= 0 ? n : -1;
 }
 
 function laadSessie(c: AdminContext, sessies: SessieStore): Sessie | null {
