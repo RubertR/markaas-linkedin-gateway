@@ -2,6 +2,7 @@ import { formatteerAmsterdam } from '../admin/datum.ts';
 import { h } from '../admin/views.ts';
 import type { Intake, IntakeRonde, IntakeVraag } from '../config/intake.ts';
 
+import type { ProfielBericht } from './profielen.ts';
 import { ANDERS_WAARDE, isBeantwoord, samenvatting, type Antwoord, type Antwoorden } from './invoer.ts';
 
 /**
@@ -33,6 +34,13 @@ export const PROFIEL_CSS = `
 .samenvatting dd { margin: 0; white-space: pre-wrap; }
 .samenvatting .leeg-antwoord { color: #777; }
 .vraag-markaas { background: #fff4d6; border: 1px solid #c99a00; border-radius: 4px; padding: 0.6rem 0.8rem; margin: 0 0 1rem; }
+.gesprek ol { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.5rem; }
+.gesprek li { border-radius: 6px; padding: 0.6rem 0.8rem; border: 1px solid #e1e5ea; background: #fff; }
+.gesprek li.van-markaas { background: #fff8e6; border-color: #e0c27a; }
+.gesprek .wie { font-size: 0.85rem; color: #555; margin-bottom: 0.2rem; }
+.gesprek .tekst { white-space: pre-wrap; }
+.intake-antwoord label { display: block; font-weight: 600; margin: 0 0 0.3rem; }
+.intake-antwoord textarea { width: 100%; min-height: 5rem; font: inherit; padding: 0.5rem; border: 1px solid #c4c9cf; border-radius: 4px; margin-bottom: 0.6rem; }
 @media (max-width: 40rem) { .samenvatting dl { grid-template-columns: 1fr; } }
 `;
 
@@ -173,4 +181,20 @@ export function eersteOpenRonde(intake: Intake, antwoorden: Antwoorden): IntakeR
 
 export function datumTekst(d: Date | null): string {
   return d ? formatteerAmsterdam(d) : '—';
+}
+
+/** Gesprek bij het profiel (SPEC 0.4), oudste eerst. Leeg = niets tonen. */
+export function gesprekHtml(berichten: readonly ProfielBericht[], perspectief: 'klant' | 'admin'): string {
+  if (berichten.length === 0) return '';
+  const wie = (b: ProfielBericht) =>
+    b.van === 'markaas' ? 'MARKaaS' : perspectief === 'klant' ? 'U' : `Klant (${b.door.replace(/^klant:/, '')})`;
+  return `<section class="gesprek actie-kaart">
+  <h3>Gesprek met ${perspectief === 'klant' ? 'MARKaaS' : 'de klant'}</h3>
+  <ol>${berichten
+    .map(
+      (b) =>
+        `<li class="van-${b.van}"><div class="wie">${h(wie(b))} · ${h(datumTekst(b.op))}</div><div class="tekst">${h(b.tekst)}</div></li>`,
+    )
+    .join('')}</ol>
+</section>`;
 }

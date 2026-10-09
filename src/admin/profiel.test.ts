@@ -179,6 +179,13 @@ describe('admin: klantprofiel', () => {
     const { open } = await profielStand(db, klantId);
     assert.equal(open!.status, 'concept');
     assert.equal(open!.vraagVanMarkaas, 'Welke regio eerst?');
+    // Klant antwoordt bij opnieuw indienen; het gesprek staat in de admin.
+    await dienIn(db, { clientId: klantId, revisie: open!.revisie, door: 'klant:eva@tag.nl', intake, klok, antwoord: 'Eerst Nederland.' });
+    const html = await (await get('/admin/klanten/tag/profiel', j)).text();
+    assert.match(html, /Gesprek met de klant/);
+    assert.match(html, /Welke regio eerst\?/);
+    assert.match(html, /Klant \(eva@tag\.nl\)/);
+    assert.match(html, /Eerst Nederland\./);
   });
 
   it('namens de klant invullen en indienen (bestaande klant zoals TAG)', async () => {

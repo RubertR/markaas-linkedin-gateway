@@ -1,7 +1,11 @@
 # SPEC — MARKaaS LinkedIn-gateway
 
-Versie 0.3 · 8 oktober 2026 · eigenaar: Rubert Rietkerk (MARKaaS)
+Versie 0.4 · 9 oktober 2026 · eigenaar: Rubert Rietkerk (MARKaaS)
 
+> **Wijziging 0.4 (9 okt 2026, besluit Rubert):** de klant beantwoordt een vraag van
+> MARKaaS over het klantprofiel in het portaal (gesprek per profielversie, §14.6), en MARKaaS kan in
+> de admin het portaal van een klant alleen-lezen bekijken (§14.7).
+>
 > **Wijziging 0.3 (8 okt 2026, besluit Rubert):** na het aanmelden vult de klant
 > in het portaal een intake in voor zijn klantprofiel en ICP. MARKaaS stelt het profiel vast;
 > de prospectieskill leest het via de MCP. Zie §14.6.
@@ -531,6 +535,15 @@ afgeleid of vervalt).
 5. **MARKaaS kan namens de klant invullen** via de admin (voor bestaande klanten zoals TAG);
    `ingediend_door` legt dan `rubert` vast.
 
+**Vraag en antwoord** *(0.4)*. Terugsturen met een vraag en antwoorden vormen samen een kort
+gesprek bij de profielversie (tabel `klantprofiel_berichten`, migratie 0009: id, profiel_id,
+van `markaas` | `klant`, tekst (max 1.000), door, op). In het portaal staat bij een open vraag op het
+overzicht een tekstveld "Uw antwoord aan MARKaaS" (optioneel) boven de knop "Indienen bij MARKaaS";
+indienen bewaart het antwoord als bericht van de klant en zet het profiel op `ingediend`. De klant
+kan daarnaast de antwoorden in de rondes aanpassen. Het hele gesprek staat in het portaal (alleen
+lezen) en in de admin bij het profiel, nieuwste onderaan. `vraag_van_markaas` blijft de laatste
+open vraag; het gesprek is de geschiedenis. Een bericht wordt nooit gewijzigd of verwijderd.
+
 **Vragen in configuratie.** De rondes, vragen en keuzes staan in `config/intake.json` met een
 versienummer, niet in de code. Een profiel bewaart de `intake_versie` waarmee het is ingevuld.
 
@@ -562,4 +575,21 @@ ronde. Bewijs uit het profiel mag alleen gebruikt worden als het met het vinkje 
 **Later (niet in v1).** Doorvragen door Claude tijdens de intake (vervolgvragen op vage
 antwoorden), voorstellen voor zoekfilters op basis van de antwoorden, en de klant zelf
 voorbeeldteksten laten beoordelen vóór de eerste ronde.
+
+### 14.7 Portaal bekijken als klant (alleen lezen)
+
+*Toegevoegd in versie 0.4 (besluit Rubert, 9 okt 2026).*
+
+- Op de klantpagina in de admin staat de knop **"Bekijk als klant"**. Die opent
+  `/admin/klanten/<slug>/als-klant` met dezelfde pagina's als het portaal: concepten, resultaten,
+  abonnement en klantprofiel (overzicht en rondes), met de gegevens van die klant.
+- Bovenaan elke pagina een opvallende balk: "Voorbeeld: zo ziet <klant> het portaal. U kunt hier
+  niets wijzigen." met een link terug naar de klantpagina.
+- **Alleen lezen, afgedwongen aan de serverkant:** er zijn onder `/als-klant` geen POST-routes;
+  formulieren en knoppen worden uitgeschakeld weergegeven en hebben geen `action`. Links tussen
+  portaalpagina's verwijzen naar de voorbeeldversie. Er wordt geen portaalsessie gemaakt en er wordt
+  niets in de database gewijzigd (geen login-registratie, geen flash).
+- Alleen voor de beheerder (admin-sessie). De interne aanvulling van het profiel blijft verborgen,
+  net als in het echte portaal. Tests bewijzen dat de voorbeeldpagina's niets kunnen wijzigen en dat
+  een klantgebruiker er niet bij kan.
 

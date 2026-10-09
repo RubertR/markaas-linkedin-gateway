@@ -150,6 +150,7 @@ export function maakGatewayApp(deps: GatewayDeps) {
       stripeIngericht: stripeClient !== null,
       aantalSync: (clientId, aanleiding) => synchroniseerAantal(aantalDeps, clientId, aanleiding),
       ...(deps.intake ? { intake: deps.intake } : {}),
+      proefperiodeDagen: deps.abonnement.proefperiode_dagen,
     }),
   );
 

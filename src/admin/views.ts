@@ -669,6 +669,7 @@ ${adminHeader(k.naam, o.csrfToken)}
 <main>
   ${o.melding ? `<p class="melding ${o.melding.soort}">${h(o.melding.tekst)}</p>` : ''}
   <p class="uitleg">${h(k.slug)} · abonnement ${k.abonnementVereist ? 'vereist' : 'niet vereist'}</p>
+  <p><a class="knop secundair" href="${basis}/als-klant/">Bekijk als klant</a></p>
   ${o.abonnement ? abonnementSectie(basis, o.csrfToken, k.abonnementVereist, o.abonnement) : ''}
   ${
     o.profielStatus

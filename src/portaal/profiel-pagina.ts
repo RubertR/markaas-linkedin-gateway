@@ -1,11 +1,12 @@
 import { h } from '../admin/views.ts';
 import type { Intake } from '../config/intake.ts';
 import { ontbrekendeVerplichte } from '../profiel/invoer.ts';
-import type { ProfielActie, ProfielStand } from '../profiel/profielen.ts';
+import { MAX_ANTWOORD, type ProfielActie, type ProfielBericht, type ProfielStand } from '../profiel/profielen.ts';
 import {
   PROFIEL_CSS,
   datumTekst,
   eersteOpenRonde,
+  gesprekHtml,
   rondeFormulier,
   rondeLijst,
   samenvattingHtml,
@@ -36,10 +37,13 @@ export interface ProfielOverzichtOpties extends Gedeeld {
   intake: Intake;
   stand: ProfielStand;
   actie: ProfielActie;
+  /** Gesprek bij de getoonde profielversie (SPEC 0.4). */
+  berichten?: readonly ProfielBericht[];
 }
 
 export function profielOverzichtView(o: ProfielOverzichtOpties): string {
   const { open, vastgesteld } = o.stand;
+  const gesprek = gesprekHtml(o.berichten ?? [], 'klant');
   let inhoud: string;
   if (o.actie === 'ingediend' && open) {
     inhoud = `
@@ -50,6 +54,7 @@ export function profielOverzichtView(o: ProfielOverzichtOpties): string {
         vastgesteld ? ` Tot dan geldt versie ${h(vastgesteld.versie)}.` : ''
       }</p>
   </section>
+  ${gesprek}
   ${samenvattingHtml(o.intake, open.antwoorden)}`;
   } else if (o.actie === 'klaar' && vastgesteld) {
     inhoud = `
@@ -62,6 +67,7 @@ export function profielOverzichtView(o: ProfielOverzichtOpties): string {
       <button type="submit" class="secundair">Wijziging aanvragen</button>
     </form>
   </section>
+  ${gesprek}
   ${samenvattingHtml(o.intake, vastgesteld.antwoorden)}`;
   } else {
     const antwoorden = open?.antwoorden ?? {};
@@ -77,14 +83,21 @@ export function profielOverzichtView(o: ProfielOverzichtOpties): string {
     const compleet = Boolean(open) && ontbreekt.length === 0;
     const indienen =
       compleet && open
-        ? `<form method="post" action="${BASIS}/indienen">
+        ? `<form method="post" action="${BASIS}/indienen" class="intake-antwoord">
       <input type="hidden" name="csrf" value="${h(o.csrfToken)}">
       <input type="hidden" name="revisie" value="${h(open.revisie)}">
+      ${
+        open.vraagVanMarkaas
+          ? `<label for="antwoord">Uw antwoord aan MARKaaS (optioneel)</label>
+      <textarea id="antwoord" name="antwoord" maxlength="${MAX_ANTWOORD}" placeholder="Bijvoorbeeld: welke sector voorrang heeft, of wat u in de rondes hebt aangepast"></textarea>`
+          : ''
+      }
       <button type="submit">Indienen bij MARKaaS</button>
     </form>`
         : `<p class="uitleg">Nog ${ontbreekt.length} verplichte ${ontbreekt.length === 1 ? 'vraag' : 'vragen'} te gaan; daarna kunt u het profiel indienen.</p>`;
     inhoud = `
   ${vraag}
+  ${gesprek}
   <section class="actie-kaart">
     <h3>Zo stemmen we alles af op uw bedrijf</h3>
     <p>In vijf korte rondes vertelt u wat u verkoopt, wie uw beste klanten zijn, wanneer een bedrijf in de markt is en
@@ -95,13 +108,14 @@ export function profielOverzichtView(o: ProfielOverzichtOpties): string {
       compleet
         ? `<p><strong>Alle verplichte vragen zijn beantwoord.</strong> Controleer het overzicht hieronder en dien het profiel
       in bij MARKaaS, of pas eerst nog iets aan.</p>
-    <div class="knoppen">${indienen}<p><a class="knop secundair" href="${BASIS}/${h(start.id)}">Wijzigen</a></p></div>`
+    ${indienen}
+    <p><a class="knop secundair" href="${BASIS}/${h(start.id)}">Wijzigen</a></p>`
         : `<p><a class="knop" href="${BASIS}/${h(start.id)}">${open ? 'Verder invullen' : 'Beginnen'}</a></p>`
     }
   </section>
   ${rondeLijst(BASIS, o.intake, antwoorden, true)}
   ${open ? `<h2>Overzicht van uw antwoorden</h2>${samenvattingHtml(o.intake, antwoorden)}` : ''}
-  <section class="actie-kaart">${indienen}</section>`;
+  ${compleet ? '' : `<section class="actie-kaart">${indienen}</section>`}`;
   }
   return layout(
     'Klantprofiel',

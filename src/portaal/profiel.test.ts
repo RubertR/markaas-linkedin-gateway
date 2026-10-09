@@ -155,10 +155,14 @@ async function vulAllesIn(j: Jar): Promise<void> {
   }
 }
 
-async function dienProfielIn(j: Jar): Promise<Response> {
+async function dienProfielIn(j: Jar, antwoord?: string): Promise<Response> {
   const html = await (await get('/portaal/profiel', j)).text();
   const indienFormulier = html.slice(html.indexOf('action="/portaal/profiel/indienen"'));
-  return await post('/portaal/profiel/indienen', { csrf: veld(html, 'csrf'), revisie: veld(indienFormulier, 'revisie') }, j);
+  return await post(
+    '/portaal/profiel/indienen',
+    { csrf: veld(html, 'csrf'), revisie: veld(indienFormulier, 'revisie'), ...(antwoord ? { antwoord } : {}) },
+    j,
+  );
 }
 
 // -- tests -------------------------------------------------------------------
@@ -338,5 +342,25 @@ describe('portaal: klantprofiel na het aanmelden', () => {
   it('onbekende ronde geeft 404', async () => {
     const { j } = await login('eva@tag.nl');
     assert.equal((await get('/portaal/profiel/bestaat-niet', j)).status, 404);
+  });
+
+  it('vraag van MARKaaS beantwoorden bij het indienen; het gesprek blijft zichtbaar (SPEC 0.4)', async () => {
+    const eva = (await login('eva@tag.nl')).j;
+    await vulAllesIn(eva);
+    const voor = await (await get('/portaal/profiel', eva)).text();
+    assert.doesNotMatch(voor, /Uw antwoord aan MARKaaS/, 'zonder vraag geen antwoordveld');
+    await dienProfielIn(eva);
+    await stuurTerug(db, { clientId: klantA, vraag: 'Welke sector heeft voorrang?', klok });
+
+    const metVraag = await (await get('/portaal/profiel', eva)).text();
+    assert.match(metVraag, /Uw antwoord aan MARKaaS/);
+    assert.match(metVraag, /Gesprek met MARKaaS/);
+    await dienProfielIn(eva, 'Energie eerst, <b>daarna</b> facilitair.');
+
+    const na = await (await get('/portaal/profiel', eva)).text();
+    assert.match(na, /Ingediend bij MARKaaS/);
+    assert.match(na, /Welke sector heeft voorrang\?/);
+    assert.match(na, /Energie eerst, &lt;b&gt;daarna&lt;\/b&gt; facilitair\./);
+    assert.match(na, /U · /);
   });
 });
