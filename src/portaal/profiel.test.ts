@@ -193,6 +193,10 @@ describe('portaal: klantprofiel na het aanmelden', () => {
     await vulAllesIn(j);
     const voor = await (await get('/portaal/profiel', j)).text();
     assert.match(voor, /Indienen bij MARKaaS/);
+    // Alles ingevuld: "Wijzigen" in plaats van "Verder invullen".
+    assert.match(voor, />Wijzigen<\/a><\/p>/);
+    assert.doesNotMatch(voor, /Verder invullen/);
+    assert.match(voor, /Alle verplichte vragen zijn beantwoord/);
     assert.match(voor, /Sales-acceleratie/);
 
     const resp = await dienProfielIn(j);
@@ -217,6 +221,7 @@ describe('portaal: klantprofiel na het aanmelden', () => {
     const f = await open('propositie', j);
     await post('/portaal/profiel/propositie', { csrf: f.csrf, revisie: f.revisie, ...RONDES['propositie']! }, j);
     const html = await (await get('/portaal/profiel', j)).text();
+    assert.match(html, /Verder invullen/, 'nog niet alles ingevuld: "Verder invullen"');
     assert.doesNotMatch(html, /Indienen bij MARKaaS<\/button>/);
     assert.match(html, /verplichte vragen te gaan/);
     const resp = await post('/portaal/profiel/indienen', { csrf: veld(html, 'csrf'), revisie: '1' }, j);
