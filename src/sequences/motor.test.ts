@@ -516,6 +516,108 @@ describe('verwerkSequentieTick', () => {
     assert.equal(Number(rijen[0]?.aantal), 0);
   });
 
+  describe('gesprek voor stap 2 en 3', () => {
+    async function geaccepteerdeSequentie() {
+      const uit = await startSequentie(db, { accountId, lead: basisLead(), teksten: basisTeksten() });
+      await zetActieStatus(db, uit.invite!.id, 'done');
+      await db.query(
+        `update sequences
+           set status = 'geaccepteerd', stap = 1, volgende_actie_op = now() - interval '1 hour'
+         where id = $1`,
+        [uit.sequentie.id],
+      );
+      return uit.sequentie.id;
+    }
+
+    async function payloadVanStap(sequentieId: string, stap: number) {
+      const rijen = await db.query<{ payload: Record<string, unknown> }>(
+        `select payload from actions where sequence_id = $1 and sequence_stap = $2
+         order by aangemaakt_op desc limit 1`,
+        [sequentieId, stap],
+      );
+      return rijen[0]?.payload;
+    }
+
+    it('zonder bekend gesprek: providerId in de payload, geen "pending:"-placeholder', async () => {
+      const id = await geaccepteerdeSequentie();
+      await verwerkSequentieTick({ db, klok: vasteKlok(new Date()), limieten, werkdagen: vasteWerkdagen(6) });
+      const p = await payloadVanStap(id, 2);
+      assert.equal(p?.['providerId'], 'ACo-nina');
+      assert.equal(p?.['chatId'], undefined);
+      assert.doesNotMatch(JSON.stringify(p), /pending:/);
+    });
+
+    it('gesprek al bekend uit een eigen bericht (uitnodigingsnotitie): die chatId gebruiken', async () => {
+      const id = await geaccepteerdeSequentie();
+      await db.query(
+        `insert into events(bron, type, extern_id, account_id, payload)
+         values ('unipile', 'message_sent_self', 'webhook:message_sent_self:C-notitie:m1', $1, $2::jsonb)`,
+        [
+          accountId,
+          JSON.stringify({
+            chat_id: 'C-notitie',
+            is_sender: true,
+            sender: { attendee_provider_id: 'ACo-rubert' },
+            attendees: [
+              { attendee_provider_id: 'ACo-rubert' },
+              { attendee_provider_id: 'ACo-nina' },
+            ],
+          }),
+        ],
+      );
+      await verwerkSequentieTick({ db, klok: vasteKlok(new Date()), limieten, werkdagen: vasteWerkdagen(6) });
+      const p = await payloadVanStap(id, 2);
+      assert.equal(p?.['chatId'], 'C-notitie');
+      assert.equal(p?.['providerId'], 'ACo-nina');
+    });
+
+    it('stap 3 gebruikt de chatId die het nieuwe gesprek van stap 2 opleverde', async () => {
+      const id = await geaccepteerdeSequentie();
+      await verwerkSequentieTick({ db, klok: vasteKlok(new Date()), limieten, werkdagen: vasteWerkdagen(6) });
+      const stap2 = await db.query<{ id: string }>(
+        `select id from actions where sequence_id = $1 and sequence_stap = 2`,
+        [id],
+      );
+      await zetActieStatus(db, stap2[0]!.id, 'done', {
+        uitgevoerdOp: new Date(),
+        unipileResponse: { chatId: 'C-nieuw', messageId: 'M-1' },
+      });
+      await db.query(`update sequences set volgende_actie_op = now() - interval '1 hour' where id = $1`, [id]);
+      await verwerkSequentieTick({ db, klok: vasteKlok(new Date()), limieten, werkdagen: vasteWerkdagen(6) });
+      const p = await payloadVanStap(id, 3);
+      assert.equal(p?.['chatId'], 'C-nieuw');
+    });
+
+    it('geen stap 3 zolang stap 2 mislukt is', async () => {
+      const id = await geaccepteerdeSequentie();
+      await verwerkSequentieTick({ db, klok: vasteKlok(new Date()), limieten, werkdagen: vasteWerkdagen(6) });
+      const stap2 = await db.query<{ id: string }>(
+        `select id from actions where sequence_id = $1 and sequence_stap = 2`,
+        [id],
+      );
+      await zetActieStatus(db, stap2[0]!.id, 'failed', { reden: 'HTTP 404' });
+      await db.query(`update sequences set volgende_actie_op = now() - interval '1 hour' where id = $1`, [id]);
+      const r = await verwerkSequentieTick({ db, klok: vasteKlok(new Date()), limieten, werkdagen: vasteWerkdagen(6) });
+      assert.deepEqual(r.stap3Aangemaakt, []);
+    });
+
+    it('reactie in een nieuw gesprek wordt herkend via de chatId uit het Unipile-antwoord', async () => {
+      const id = await geaccepteerdeSequentie();
+      await verwerkSequentieTick({ db, klok: vasteKlok(new Date()), limieten, werkdagen: vasteWerkdagen(6) });
+      const stap2 = await db.query<{ id: string }>(
+        `select id from actions where sequence_id = $1 and sequence_stap = 2`,
+        [id],
+      );
+      await zetActieStatus(db, stap2[0]!.id, 'done', {
+        uitgevoerdOp: new Date(),
+        unipileResponse: { chatId: 'C-nieuw', messageId: 'M-1' },
+      });
+      const gevolg = await verwerkReactie(db, limieten, { accountId, chatId: 'C-nieuw' });
+      assert.equal(gevolg.sequentieId, id);
+      assert.equal(gevolg.nieuweStatus, 'reactie');
+    });
+  });
+
   it('maakt stap 3 (opvolging) aan nadat stap 2 is uitgevoerd en wachttijd om is', async () => {
     const uit = await startSequentie(db, {
       accountId,

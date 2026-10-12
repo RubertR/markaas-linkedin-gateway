@@ -328,6 +328,140 @@ describe('worker — message', () => {
   });
 });
 
+describe('worker — message zonder bestaand gesprek (eerste bericht na acceptatie)', () => {
+  it('start een nieuw gesprek met providerId, zonder InMail-opties, en bewaart de chatId', async () => {
+    fake.antwoord('POST', '/api/v1/chats', {
+      status: 200,
+      body: { object: 'ChatStarted', chat_id: 'chat-nieuw', message_id: 'msg-n' },
+    });
+    const actie = await maakReservedeActie({
+      type: 'message',
+      payload: { providerId: 'ACo-lead', tekst: 'Dank voor de connectie!' },
+    });
+    const uitkomst = await voerActieUit(basisContext(), actie);
+    assert.equal(uitkomst.status, 'done');
+    assert.equal(uitkomst.response?.chatId, 'chat-nieuw');
+    assert.equal(uitkomst.response?.messageId, 'msg-n');
+
+    const aanroepen = fake.aanroepen.filter((a) => a.path.startsWith('/api/v1/chats'));
+    assert.equal(aanroepen.length, 1, 'precies één aanroep naar Unipile');
+    assert.equal(aanroepen[0]!.path, '/api/v1/chats');
+    const body = aanroepen[0]!.body as Record<string, unknown>;
+    assert.equal(body['attendees_ids'], 'ACo-lead');
+    assert.equal(body['text'], 'Dank voor de connectie!');
+    assert.equal(body['account_id'], UNIPILE_ACCOUNT_ID);
+    assert.equal(body['linkedin[inmail]'], undefined, 'geen InMail-credit verbruiken');
+    assert.equal(body['linkedin[api]'], undefined);
+
+    const na = await vindActie(db, actie.id);
+    assert.equal(na?.status, 'done');
+    assert.equal((na?.unipileResponse as { chatId?: string } | null)?.chatId, 'chat-nieuw');
+  });
+
+  it('oude placeholder "pending:<providerId>" start ook een nieuw gesprek (geen 404 meer)', async () => {
+    fake.antwoord('POST', '/api/v1/chats', {
+      status: 200,
+      body: { object: 'ChatStarted', chat_id: 'chat-p', message_id: 'msg-p' },
+    });
+    const actie = await maakReservedeActie({
+      type: 'message',
+      payload: { chatId: 'pending:ACo-oud', tekst: 'Hoi!' },
+    });
+    const uitkomst = await voerActieUit(basisContext(), actie);
+    assert.equal(uitkomst.status, 'done');
+    const body = fake.aanroepen.find((a) => a.path === '/api/v1/chats')?.body as Record<string, unknown>;
+    assert.equal(body['attendees_ids'], 'ACo-oud');
+    assert.equal(
+      fake.aanroepen.filter((a) => /\/api\/v1\/chats\/.+\/messages/.test(a.path)).length,
+      0,
+    );
+  });
+
+  it('zonder chatId én zonder providerId → "failed" met NL-reden, geen Unipile-aanroep', async () => {
+    const actie = await maakReservedeActie({
+      type: 'message',
+      payload: { tekst: 'Hoi!' },
+    });
+    const uitkomst = await voerActieUit(basisContext(), actie);
+    assert.equal(uitkomst.status, 'failed');
+    assert.match(uitkomst.reden!, /geen gesprek.*providerId/i);
+    assert.equal(fake.aanroepen.length, 0);
+  });
+
+  it('"pending:" met een LinkedIn-URL in plaats van providerId → "failed", geen Unipile-aanroep', async () => {
+    const actie = await maakReservedeActie({
+      type: 'message',
+      payload: { chatId: 'pending:https://www.linkedin.com/in/x', tekst: 'Hoi!' },
+    });
+    const uitkomst = await voerActieUit(basisContext(), actie);
+    assert.equal(uitkomst.status, 'failed');
+    assert.equal(fake.aanroepen.length, 0);
+  });
+
+  it('429 bij nieuw gesprek → "queued" en account in afkoeling', async () => {
+    fake.antwoord('POST', '/api/v1/chats', { status: 429, body: { error: 'rate_limited' } });
+    const actie = await maakReservedeActie({
+      type: 'message',
+      payload: { providerId: 'ACo-lead', tekst: 'Hoi!' },
+    });
+    const uitkomst = await voerActieUit(basisContext(), actie);
+    assert.equal(uitkomst.status, 'queued');
+    const account = await vindAccount(db, accountId);
+    assert.ok(account?.afkoelingTot);
+  });
+
+  it('time-out bij nieuw gesprek → "onzeker" (mogelijk verzonden)', async () => {
+    fake.antwoord('POST', '/api/v1/chats', {
+      status: 200,
+      delayMs: 400,
+      body: { object: 'ChatStarted', chat_id: 'nooit', message_id: 'nooit' },
+    });
+    const actie = await maakReservedeActie({
+      type: 'message',
+      payload: { providerId: 'ACo-lead', tekst: 'Hoi!' },
+    });
+    const uitkomst = await voerActieUit(basisContext(), actie);
+    assert.equal(uitkomst.status, 'onzeker');
+  });
+
+  it('422 user_unreachable bij nieuw gesprek → "failed" (permanent)', async () => {
+    fake.antwoord('POST', '/api/v1/chats', { status: 422, body: { error: 'user_unreachable' } });
+    const actie = await maakReservedeActie({
+      type: 'message',
+      payload: { providerId: 'ACo-lead', tekst: 'Hoi!' },
+    });
+    const uitkomst = await voerActieUit(basisContext(), actie);
+    assert.equal(uitkomst.status, 'failed');
+  });
+
+  it('account-credentials-fout bij nieuw gesprek → account naar CREDENTIALS, actie "queued"', async () => {
+    fake.antwoord('POST', '/api/v1/chats', { status: 400, body: { error: 'account_credentials' } });
+    const actie = await maakReservedeActie({
+      type: 'message',
+      payload: { providerId: 'ACo-lead', tekst: 'Hoi!' },
+    });
+    const uitkomst = await voerActieUit(basisContext(), actie);
+    assert.equal(uitkomst.status, 'queued');
+    const account = await vindAccount(db, accountId);
+    assert.equal(account?.status, 'CREDENTIALS');
+  });
+
+  it('bestaand gesprek blijft via /chats/{id}/messages gaan', async () => {
+    fake.antwoord('POST', /^\/api\/v1\/chats\/[^/]+\/messages$/, {
+      status: 200,
+      body: { object: 'MessageSent', message_id: 'msg-b' },
+    });
+    const actie = await maakReservedeActie({
+      type: 'message',
+      payload: { chatId: 'chat-bestaat', providerId: 'ACo-lead', tekst: 'Hoi!' },
+    });
+    const uitkomst = await voerActieUit(basisContext(), actie);
+    assert.equal(uitkomst.status, 'done');
+    assert.equal(fake.aanroepen.filter((a) => a.path === '/api/v1/chats').length, 0);
+    assert.equal(uitkomst.response?.chatId, 'chat-bestaat');
+  });
+});
+
 describe('worker — inmail', () => {
   it('start gesprek met InMail-vlag en zet actie op "done"', async () => {
     fake.antwoord('POST', '/api/v1/chats', {

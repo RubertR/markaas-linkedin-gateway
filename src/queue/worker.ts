@@ -175,14 +175,30 @@ async function voerType(
       return uit;
     }
     case 'message': {
-      const p = actie.payload as { chatId: string; tekst: string; quoteId?: string };
-      const msgArgs: Parameters<UnipileClient['stuurBericht']>[0] = {
-        accountId: uid,
-        chatId: p.chatId,
-        tekst: p.tekst,
+      const p = actie.payload as {
+        chatId?: string;
+        providerId?: string;
+        tekst: string;
+        quoteId?: string;
       };
-      if (p.quoteId !== undefined) msgArgs.quoteId = p.quoteId;
-      const antwoord = await ctx.unipile.stuurBericht(msgArgs);
+      const doel = bepaalBerichtDoel(p);
+      if (doel.soort === 'bestaand') {
+        const msgArgs: Parameters<UnipileClient['stuurBericht']>[0] = {
+          accountId: uid,
+          chatId: doel.chatId,
+          tekst: p.tekst,
+        };
+        if (p.quoteId !== undefined) msgArgs.quoteId = p.quoteId;
+        const antwoord = await ctx.unipile.stuurBericht(msgArgs);
+        return { response: { chatId: doel.chatId, ...antwoord } };
+      }
+      // Nog geen gesprek (bijv. invite zonder notitie): nieuw gesprek met de
+      // 1e-graads connectie, zonder InMail-opties (docs/unipile-notities.md).
+      const antwoord = await ctx.unipile.startGesprek({
+        accountId: uid,
+        attendeesIds: [doel.providerId],
+        tekst: p.tekst,
+      });
       return { response: { ...antwoord } };
     }
     case 'inmail': {
@@ -235,12 +251,43 @@ async function voerType(
   }
 }
 
+/** Fout in de payload zelf: er is niets naar Unipile gestuurd. */
+class BerichtPayloadFout extends Error {}
+
+const PENDING_PREFIX = 'pending:';
+
+/**
+ * Waar gaat een bericht heen? Een echte `chatId` → bestaand gesprek. Anders
+ * (geen chatId, of de oude placeholder `pending:<providerId>`) → nieuw
+ * gesprek met `providerId`. Een placeholder met een LinkedIn-URL is geen
+ * provider-id en kan Unipile niet gebruiken.
+ */
+function bepaalBerichtDoel(p: {
+  chatId?: string;
+  providerId?: string;
+}): { soort: 'bestaand'; chatId: string } | { soort: 'nieuw'; providerId: string } {
+  const chatId = p.chatId?.trim();
+  if (chatId && !chatId.startsWith(PENDING_PREFIX)) return { soort: 'bestaand', chatId };
+  const uitPlaceholder = chatId?.slice(PENDING_PREFIX.length).trim();
+  const providerId = p.providerId?.trim() || uitPlaceholder;
+  if (providerId && !/^https?:\/\//i.test(providerId)) return { soort: 'nieuw', providerId };
+  throw new BerichtPayloadFout(
+    'Bericht niet verstuurd: er is geen gesprek (chatId) en geen providerId van de ontvanger. ' +
+      'Maak het bericht opnieuw aan met de providerId uit zoeken of profiel.',
+  );
+}
+
 async function verwerkFout(
   ctx: WorkerContext,
   account: Account,
   actie: Actie,
   err: unknown,
 ): Promise<WorkerUitkomst> {
+  if (err instanceof BerichtPayloadFout) {
+    await persisteer(ctx.db, actie.id, 'failed', { reden: err.message });
+    return { status: 'failed', reden: err.message };
+  }
+
   if (err instanceof UnipileGatewayAuthFout) {
     const reden =
       'Gateway-API-sleutel afgewezen door Unipile; alles stilgezet voor onderzoek door Rubert.';

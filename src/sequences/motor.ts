@@ -532,7 +532,7 @@ async function vindActieveSequentieBijReactie(
        join actions a on a.sequence_id = s.id
        where s.account_id = $1
          and s.status in ('lopend', 'geaccepteerd')
-         and a.payload ->> 'chatId' = $2
+         and (a.payload ->> 'chatId' = $2 or a.unipile_response ->> 'chatId' = $2)
        order by s.aangemaakt_op desc
        limit 1`,
       [invoer.accountId, invoer.chatId],
@@ -672,15 +672,20 @@ export async function verwerkSequentieTick(
  * actie bestaat voor deze (sequence_id, sequence_stap), gebeurt er niets en
  * geven we null terug.
  */
-async function maakStapActie(
+export async function maakStapActie(
   db: Backend,
   sequentie: Sequentie,
   stap: 2 | 3,
+  opties: { naMislukking?: boolean } = {},
 ): Promise<Actie | null> {
   return db.transaction(async (tx) => {
+    // Normaal: één actie per (sequentie, stap). Bij herstel na een mislukte
+    // poging (`naMislukking`) tellen alleen niet-mislukte acties mee.
     const bestaand = await tx.query<{ id: string }>(
-      `select id from actions where sequence_id = $1 and sequence_stap = $2 limit 1`,
-      [sequentie.id, stap],
+      `select id from actions where sequence_id = $1 and sequence_stap = $2
+         and ($3::boolean = false or status <> 'failed')
+       limit 1`,
+      [sequentie.id, stap, opties.naMislukking === true],
     );
     if (bestaand[0]) return null;
 
@@ -691,7 +696,9 @@ async function maakStapActie(
       accountId: sequentie.accountId,
       type: 'message',
       payload: {
-        chatId: chatId ?? `pending:${sequentie.leadProviderId ?? sequentie.leadLinkedinUrl}`,
+        // Geen chatId bekend → de worker start een nieuw gesprek met providerId.
+        ...(chatId ? { chatId } : {}),
+        ...(sequentie.leadProviderId ? { providerId: sequentie.leadProviderId } : {}),
         tekst,
         ontvanger_naam: sequentie.leadNaam,
         ontvanger_functie: sequentie.leadFunctie,
@@ -715,36 +722,66 @@ async function maakStapActie(
 }
 
 /**
- * Een stap-2/3 message vraagt om een `chatId`. De webhook `new_relation`
- * levert die vaak nog niet mee; de skills kunnen hem later meegeven via
- * een update-API, maar v1 vult hem placeholder-wijze zodat de goedkeurder
- * ziet dat hij nog moet worden ingevuld.
+ * Zoekt het bestaande gesprek met de lead, in deze volgorde:
+ *   1. een eerdere stap van deze sequentie (payload of Unipile-antwoord);
+ *   2. een eerdere sequentie voor dezelfde lead (herstart bij stap 2);
+ *   3. een webhook-event in een gesprek met de lead (bijv. de
+ *      uitnodigingsnotitie die LinkedIn bij acceptatie als eerste bericht zet).
+ * Niets gevonden → `null`; de worker start dan een nieuw gesprek met de
+ * providerId. Placeholders (`pending:…`) tellen nooit als gesprek.
  */
 async function vindChatIdVoorSequentie(
   db: Backend,
   sequentie: Sequentie,
 ): Promise<string | null> {
-  const rijen = await db.query<{ chat_id: string | null }>(
-    `select payload ->> 'chatId' as chat_id
-     from actions
-     where sequence_id = $1 and sequence_stap < 3
-     order by sequence_stap desc
+  const chatUitActie = `coalesce(
+      nullif(case when a.payload ->> 'chatId' like 'pending:%' then null
+                  else a.payload ->> 'chatId' end, ''),
+      nullif(a.unipile_response ->> 'chatId', ''))`;
+
+  const eigen = await db.query<{ chat_id: string | null }>(
+    `select ${chatUitActie} as chat_id
+     from actions a
+     where a.sequence_id = $1 and a.sequence_stap < 3 and a.type = 'message'
+       and ${chatUitActie} is not null
+     order by a.sequence_stap desc, a.aangemaakt_op desc
      limit 1`,
     [sequentie.id],
   );
-  if (rijen[0]?.chat_id) return rijen[0].chat_id;
+  if (eigen[0]?.chat_id) return eigen[0].chat_id;
 
-  // Herstart bij stap 2: het gesprek bestaat al uit de vorige sequentie.
   const eerder = await db.query<{ chat_id: string }>(
-    `select a.payload ->> 'chatId' as chat_id
+    `select ${chatUitActie} as chat_id
      from actions a
      join sequences s on s.id = a.sequence_id
      where s.account_id = $1 and s.lead_linkedin_url = $2 and s.id <> $3
-       and a.payload ->> 'chatId' is not null
-       and a.payload ->> 'chatId' not like 'pending:%'
+       and a.type = 'message'
+       and ${chatUitActie} is not null
      order by a.aangemaakt_op desc
      limit 1`,
     [sequentie.accountId, sequentie.leadLinkedinUrl, sequentie.id],
   );
-  return eerder[0]?.chat_id ?? null;
+  if (eerder[0]?.chat_id) return eerder[0].chat_id;
+
+  if (!sequentie.leadProviderId) return null;
+  const uitEvent = await db.query<{ chat_id: string }>(
+    `select e.payload ->> 'chat_id' as chat_id
+     from events e
+     where e.account_id = $1
+       and e.type in ('message_received', 'message_sent_self')
+       and e.payload ->> 'chat_id' is not null
+       and (
+         e.payload -> 'sender' ->> 'attendee_provider_id' = $2
+         or exists (
+           select 1 from jsonb_array_elements(
+             case when jsonb_typeof(e.payload -> 'attendees') = 'array'
+                  then e.payload -> 'attendees' else '[]'::jsonb end) as d(x)
+           where d.x ->> 'attendee_provider_id' = $2
+         )
+       )
+     order by e.ontvangen_op desc
+     limit 1`,
+    [sequentie.accountId, sequentie.leadProviderId],
+  );
+  return uitEvent[0]?.chat_id ?? null;
 }

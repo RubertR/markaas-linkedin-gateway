@@ -123,7 +123,7 @@ export const TOOL_DEFINITIES: readonly ToolDefinitie[] = [
         payload: {
           type: 'object',
           description:
-            'Veldwaarden voor de actie. Technische velden: invite = providerId (+ optioneel message, userEmail); message = chatId, tekst (+ optioneel quoteId); inmail = attendeesIds, tekst (+ optioneel onderwerp, linkedinApi). Voor de goedkeuringspagina altijd verplicht: ontvanger_naam, ontvanger_functie, ontvanger_bedrijf, ontvanger_url (https linkedin.com) en waarom (reden/signaal waarmee de skill deze lead koos).',
+            'Veldwaarden voor de actie. Technische velden: invite = providerId (+ optioneel message, userEmail); message = chatId (bestaand gesprek) of providerId (nieuw gesprek met een connectie), tekst (+ optioneel quoteId); inmail = attendeesIds, tekst (+ optioneel onderwerp, linkedinApi). Voor de goedkeuringspagina altijd verplicht: ontvanger_naam, ontvanger_functie, ontvanger_bedrijf, ontvanger_url (https linkedin.com) en waarom (reden/signaal waarmee de skill deze lead koos).',
           properties: {
             ontvanger_naam: { type: 'string', minLength: 1 },
             ontvanger_functie: { type: 'string', minLength: 1 },

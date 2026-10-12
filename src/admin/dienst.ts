@@ -430,7 +430,7 @@ function technischeIdVoor(type: AdminActieType, p: Record<string, unknown>): str
     case 'invite':
       return (p['providerId'] as string) ?? (p['userEmail'] as string) ?? '—';
     case 'message':
-      return (p['chatId'] as string) ?? '—';
+      return (p['chatId'] as string) ?? (p['providerId'] ? `nieuw gesprek met ${p['providerId'] as string}` : '—');
     case 'inmail': {
       const ids = p['attendeesIds'];
       if (Array.isArray(ids)) return ids.join(', ');
