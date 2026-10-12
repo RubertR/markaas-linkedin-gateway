@@ -124,7 +124,12 @@ gesprek niet bij dat account hoort: altijd meesturen.
 - Antwoord: `{"object":"MessageSent","message_id":"…"}`.
 - `chat_id` komt uit de webhook `message_received` (of `GET /api/v1/chats`).
 - Optioneel: `quote_id` (reageren op een specifiek bericht), bijlagen, spraak/video.
-- Nieuw gesprek starten (nog te testen): `POST /api/v1/chats` met `attendees_ids` = provider-id.
+- Nieuw gesprek starten (nog te testen op een echt account): `POST /api/v1/chats` met
+  `attendees_ids` = provider-id, zonder `linkedin[inmail]`.
+- **Waarneming 12 okt 2026:** `POST /api/v1/chats/pending%3A<providerId>/messages` → 404
+  `errors/resource_not_found` "Chat not found". Na een invite **zonder** notitie bestaat er
+  geen gesprek; de gateway zette een placeholder-`chatId`. Sinds deze fix start de worker
+  dan een nieuw gesprek met de provider-id (SPEC §8a.3, "Gesprek voor stap 2 en 3").
 - Webhook-payload bevat bij `sender.attendee_specifics` ook `network_distance`
   (`DISTANCE_1` na acceptatie): bruikbaar als bevestiging van de relatie.
 - **Budget:** 1 bericht (werknorm 25/dag, 150/week Sales Navigator).

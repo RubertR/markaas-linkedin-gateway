@@ -281,6 +281,19 @@ account+lead (migratie `0003`). Er gaat nooit een tweede invite naar dezelfde le
 
 "Verstuurd" betekent dat de invite de status `done` of `onzeker` heeft.
 
+**Gesprek voor stap 2 en 3.** Een stap-2/3-message bevat de `chatId` van het gesprek
+met de lead als die bekend is, en altijd de `providerId` van de lead. De tick zoekt
+de `chatId` in: een eerdere stap van deze sequentie (payload of Unipile-antwoord), een
+eerdere sequentie voor dezelfde lead, of een webhook-event (`message_received` /
+`message_sent_self`) in een gesprek met de lead. Geen gesprek bekend (bijv. invite
+zonder notitie) → de worker start een nieuw gesprek met `POST /api/v1/chats`
+(`attendees_ids` = providerId, zonder InMail-opties; telt als bericht, niet als InMail)
+en bewaart de nieuwe `chatId` in het Unipile-antwoord, zodat stap 3 en de
+reactieherkenning hem vinden. Er komen nooit placeholders als `pending:…` in de
+`chatId`. Stap 3 ontstaat pas als stap 2 `done` is. Herstel van stap-2-berichten die
+vóór deze regel op een placeholder mislukten: `npm run berichten:herstel` (dry-run;
+`--uitvoeren` maakt per sequentie een nieuwe `draft` die gewoon goedgekeurd moet worden).
+
 Bestaande sequenties die nog `lopend`/`geaccepteerd` staan met een afgewezen stap
 (van vóór deze regel) zet `npm run sequenties:herstel` op `gestopt`; standaard een
 dry-run, schrijven alleen met `--uitvoeren`.
