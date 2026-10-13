@@ -193,7 +193,7 @@ export async function slaRondeOp(db: Backend, o: RondeOpslag): Promise<Klantprof
       try {
         const [rij] = await tx.query<ProfielRij>(
           `insert into klantprofielen(client_id, versie, status, intake_versie, antwoorden, revisie, aangemaakt_op, bijgewerkt_op)
-           values ($1, 1, 'concept', $2, $3::jsonb, 1, $4, $4)
+           values ($1, 1, 'concept', $2, $3::text::jsonb, 1, $4, $4)
            returning ${KOLOMMEN}`,
           [o.clientId, o.intake.versie, JSON.stringify(alleenBekendeVragen(o.intake, o.antwoorden)), nu],
         );
@@ -213,7 +213,7 @@ export async function slaRondeOp(db: Backend, o: RondeOpslag): Promise<Klantprof
     const samen = alleenBekendeVragen(o.intake, { ...open.antwoorden, ...o.antwoorden });
     const [rij] = await tx.query<ProfielRij>(
       `update klantprofielen
-          set antwoorden = $2::jsonb, intake_versie = $3, revisie = revisie + 1, bijgewerkt_op = $4
+          set antwoorden = $2::text::jsonb, intake_versie = $3, revisie = revisie + 1, bijgewerkt_op = $4
         where id = $1 and revisie = $5
         returning ${KOLOMMEN}`,
       [open.id, JSON.stringify(samen), o.intake.versie, nu, o.revisie],

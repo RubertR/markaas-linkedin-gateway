@@ -126,7 +126,7 @@ export async function verwerkStripeEvent(
   return await deps.db.transaction(async (tx) => {
     const nieuw = await tx.query<{ id: string }>(
       `insert into events(bron, type, extern_id, payload)
-       values ('stripe'::event_source, $1, $2, $3::jsonb)
+       values ('stripe'::event_source, $1, $2, $3::text::jsonb)
        on conflict (bron, extern_id) where extern_id is not null do nothing
        returning id`,
       [event.type.slice(0, 100), externId, JSON.stringify(event)],

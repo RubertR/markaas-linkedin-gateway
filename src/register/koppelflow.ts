@@ -225,7 +225,7 @@ async function bewaarEventEenmaal(
   try {
     await db.query(
       `insert into events(bron, type, extern_id, payload)
-       values ('unipile', 'hosted_auth', $1, $2::jsonb)`,
+       values ('unipile', 'hosted_auth', $1, $2::text::jsonb)`,
       [externId, JSON.stringify(payload)],
     );
     return true;

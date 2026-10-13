@@ -376,7 +376,7 @@ async function bewaarEvent(
   try {
     await db.query(
       `insert into events(bron, type, extern_id, account_id, payload)
-       values ($5::event_source, $1, $2, $3, $4::jsonb)`,
+       values ($5::event_source, $1, $2, $3, $4::text::jsonb)`,
       [type, externId, accountId, JSON.stringify(payload), bron],
     );
     return true;

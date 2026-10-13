@@ -105,7 +105,7 @@ export async function maakActie(db: Backend, invoer: MaakActieInvoer): Promise<A
   const status: ActieStatus = invoer.directApproved ? 'approved' : 'draft';
   const rijen = await db.query<ActieRij>(
     `insert into actions(account_id, type, payload, status, gepland_op)
-     values ($1, $2::action_type, $3::jsonb, $4::action_status, $5)
+     values ($1, $2::action_type, $3::text::jsonb, $4::action_status, $5)
      returning ${KOLOMMEN}`,
     [
       invoer.accountId,
@@ -187,7 +187,7 @@ export async function zetActieStatus(
   }
   if (Object.prototype.hasOwnProperty.call(opties, 'unipileResponse')) {
     params.push(opties.unipileResponse ? JSON.stringify(opties.unipileResponse) : null);
-    sets.push(`unipile_response = $${params.length}::jsonb`);
+    sets.push(`unipile_response = $${params.length}::text::jsonb`);
   }
   if (Object.prototype.hasOwnProperty.call(opties, 'afgewezenDoor')) {
     params.push(opties.afgewezenDoor ?? null);

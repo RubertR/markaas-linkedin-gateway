@@ -275,7 +275,7 @@ async function haalEnZetGelijk(
 async function claimDag(db: Backend, accountId: string, externId: string, dag: string): Promise<boolean> {
   const rijen = await db.query<{ id: string }>(
     `insert into events(bron, type, extern_id, account_id, payload)
-     values ('gateway', 'verzoeken_sync', $1, $2, $3::jsonb)
+     values ('gateway', 'verzoeken_sync', $1, $2, $3::text::jsonb)
      on conflict (bron, extern_id) where extern_id is not null do nothing
      returning id`,
     [externId, accountId, JSON.stringify({ dag, resultaat: 'bezig' })],
@@ -285,7 +285,7 @@ async function claimDag(db: Backend, accountId: string, externId: string, dag: s
 
 async function legVast(db: Backend, externId: string, payload: Record<string, unknown>): Promise<void> {
   await db.query(
-    `update events set payload = $2::jsonb where bron = 'gateway' and extern_id = $1`,
+    `update events set payload = $2::text::jsonb where bron = 'gateway' and extern_id = $1`,
     [externId, JSON.stringify(payload)],
   );
 }
