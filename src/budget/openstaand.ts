@@ -19,7 +19,7 @@ export async function telInviteAlsOpenstaand(
 ): Promise<boolean> {
   const nieuw = await db.query<{ id: string }>(
     `insert into events(bron, type, extern_id, account_id, payload)
-     values ('gateway', 'invite_openstaand', $1, $2, $3::jsonb)
+     values ('gateway', 'invite_openstaand', $1, $2, $3::text::jsonb)
      on conflict (bron, extern_id) where extern_id is not null do nothing
      returning id`,
     [

@@ -421,7 +421,7 @@ async function bewaarOnzekerEvent(
   try {
     await db.query(
       `insert into events(bron, type, extern_id, account_id, payload)
-       values ('gateway', 'actie_onzeker', $1, $2, $3::jsonb)`,
+       values ('gateway', 'actie_onzeker', $1, $2, $3::text::jsonb)`,
       [externId, actie.accountId, JSON.stringify(payload)],
     );
   } catch (err) {

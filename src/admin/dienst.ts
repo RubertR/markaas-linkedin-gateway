@@ -501,7 +501,7 @@ async function werkTekstBij(
   else if (actie.type === 'message') nieuwePayload['tekst'] = schoon;
   else if (actie.type === 'inmail') nieuwePayload['tekst'] = schoon;
   await db.query(
-    `update actions set payload = $2::jsonb where id = $1`,
+    `update actions set payload = $2::text::jsonb where id = $1`,
     [actieId, JSON.stringify(nieuwePayload)],
   );
 }

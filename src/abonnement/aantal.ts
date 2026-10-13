@@ -106,7 +106,7 @@ export async function laatsteAantalSync(db: Backend, clientId: string): Promise<
 
 async function bewaar(deps: AantalSyncDeps, type: string, payload: Record<string, unknown>): Promise<void> {
   await deps.db.query(
-    `insert into events(bron, type, payload, ontvangen_op) values ('gateway'::event_source, $1, $2::jsonb, $3)`,
+    `insert into events(bron, type, payload, ontvangen_op) values ('gateway'::event_source, $1, $2::text::jsonb, $3)`,
     [type, JSON.stringify(payload), deps.klok.nu().toISOString()],
   );
 }

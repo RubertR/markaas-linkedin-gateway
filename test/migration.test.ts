@@ -35,6 +35,7 @@ const ALLE_MIGRATIES = [
   '0007_toestemming_momentopname.sql',
   '0008_klantprofielen.sql',
   '0009_klantprofiel_berichten.sql',
+  '0010_jsonb_strings_herstellen.sql',
 ];
 
 describe('0001_init.sql', () => {
@@ -343,6 +344,7 @@ describe('0004_onboarding.sql', () => {
         '0007_toestemming_momentopname.sql',
         '0008_klantprofielen.sql',
         '0009_klantprofiel_berichten.sql',
+        '0010_jsonb_strings_herstellen.sql',
       ]);
       const rijen = await db.query<{ slug: string; abonnement_vereist: boolean }>(
         'select slug, abonnement_vereist from clients order by slug',
@@ -564,6 +566,7 @@ describe('0007_toestemming_momentopname.sql', () => {
         '0007_toestemming_momentopname.sql',
         '0008_klantprofielen.sql',
         '0009_klantprofiel_berichten.sql',
+        '0010_jsonb_strings_herstellen.sql',
       ]);
       const [r] = await db.query<Record<string, unknown>>(
         'select client_id, klantnaam, account_eigenaar_naam, unipile_account_id from account_consents',
@@ -603,6 +606,61 @@ describe('0008_klantprofielen.sql', () => {
         { aantal: number },
       ];
       assert.equal(aantal, 0);
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe('0010_jsonb_strings_herstellen.sql', () => {
+  it('zet dubbel gecodeerde JSON om naar objecten en laat goede rijen en gewone strings staan', async () => {
+    const { db, close } = await versePglite();
+    try {
+      await db.exec(`create table schema_migrations (
+        naam text primary key, toegepast_op timestamptz not null default now())`);
+      for (const naam of ALLE_MIGRATIES.slice(0, 9)) {
+        await db.exec(await readFile(join(MIGRATIE_MAP, naam), 'utf8'));
+        await db.query('insert into schema_migrations(naam) values ($1)', [naam]);
+      }
+      const [k] = await db.query<{ id: string }>("insert into clients(naam, slug) values ('M', 'm') returning id");
+      const [a] = await db.query<{ id: string }>(
+        "insert into accounts(client_id, eigenaar_naam, abonnement) values ($1, 'R', 'free') returning id",
+        [k!.id],
+      );
+      // Zoals productie het opsloeg: een jsonb-string met JSON erin.
+      const [fout] = await db.query<{ id: string }>(
+        `insert into actions(account_id, type, payload, unipile_response)
+         values ($1, 'message', to_jsonb($2::text), to_jsonb($3::text)) returning id`,
+        [a!.id, '{"chatId":"pending:ACo-x","tekst":"Hoi"}', '{"messageId":"m1"}'],
+      );
+      const [goed] = await db.query<{ id: string }>(
+        `insert into actions(account_id, type, payload) values ($1, 'invite', '{"providerId":"ACo-y"}'::jsonb) returning id`,
+        [a!.id],
+      );
+      await db.query(
+        `insert into events(bron, type, extern_id, payload) values
+           ('unipile', 'message_received', 'e1', to_jsonb('{"chat_id":"C-1"}'::text)),
+           ('gateway', 'los', 'e2', to_jsonb('geen json'::text))`,
+      );
+
+      assert.deepEqual(await draaiMigraties(db, MIGRATIE_MAP), ['0010_jsonb_strings_herstellen.sql']);
+
+      const acties = await db.query<{ id: string; chat: string | null; provider: string | null; msg: string | null }>(
+        `select id, payload ->> 'chatId' as chat, payload ->> 'providerId' as provider,
+                unipile_response ->> 'messageId' as msg
+         from actions order by aangemaakt_op`,
+      );
+      assert.equal(acties.find((r) => r.id === fout!.id)?.chat, 'pending:ACo-x');
+      assert.equal(acties.find((r) => r.id === fout!.id)?.msg, 'm1');
+      assert.equal(acties.find((r) => r.id === goed!.id)?.provider, 'ACo-y');
+
+      const events = await db.query<{ extern_id: string; soort: string; chat: string | null }>(
+        `select extern_id, jsonb_typeof(payload) as soort, payload ->> 'chat_id' as chat from events order by extern_id`,
+      );
+      assert.deepEqual(events, [
+        { extern_id: 'e1', soort: 'object', chat: 'C-1' },
+        { extern_id: 'e2', soort: 'string', chat: null },
+      ]);
     } finally {
       await close();
     }
