@@ -124,8 +124,14 @@ gesprek niet bij dat account hoort: altijd meesturen.
 - Antwoord: `{"object":"MessageSent","message_id":"…"}`.
 - `chat_id` komt uit de webhook `message_received` (of `GET /api/v1/chats`).
 - Optioneel: `quote_id` (reageren op een specifiek bericht), bijlagen, spraak/video.
-- Nieuw gesprek starten (nog te testen op een echt account): `POST /api/v1/chats` met
-  `attendees_ids` = provider-id, zonder `linkedin[inmail]`.
+- Nieuw gesprek starten: `POST /api/v1/chats` met `attendees_ids` = provider-id, zonder
+  `linkedin[inmail]`.
+  *Getest 12 okt 2026, v1, Ruberts account, 1 bericht aan een 1e-graads connectie (sinds
+  2021), na akkoord:* verstuurd en ontvangen; het bericht kwam in een **nieuw gesprek**, niet
+  in een bestaand gesprek met die connectie. Daarom zoekt de gateway eerst een bekende
+  `chatId` (eerdere stap, eerdere sequentie of webhook-event) en start pas zonder bekende
+  chat een nieuw gesprek. Dezelfde dag ook een stap-2-bericht met de oude placeholder
+  `pending:<providerId>` via deze route verstuurd (status `done`, geen 404).
 - **Waarneming 12 okt 2026:** `POST /api/v1/chats/pending%3A<providerId>/messages` → 404
   `errors/resource_not_found` "Chat not found". Na een invite **zonder** notitie bestaat er
   geen gesprek; de gateway zette een placeholder-`chatId`. Sinds deze fix start de worker
