@@ -79,7 +79,8 @@ Eén TypeScript-project (Node 20+), één database (Postgres, EU-regio). Geen mi
 Elke actie passeert zes controles, in deze volgorde. Faalt er één, dan blijft de actie in de
 wachtrij (tijdelijk) of wordt ze geweigerd met reden (structureel).
 
-1. **Account gezond** — status `OK`. Bij `CREDENTIALS`, `ERROR`, `STOPPED` stopt alles.
+1. **Account gezond** — status `OK`. Bij `CREDENTIALS`, `ERROR`, `STOPPED` gaat er niets weg;
+   goedgekeurde acties worden geparkeerd (§6b). Bij `PERMISSIONS` weigeren.
    Direct daarna de **betaalpoort** (§14.4, controle 1a): zonder actief abonnement worden
    `invite`, `message` en `inmail` bij klanten met `abonnement_vereist` **geparkeerd**
    (wachtrij, opnieuw beoordelen na 60 minuten), niet afgewezen: zodra er een actief
@@ -265,7 +266,12 @@ Tests (`test/fake-unipile/`), voor elk geval een test:
 - `search` en `profile` via de synchrone MCP-tools worden op een account met pauze **direct
   geweigerd** met een NL-melding. Ze worden niet geparkeerd: een zoekopdracht die uren later
   vanzelf draait, heeft geen nut. Er wordt geen budget verbruikt.
-- `PERMISSIONS` en een onbekende status blijven weigeren, zoals nu.
+- `PERMISSIONS` blijft weigeren. Een onbekende status geeft een korte wachtrij (2 minuten),
+  zoals de code al deed.
+- Een `search` of `profile` die al in de wachtrij stond, wordt bij een pauze ook
+  `rejected` en niet geparkeerd, om dezelfde reden als bij de synchrone tools.
+- Het ijkpunt voor vervallen is `actions.pauze_geparkeerd_sinds` (migratie 0012): het
+  moment waarop de actie voor het eerst om de pauze geparkeerd werd. Alleen pauzetijd telt.
 - Sequenties: de tick maakt op een account met pauze nog steeds geen nieuwe stappen (§8a.4).
   De wachttijd van een sequentie loopt door; het vervallen van een verzoek (21 dagen) blijft
   gelden.
