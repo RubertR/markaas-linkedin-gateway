@@ -22,6 +22,7 @@ describe('laadLimieten', () => {
     assert.equal(limieten.verzoeken_sync.pagina_grootte, 100);
     assert.equal(limieten.verzoeken_sync.max_paginas, 5);
     assert.equal(limieten.terugboeken.max_per_dag_per_type, 3);
+    assert.equal(limieten.unipile_controle.min_interval_minuten, 5);
     assert.equal(limieten.tekst_max_tekens.invite, 300);
     assert.equal(limieten.tekst_max_tekens.message, 8000);
     assert.equal(limieten.tekst_max_tekens.inmail, 2000);
@@ -110,6 +111,7 @@ describe('limietenUitObject', () => {
       unipile_usage_signaal: { afremmen_bij_percentage: 75, nieuwe_factor_bij_afremmen: 0.5 },
       verzoeken_sync: { pagina_grootte: 100, max_paginas: 5 },
       terugboeken: { max_per_dag_per_type: 3 },
+      unipile_controle: { min_interval_minuten: 5 },
       abonnementen: {
         free: {},
       },
@@ -139,6 +141,15 @@ describe('limietenUitObject', () => {
     const nul = basisConfig();
     nul['terugboeken'] = { max_per_dag_per_type: 0 };
     assert.equal(limietenUitObject(nul).terugboeken.max_per_dag_per_type, 0);
+  });
+
+  it('werpt NL-fout als unipile_controle ontbreekt of geen positief getal is (SPEC §6a)', () => {
+    const zonder = basisConfig();
+    delete (zonder as Record<string, unknown>)['unipile_controle'];
+    assert.throws(() => limietenUitObject(zonder), /unipile_controle/);
+    const kapot = basisConfig();
+    kapot['unipile_controle'] = { min_interval_minuten: 0 };
+    assert.throws(() => limietenUitObject(kapot), /min_interval_minuten/);
   });
 
   it('werpt NL-fout als start_factor buiten [0.5, 1.0] ligt', () => {
@@ -213,6 +224,7 @@ function basisConfig(): Record<string, Record<string, unknown>> & {
     },
     verzoeken_sync: { pagina_grootte: 100, max_paginas: 5 },
     terugboeken: { max_per_dag_per_type: 3 },
+    unipile_controle: { min_interval_minuten: 5 },
     abonnementen: {
       free: perAbonnement(),
       premium_career: perAbonnement(),

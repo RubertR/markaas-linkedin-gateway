@@ -1,14 +1,15 @@
 import { createHash } from 'node:crypto';
 
 import type { Backend } from '../db/backend.ts';
-import { vindAccount, werkAccountStatusBij, type Account } from '../register/accounts.ts';
+import { vindAccount, type Account } from '../register/accounts.ts';
+import { verwerkAccountAuthFout } from '../register/accountauth.ts';
 import type { UnipileClient } from '../unipile/client.ts';
 import {
-  UnipileAccountCredentialsFout,
   UnipileFout,
   UnipileGatewayAuthFout,
   UnipileTijdelijkeFout,
   UnipileTimeoutFout,
+  isAccountAuthFout,
 } from '../unipile/errors.ts';
 
 import { inAfkoeling, startAfkoeling } from './afkoeling.ts';
@@ -34,6 +35,10 @@ import { binnenWerkuren, isWerkdag, lokaleDag } from './tijdvenster.ts';
  *   wordt vóór de GET geclaimd. Ook na 429, time-out of fout volgt er pas de
  *   volgende werkdag een nieuwe poging; de teller blijft dan staan.
  * - 429 → account in afkoeling (SPEC §5 controle 6), net als bij acties.
+ * - 401/403 → dezelfde afhandeling als de worker (SPEC §6a,
+ *   src/register/accountauth.ts): sessie → CREDENTIALS, `account_restricted`
+ *   → STOPPED, onbekend → controle-aanroep. Alleen als ook die geweigerd
+ *   wordt, meldt de sync `gatewayGestopt`.
  */
 
 export interface SyncMomentKiezer {
@@ -62,6 +67,8 @@ export interface VerzoekenSyncDeps {
   limieten: Limieten;
   klok: Klok;
   moment?: SyncMomentKiezer;
+  /** Maakt een reconnect-link bij een verlopen sessie (src/register/koppelflow). */
+  reconnectHook?: (accountId: string) => Promise<void>;
 }
 
 export type SyncResultaat =
@@ -257,11 +264,24 @@ async function haalEnZetGelijk(
         reden: `${err.message} Teller ongewijzigd; volgende poging op de eerstvolgende werkdag.`,
       };
     }
-    if (err instanceof UnipileAccountCredentialsFout) {
-      if (uitvoeren) await werkAccountStatusBij(deps.db, account.id, 'CREDENTIALS');
+    if (isAccountAuthFout(err)) {
+      const auth = await verwerkAccountAuthFout(
+        {
+          db: deps.db,
+          unipile: deps.unipile,
+          klok: deps.klok,
+          limieten: deps.limieten,
+          ...(deps.reconnectHook ? { reconnectHook: deps.reconnectHook } : {}),
+        },
+        account,
+        err,
+        { schrijven: uitvoeren },
+      );
+      if (auth.gevolg === 'gateway_kapot') return 'gateway_gestopt';
+      const dryRun = uitvoeren ? '' : ' (dry-run: status niet gewijzigd)';
       return {
         resultaat: 'fout',
-        reden: 'LinkedIn-sessie van dit account is verlopen; account op CREDENTIALS, teller ongewijzigd. Opnieuw koppelen.',
+        reden: `${auth.reden}${dryRun} Teller ongewijzigd.`,
       };
     }
     const bericht = err instanceof UnipileFout ? err.message : `Onverwachte fout: ${String((err as Error)?.message ?? err)}`;

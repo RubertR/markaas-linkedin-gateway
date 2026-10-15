@@ -294,11 +294,12 @@ describe('worker — invite (foutpaden)', () => {
     assert.equal(account?.afkoelingTot, null);
   });
 
-  it('gateway-sleutelfout (401) → signaal "stop alles", actie "queued", GEEN pauze van account', async () => {
+  it('401 zonder type + mislukte controle-aanroep → signaal "stop alles", actie "queued", GEEN pauze van account', async () => {
     fake.antwoord('POST', '/api/v1/users/invite', {
       status: 401,
       body: { error: 'unauthorized' },
     });
+    fake.antwoord('GET', '/api/v1/accounts', { status: 401, body: { error: 'unauthorized' } });
     const actie = await maakReservedeActie({
       type: 'invite',
       payload: { providerId: 'ACo-6' },

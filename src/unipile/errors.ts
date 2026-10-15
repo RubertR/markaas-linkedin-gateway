@@ -3,6 +3,9 @@ export type UnipileFoutSoort =
   | 'timeout'
   | 'api_sleutel'
   | 'account_credentials'
+  | 'account_beperkt'
+  | 'functie_ontbreekt'
+  | 'auth_onbekend'
   | 'validatie'
   | 'onverwacht';
 
@@ -55,9 +58,14 @@ export class UnipileTimeoutFout extends UnipileFout {
 }
 
 /**
- * 401 of 403 van Unipile: onze API-sleutel is ongeldig of verlopen.
- * Dit is een gateway-breed probleem — de gateway stopt en meldt bij Rubert.
- * LinkedIn-accounts worden NIET op basis van deze fout gepauzeerd.
+ * Onze API-sleutel (Access Token) is ongeldig of verlopen. Gateway-breed: de
+ * gateway stopt en meldt bij Rubert. LinkedIn-accounts worden NIET op basis van
+ * deze fout gepauzeerd.
+ *
+ * Sinds SPEC §6a alleen nog bij een 401/403 op een aanroep zonder
+ * account-context (bijv. `haalAccounts`, `haalWebhooks`) of op de
+ * controle-aanroep `controleerGatewaySleutel`. Een 401/403 op een aanroep
+ * voor één account wordt eerst op het `type` geclassificeerd.
  */
 export class UnipileGatewayAuthFout extends UnipileFout {
   constructor(endpoint: string, status: number) {
@@ -82,12 +90,13 @@ export class UnipileAccountCredentialsFout extends UnipileFout {
   readonly code: string;
   readonly accountId: string | undefined;
 
-  constructor(code: string, endpoint: string, accountId?: string) {
+  constructor(code: string, endpoint: string, accountId?: string, status?: number) {
     const wie = accountId ? `account ${accountId}` : 'dit account';
     super(
       'account_credentials',
       `LinkedIn-sessie voor ${wie} is verlopen of ongeldig (code ${code} op ${endpoint}). Alleen dit account pauzeren en een reconnect-link sturen.`,
       endpoint,
+      status,
     );
     this.name = 'UnipileAccountCredentialsFout';
     this.code = code;
@@ -101,6 +110,16 @@ const BEKENDE_ACCOUNT_CREDS_CODES = [
   'session_expired',
   'account_disconnected',
   'disconnected_account',
+  'expired_credentials',
+  'invalid_credentials',
+  'missing_credentials',
+  'multiple_sessions',
+  'checkpoint_error',
+  'invalid_checkpoint_solution',
+  'wrong_account',
+  'session_mismatch',
+  'unknown_authentication_context',
+  'account_mismatch',
   'credentials',
 ] as const;
 
@@ -247,5 +266,156 @@ export class UnipileValidatieFout extends UnipileFout {
     this.name = 'UnipileValidatieFout';
     this.foutType = foutType;
     this.detail = detail;
+  }
+}
+
+// -- 401/403 per account (SPEC §6a) --------------------------------------------
+
+/**
+ * Fouttypes (zonder `errors/`) waarmee Unipile meldt dat de LinkedIn-sessie van
+ * één account niet werkt. Gevolg: alleen dat account naar `CREDENTIALS`.
+ */
+export const SESSIE_AUTH_TYPES: ReadonlySet<string> = new Set([
+  'disconnected_account',
+  'expired_credentials',
+  'invalid_credentials',
+  'missing_credentials',
+  'multiple_sessions',
+  'checkpoint_error',
+  'invalid_checkpoint_solution',
+  'wrong_account',
+  'session_mismatch',
+  'unknown_authentication_context',
+  'account_mismatch',
+]);
+
+/** LinkedIn heeft het account beperkt. Gevolg: account naar `STOPPED`, geen reconnect. */
+export const BEPERKT_AUTH_TYPE = 'account_restricted';
+
+/**
+ * De functie hoort niet bij het LinkedIn-abonnement van dit account (bijv.
+ * Sales Navigator-zoeken of InMail op een gewoon account). Gevolg: alleen de
+ * actie `failed`; het account blijft `OK`.
+ */
+export const FUNCTIE_AUTH_TYPES: ReadonlySet<string> = new Set([
+  'feature_not_subscribed',
+  'insufficient_permissions',
+  'insufficient_privileges',
+  'disconnected_feature',
+]);
+
+export type AuthFoutKlasse = 'sessie' | 'beperkt' | 'functie' | 'onbekend';
+
+/** `errors/expired_credentials` → `expired_credentials`; undefined blijft undefined. */
+export function kaalFoutType(type: string | undefined): string | undefined {
+  if (type === undefined) return undefined;
+  const t = type.trim();
+  if (t === '') return undefined;
+  return t.startsWith('errors/') ? t.slice('errors/'.length) : t;
+}
+
+/** Classificeert het `type` uit de body van een 401/403 (SPEC §6a, tabel). */
+export function classificeerAuthType(type: string | undefined): AuthFoutKlasse {
+  const kaal = kaalFoutType(type);
+  if (kaal === undefined) return 'onbekend';
+  if (SESSIE_AUTH_TYPES.has(kaal)) return 'sessie';
+  if (kaal === BEPERKT_AUTH_TYPE) return 'beperkt';
+  if (FUNCTIE_AUTH_TYPES.has(kaal)) return 'functie';
+  return 'onbekend';
+}
+
+/** 403 `account_restricted`: LinkedIn heeft dit account beperkt. */
+export class UnipileAccountBeperktFout extends UnipileFout {
+  readonly foutType: string;
+  readonly accountId: string | undefined;
+
+  constructor(endpoint: string, status: number, accountId?: string) {
+    const wie = accountId ? `account ${accountId}` : 'dit account';
+    super(
+      'account_beperkt',
+      `LinkedIn heeft ${wie} beperkt (HTTP ${status} errors/${BEPERKT_AUTH_TYPE} op ${endpoint}). Alleen dit account stopgezet; de eigenaar moet eerst zelf in LinkedIn kijken.`,
+      endpoint,
+      status,
+    );
+    this.name = 'UnipileAccountBeperktFout';
+    this.foutType = `errors/${BEPERKT_AUTH_TYPE}`;
+    this.accountId = accountId;
+  }
+}
+
+/** 401/403 voor een functie die niet in het LinkedIn-abonnement van dit account zit. */
+export class UnipileFunctieNietInAbonnementFout extends UnipileFout {
+  readonly foutType: string;
+  readonly accountId: string | undefined;
+
+  constructor(foutType: string, endpoint: string, status: number, accountId?: string) {
+    super(
+      'functie_ontbreekt',
+      `Deze functie zit niet in het LinkedIn-abonnement van dit account (HTTP ${status} ${foutType} op ${endpoint}). De actie is niet uitgevoerd; het account blijft actief.`,
+      endpoint,
+      status,
+    );
+    this.name = 'UnipileFunctieNietInAbonnementFout';
+    this.foutType = foutType;
+    this.accountId = accountId;
+  }
+}
+
+/**
+ * 401/403 op een aanroep voor één account zonder (bekend) `type`. Of het aan
+ * het account of aan onze sleutel ligt, beslist de controle-aanroep
+ * (`controleerGatewaySleutel`, SPEC §6a).
+ */
+export class UnipileOnbekendeAuthFout extends UnipileFout {
+  readonly foutType: string | undefined;
+  readonly accountId: string | undefined;
+
+  constructor(status: number, foutType: string | undefined, endpoint: string, accountId?: string) {
+    const typeTekst = foutType ? `type ${foutType}` : 'zonder type';
+    super(
+      'auth_onbekend',
+      `Unipile weigerde de aanvraag (HTTP ${status}, ${typeTekst}) op ${endpoint}; nog onbekend of het aan dit account of aan de gateway-sleutel ligt.`,
+      endpoint,
+      status,
+    );
+    this.name = 'UnipileOnbekendeAuthFout';
+    this.foutType = foutType;
+    this.accountId = accountId;
+  }
+}
+
+export type UnipileAccountAuthFout =
+  | UnipileAccountCredentialsFout
+  | UnipileAccountBeperktFout
+  | UnipileFunctieNietInAbonnementFout
+  | UnipileOnbekendeAuthFout;
+
+/** Een 401/403 (of sessiemelding) die over één account gaat, niet over de gateway. */
+export function isAccountAuthFout(err: unknown): err is UnipileAccountAuthFout {
+  return (
+    err instanceof UnipileAccountCredentialsFout ||
+    err instanceof UnipileAccountBeperktFout ||
+    err instanceof UnipileFunctieNietInAbonnementFout ||
+    err instanceof UnipileOnbekendeAuthFout
+  );
+}
+
+/** Bouwt de juiste fout voor een 401/403 op een aanroep met account-context. */
+export function maakAccountAuthFout(
+  status: number,
+  foutType: string | undefined,
+  endpoint: string,
+  accountId: string,
+): UnipileAccountAuthFout {
+  const kaal = kaalFoutType(foutType);
+  switch (classificeerAuthType(foutType)) {
+    case 'sessie':
+      return new UnipileAccountCredentialsFout(kaal ?? 'onbekend', endpoint, accountId, status);
+    case 'beperkt':
+      return new UnipileAccountBeperktFout(endpoint, status, accountId);
+    case 'functie':
+      return new UnipileFunctieNietInAbonnementFout(`errors/${kaal}`, endpoint, status, accountId);
+    case 'onbekend':
+      return new UnipileOnbekendeAuthFout(status, foutType, endpoint, accountId);
   }
 }

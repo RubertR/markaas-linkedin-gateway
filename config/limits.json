@@ -58,6 +58,11 @@
     "max_per_dag_per_type": 3
   },
 
+  "unipile_controle": {
+    "$toelichting": "SPEC §6a: bij een 401/403 zonder (bekend) type doet de gateway een controle-aanroep (GET /api/v1/accounts zonder account-context). Per account hoogstens één controle per zoveel minuten; daarbinnen geldt de uitkomst van de laatste controle.",
+    "min_interval_minuten": 5
+  },
+
   "unipile_usage_signaal": {
     "$toelichting": "Unipile geeft in het invite-antwoord soms een usage-percentage terug bij 50/75/90/95%. Bij deze drempel of hoger direct opbouw_factor omlaag.",
     "afremmen_bij_percentage": 75,

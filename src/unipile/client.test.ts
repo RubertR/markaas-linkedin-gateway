@@ -6,8 +6,11 @@ import { startFakeUnipile, type FakeUnipile } from '../../test/fake-unipile/serv
 import { maakUnipileClient } from './client.ts';
 import {
   Unipile422Fout,
+  UnipileAccountBeperktFout,
   UnipileAccountCredentialsFout,
+  UnipileFunctieNietInAbonnementFout,
   UnipileGatewayAuthFout,
+  UnipileOnbekendeAuthFout,
   UnipileTijdelijkeFout,
   UnipileTimeoutFout,
   UnipileValidatieFout,
@@ -89,7 +92,7 @@ describe('UnipileClient — algemeen', () => {
     await assert.rejects(client.haalAccounts(), UnipileTimeoutFout);
   });
 
-  it('vertaalt 401 naar UnipileGatewayAuthFout (API-sleutel, gateway-breed)', async () => {
+  it('401 zonder account-context (haalAccounts) blijft UnipileGatewayAuthFout (API-sleutel, gateway-breed)', async () => {
     fake.antwoord('GET', '/api/v1/accounts', {
       status: 401,
       body: { error: 'unauthorized' },
@@ -105,7 +108,7 @@ describe('UnipileClient — algemeen', () => {
     });
   });
 
-  it('vertaalt 403 ook naar UnipileGatewayAuthFout', async () => {
+  it('403 zonder account-context blijft ook UnipileGatewayAuthFout', async () => {
     fake.antwoord('GET', '/api/v1/accounts', {
       status: 403,
       body: { error: 'forbidden' },
@@ -165,6 +168,141 @@ describe('UnipileClient — algemeen', () => {
   });
 });
 
+describe('UnipileClient — 401/403 met account-context (SPEC §6a)', () => {
+  const SESSIE: Array<[number, string]> = [
+    [401, 'disconnected_account'],
+    [401, 'expired_credentials'],
+    [401, 'invalid_credentials'],
+    [401, 'missing_credentials'],
+    [401, 'multiple_sessions'],
+    [401, 'checkpoint_error'],
+    [401, 'invalid_checkpoint_solution'],
+    [401, 'wrong_account'],
+    [403, 'session_mismatch'],
+    [403, 'unknown_authentication_context'],
+    [403, 'account_mismatch'],
+  ];
+  for (const [status, type] of SESSIE) {
+    it(`${status} errors/${type} → UnipileAccountCredentialsFout (sessie van dit account)`, async () => {
+      fake.antwoord('POST', '/api/v1/users/invite', {
+        status,
+        body: { status, type: `errors/${type}`, title: 'x' },
+      });
+      await assert.rejects(
+        maakClient().stuurInvite({ accountId: 'acc-9', providerId: 'ACo1' }),
+        (err: Error) => {
+          assert.ok(err instanceof UnipileAccountCredentialsFout, err.name);
+          assert.equal((err as UnipileAccountCredentialsFout).code, type);
+          assert.equal((err as UnipileAccountCredentialsFout).accountId, 'acc-9');
+          assert.equal((err as UnipileAccountCredentialsFout).status, status);
+          return true;
+        },
+      );
+    });
+  }
+
+  it('403 errors/account_restricted → UnipileAccountBeperktFout', async () => {
+    fake.antwoord('POST', '/api/v1/users/invite', {
+      status: 403,
+      body: { status: 403, type: 'errors/account_restricted', title: 'Restricted' },
+    });
+    await assert.rejects(
+      maakClient().stuurInvite({ accountId: 'acc-9', providerId: 'ACo1' }),
+      (err: Error) => {
+        assert.ok(err instanceof UnipileAccountBeperktFout, err.name);
+        assert.equal((err as UnipileAccountBeperktFout).accountId, 'acc-9');
+        assert.match(err.message, /beperkt/);
+        return true;
+      },
+    );
+  });
+
+  const FUNCTIE: Array<[number, string]> = [
+    [403, 'feature_not_subscribed'],
+    [403, 'insufficient_permissions'],
+    [401, 'insufficient_privileges'],
+    [401, 'disconnected_feature'],
+  ];
+  for (const [status, type] of FUNCTIE) {
+    it(`${status} errors/${type} → UnipileFunctieNietInAbonnementFout`, async () => {
+      fake.antwoord('POST', '/api/v1/linkedin/search', {
+        status,
+        body: { status, type: `errors/${type}` },
+      });
+      await assert.rejects(
+        maakClient().zoekPersonen({ accountId: 'acc-9', api: 'sales_navigator' }),
+        (err: Error) => {
+          assert.ok(err instanceof UnipileFunctieNietInAbonnementFout, err.name);
+          assert.equal((err as UnipileFunctieNietInAbonnementFout).foutType, `errors/${type}`);
+          assert.match(err.message, /niet in het LinkedIn-abonnement/);
+          return true;
+        },
+      );
+    });
+  }
+
+  it('401 zonder type op een account-aanroep → UnipileOnbekendeAuthFout, níet meteen een gateway-stop', async () => {
+    fake.antwoord('POST', '/api/v1/users/invite', { status: 401, body: { error: 'unauthorized' } });
+    await assert.rejects(
+      maakClient().stuurInvite({ accountId: 'acc-9', providerId: 'ACo1' }),
+      (err: Error) => {
+        assert.ok(err instanceof UnipileOnbekendeAuthFout, err.name);
+        assert.ok(!(err instanceof UnipileGatewayAuthFout));
+        assert.equal((err as UnipileOnbekendeAuthFout).foutType, undefined);
+        assert.equal((err as UnipileOnbekendeAuthFout).status, 401);
+        assert.doesNotMatch(err.message, new RegExp(GEHEIME_SLEUTEL));
+        return true;
+      },
+    );
+  });
+
+  it('403 met een onbekend type → UnipileOnbekendeAuthFout met het type erbij', async () => {
+    fake.antwoord('GET', /^\/api\/v1\/users\//, {
+      status: 403,
+      body: { status: 403, type: 'errors/iets_nieuws' },
+    });
+    await assert.rejects(
+      maakClient().haalProfiel({ accountId: 'acc-9', identifier: 'jan' }),
+      (err: Error) => {
+        assert.ok(err instanceof UnipileOnbekendeAuthFout, err.name);
+        assert.equal((err as UnipileOnbekendeAuthFout).foutType, 'errors/iets_nieuws');
+        return true;
+      },
+    );
+  });
+
+  it('401 met een niet-JSON-body → UnipileOnbekendeAuthFout', async () => {
+    fake.antwoord('POST', '/api/v1/users/invite', { status: 401, body: 'Unauthorized' });
+    await assert.rejects(
+      maakClient().stuurInvite({ accountId: 'acc-9', providerId: 'ACo1' }),
+      UnipileOnbekendeAuthFout,
+    );
+  });
+});
+
+describe('UnipileClient — controleerGatewaySleutel (SPEC §6a)', () => {
+  it('doet één GET /api/v1/accounts?limit=1 zonder account_id en slaagt bij 200', async () => {
+    fake.antwoord('GET', '/api/v1/accounts', { status: 200, body: { object: 'AccountList', items: [] } });
+    await maakClient().controleerGatewaySleutel();
+    assert.equal(fake.aanroepen.length, 1);
+    assert.equal(fake.aanroepen[0]?.path, '/api/v1/accounts?limit=1');
+    assert.doesNotMatch(fake.aanroepen[0]!.path, /account_id/);
+  });
+
+  it('401 of 403 op de controle → UnipileGatewayAuthFout', async () => {
+    fake.antwoord('GET', '/api/v1/accounts', { status: 401, body: { type: 'errors/missing_credentials' } });
+    await assert.rejects(maakClient().controleerGatewaySleutel(), UnipileGatewayAuthFout);
+    fake.reset();
+    fake.antwoord('GET', '/api/v1/accounts', { status: 403, body: {} });
+    await assert.rejects(maakClient().controleerGatewaySleutel(), UnipileGatewayAuthFout);
+  });
+
+  it('500 op de controle blijft een tijdelijke fout (geen uitsluitsel)', async () => {
+    fake.antwoord('GET', '/api/v1/accounts', { status: 500, body: {} });
+    await assert.rejects(maakClient().controleerGatewaySleutel(), UnipileTijdelijkeFout);
+  });
+});
+
 describe('UnipileClient — haalAccounts', () => {
   it('geeft de items-array terug', async () => {
     fake.antwoord('GET', '/api/v1/accounts', {
@@ -213,7 +351,7 @@ describe('UnipileClient — haalWebhooks', () => {
     assert.match(fake.aanroepen[1]!.path, /cursor=volgende/);
   });
 
-  it('vertaalt 401 naar UnipileGatewayAuthFout', async () => {
+  it('401 (geen account-context) blijft UnipileGatewayAuthFout', async () => {
     fake.antwoord('GET', '/api/v1/webhooks', { status: 401, body: { error: 'nope' } });
     await assert.rejects(maakClient().haalWebhooks(), UnipileGatewayAuthFout);
   });

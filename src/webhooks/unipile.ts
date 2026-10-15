@@ -1,7 +1,8 @@
 import type { Backend } from '../db/backend.ts';
 import { vindAccountBijUnipileId, werkAccountStatusBij } from '../register/accounts.ts';
 import { maakReconnectLink, type KoppelflowOpties } from '../register/koppelflow.ts';
-import { mapUnipileStatus } from '../register/status.ts';
+import { statusDoorGatewayGezet } from '../register/accountauth.ts';
+import { mapUnipileStatus, statusStrengte, type AccountStatus } from '../register/status.ts';
 import { opMessageReceived, opNewRelation, type SequentieHookDeps } from '../sequences/hooks.ts';
 import type { UnipileClient } from '../unipile/client.ts';
 
@@ -97,7 +98,17 @@ async function verwerkAccountStatus(
     };
   }
 
-  await werkAccountStatusBij(db, account.id, nieuweStatus);
+  const doorGateway =
+    statusStrengte(account.status) >= 2 ? await statusDoorGatewayGezet(db, account.id) : false;
+  if (!webhookMagStatusZetten(account.status, nieuweStatus, doorGateway)) {
+    return {
+      verwerkt: false,
+      reden: `Account staat op ${account.status}${doorGateway ? ' (gezet door de gateway)' : ''}; webhook-status ${nieuweStatus} is minder streng en verandert dat niet (SPEC §6a regel 5).`,
+    };
+  }
+  if (account.status !== nieuweStatus) {
+    await werkAccountStatusBij(db, account.id, nieuweStatus);
+  }
 
   if (nieuweStatus === 'CREDENTIALS') {
     try {
@@ -121,6 +132,30 @@ async function verwerkAccountStatus(
   }
 
   return { verwerkt: true };
+}
+
+/**
+ * Mag een account_status-webhook de huidige status overschrijven? (SPEC §6a
+ * regel 5: de webhook is het tweede signaal naast de gateway; de strengste
+ * status wint, `STOPPED` > `ERROR` > `CREDENTIALS`.)
+ *
+ * - Nieuwe storingsstatus: alleen als hij minstens zo streng is als de huidige.
+ *   Een `credentials` zet een `STOPPED`- of `ERROR`-account dus niet terug.
+ * - Herstel of overige status (`ok`, `reconnected`, `permissions`, ...): heft
+ *   `CREDENTIALS` op, en `ERROR`/`STOPPED` alleen als Unipile die zelf had
+ *   gemeld. Een `ERROR`/`STOPPED` van de gateway (bijv. `account_restricted`)
+ *   blijft staan tot Rubert het account heractiveert.
+ */
+export function webhookMagStatusZetten(
+  huidig: AccountStatus,
+  nieuw: AccountStatus,
+  huidigDoorGateway: boolean,
+): boolean {
+  const nieuwStreng = statusStrengte(nieuw);
+  const huidigStreng = statusStrengte(huidig);
+  if (nieuwStreng > 0) return nieuwStreng >= huidigStreng;
+  if (huidigStreng <= 1) return true;
+  return !huidigDoorGateway;
 }
 
 /**

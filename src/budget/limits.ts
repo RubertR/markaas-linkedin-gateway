@@ -133,6 +133,12 @@ export interface Terugboeken {
   max_per_dag_per_type: number;
 }
 
+/** Controle-aanroep bij een onbekende 401/403 (SPEC §6a). */
+export interface UnipileControle {
+  /** Per account hoogstens één controle-aanroep per zoveel minuten. */
+  min_interval_minuten: number;
+}
+
 export interface Limieten {
   opbouw: Opbouw;
   afkoeling: Afkoeling;
@@ -142,6 +148,7 @@ export interface Limieten {
   unipile_usage_signaal: UnipileSignaal;
   verzoeken_sync: VerzoekenSync;
   terugboeken: Terugboeken;
+  unipile_controle: UnipileControle;
   abonnementen: Record<Abonnement, AbonnementLimieten>;
 }
 
@@ -182,6 +189,7 @@ export function limietenUitObject(obj: unknown): Limieten {
   const unipile_usage_signaal = parseUnipileSignaal(obj['unipile_usage_signaal']);
   const verzoeken_sync = parseVerzoekenSync(obj['verzoeken_sync']);
   const terugboeken = parseTerugboeken(obj['terugboeken']);
+  const unipile_controle = parseUnipileControle(obj['unipile_controle']);
 
   const bronAbonnementen = obj['abonnementen'];
   if (!isRecord(bronAbonnementen)) {
@@ -207,8 +215,22 @@ export function limietenUitObject(obj: unknown): Limieten {
     unipile_usage_signaal,
     verzoeken_sync,
     terugboeken,
+    unipile_controle,
     abonnementen,
   };
+}
+
+function parseUnipileControle(raw: unknown): UnipileControle {
+  if (!isRecord(raw)) {
+    throw new Error('Veld "unipile_controle" ontbreekt in limieten-configuratie (SPEC §6a).');
+  }
+  const minuten = raw['min_interval_minuten'];
+  if (typeof minuten !== 'number' || !Number.isFinite(minuten) || minuten <= 0) {
+    throw new Error(
+      'Veld "unipile_controle.min_interval_minuten" moet een getal groter dan 0 zijn.',
+    );
+  }
+  return { min_interval_minuten: minuten };
 }
 
 function parseTerugboeken(raw: unknown): Terugboeken {

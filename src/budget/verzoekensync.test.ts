@@ -281,9 +281,70 @@ describe('verzoeken-sync — foutpaden', () => {
     });
     await markeerAccountGekoppeld(db, tweede.id, 'uni-sync-2');
     fake.antwoord('GET', PAD, { status: 401, body: { error: 'nope' } });
+    // SPEC §6a: pas als ook de controle-aanroep wordt geweigerd, is de sleutel kapot.
+    fake.antwoord('GET', '/api/v1/accounts', { status: 401, body: { error: 'nope' } });
     const uit = await verwerkVerzoekenSyncTick(deps(DINSDAG_MIDDAG));
     assert.equal(uit.gatewayGestopt, true);
     assert.equal(aantalGets(), 1);
+    assert.equal((await vindAccount(db, accountId))?.status, 'OK');
+  });
+
+  it('401 zonder type, controle-aanroep geslaagd: alleen dit account op ERROR, het tweede account synct door', async () => {
+    const tweede = await registreerAccount(db, {
+      clientId,
+      eigenaarNaam: 'Tweede',
+      abonnement: 'salesnav_core',
+    });
+    await markeerAccountGekoppeld(db, tweede.id, 'uni-sync-2');
+    fake.antwoord('GET', PAD, (aanroep) =>
+      aanroep.path.includes(`account_id=${UNIPILE_ACCOUNT_ID}`)
+        ? { status: 401, body: { error: 'nope' } }
+        : { status: 200, body: { object: 'InvitationList', items: [{ id: 'i1' }], cursor: null } },
+    );
+    fake.antwoord('GET', '/api/v1/accounts', { status: 200, body: { items: [] } });
+    const uit = await verwerkVerzoekenSyncTick(deps(DINSDAG_MIDDAG));
+    assert.equal(uit.gatewayGestopt, false);
+    assert.equal((await vindAccount(db, accountId))?.status, 'ERROR');
+    assert.equal(uit.resultaten.find((r) => r.accountId === accountId)?.resultaat, 'fout');
+    assert.equal(uit.resultaten.find((r) => r.accountId === tweede.id)?.resultaat, 'gelijkgezet');
+    assert.equal((await vindAccount(db, tweede.id))?.openstaandeVerzoeken, 1);
+  });
+
+  it('403 account_restricted: account op STOPPED, teller ongewijzigd, geen gateway-stop', async () => {
+    await zetTeller(5);
+    fake.antwoord('GET', PAD, { status: 403, body: { status: 403, type: 'errors/account_restricted' } });
+    const uit = await verwerkVerzoekenSyncTick(deps(DINSDAG_MIDDAG));
+    assert.equal(uit.gatewayGestopt, false);
+    assert.equal(uit.resultaten[0]?.resultaat, 'fout');
+    assert.match(uit.resultaten[0]?.reden ?? '', /beperkt/);
+    const account = await vindAccount(db, accountId);
+    assert.equal(account?.status, 'STOPPED');
+    assert.equal(account?.openstaandeVerzoeken, 5);
+  });
+
+  it('dry-run met 403 account_restricted: niets geschreven, account blijft OK', async () => {
+    fake.antwoord('GET', PAD, { status: 403, body: { status: 403, type: 'errors/account_restricted' } });
+    const uit = await syncVerzoekenNu(deps(DINSDAG_MIDDAG), { uitvoeren: false });
+    assert.equal(uit.resultaten[0]?.resultaat, 'fout');
+    assert.match(uit.resultaten[0]?.reden ?? '', /dry-run/);
+    assert.equal((await vindAccount(db, accountId))?.status, 'OK');
+    const events = await db.query(`select 1 from events where type = 'account_status'`);
+    assert.equal(events.length, 0);
+  });
+
+  it('401 expired_credentials: account op CREDENTIALS en reconnect-link aangevraagd', async () => {
+    fake.antwoord('GET', PAD, { status: 401, body: { status: 401, type: 'errors/expired_credentials' } });
+    let hook: string | null = null;
+    const uit = await verwerkVerzoekenSyncTick(
+      deps(DINSDAG_MIDDAG, {
+        reconnectHook: async (id) => {
+          hook = id;
+        },
+      }),
+    );
+    assert.equal(uit.gatewayGestopt, false);
+    assert.equal((await vindAccount(db, accountId))?.status, 'CREDENTIALS');
+    assert.equal(hook, accountId);
   });
 
   it('500: teller ongewijzigd, nette NL-reden', async () => {
