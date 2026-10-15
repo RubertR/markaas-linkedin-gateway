@@ -249,7 +249,7 @@ Tests (`test/fake-unipile/`), voor elk geval een test:
 
 ### 6b. Account op pauze: wachtende acties, opnieuw koppelen en vrijgeven
 
-*Voorstel 15 okt 2026, nog niet vastgesteld.* Drie punten uit de bouw van §6a:
+*Vastgesteld 15 okt 2026.* Drie punten uit de bouw van §6a:
 - wachtende acties gaan nu verloren als een account op pauze staat;
 - opnieuw koppelen heft ook een beperking door LinkedIn op;
 - een account dat de gateway heeft stilgezet, kan in de admin niet weer aan.
