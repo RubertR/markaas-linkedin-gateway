@@ -25,6 +25,7 @@ import {
 } from '../profiel/profielen.ts';
 import type { Backend } from '../db/backend.ts';
 import type { Abonnement } from '../register/accounts.ts';
+import { voegAccountToe } from '../register/accounttoevoegen.ts';
 import {
   NieuweKlantFout,
   maakNieuweKlant,
@@ -58,6 +59,7 @@ import { registreerAlsKlant } from './als-klant.ts';
 import { haalAccountVoorKoppellink, lijstKlanten } from './klanten.ts';
 import { PROFIEL_STATUS_TEKST, adminProfielRondeView, adminProfielView } from './profiel-views.ts';
 import {
+  ANDERE_TIJDZONE,
   gebruikerLinkView,
   klantDetailView,
   klantenView,
@@ -65,6 +67,7 @@ import {
   loginView,
   nieuweKlantView,
   overzichtView,
+  type AccountWaarden,
   type NieuweKlantWaarden,
 } from './views.ts';
 
@@ -389,8 +392,10 @@ export function maakAdminApp(deps: AdminDeps) {
       eigenaarEmail: getString(form, 'eigenaarEmail').trim(),
       abonnement: getString(form, 'abonnement'),
       abonnementVereist: getString(form, 'abonnementVereist') === 'ja',
+      tijdzone: tijdzoneUitFormulier(form),
     };
     try {
+      eisIngevuldeAndereTijdzone(waarden.tijdzone);
       const r = await maakNieuweKlant(
         deps.db,
         { ...waarden, abonnement: waarden.abonnement as Abonnement },
@@ -421,7 +426,7 @@ export function maakAdminApp(deps: AdminDeps) {
     c: AdminContext,
     sessie: Sessie,
     slug: string,
-    extra: Pick<Parameters<typeof klantDetailView>[0], 'melding' | 'waarden'> = {},
+    extra: Pick<Parameters<typeof klantDetailView>[0], 'melding' | 'waarden' | 'accountWaarden'> = {},
   ): Promise<Response> {
     const klant = await vindKlant(slug);
     if (!klant) {
@@ -444,6 +449,7 @@ export function maakAdminApp(deps: AdminDeps) {
     };
     if (extra.melding) opts.melding = extra.melding;
     if (extra.waarden) opts.waarden = extra.waarden;
+    if (extra.accountWaarden) opts.accountWaarden = extra.accountWaarden;
     if (deps.intake) opts.profielStatus = PROFIEL_STATUS_TEKST[profielActie(await profielStand(deps.db, klant.id))];
     return c.html(klantDetailView(opts)) as Response;
   }
@@ -502,6 +508,45 @@ export function maakAdminApp(deps: AdminDeps) {
       return await toonKlantDetail(c, sessie, slug, {
         melding: { soort: 'fout', tekst: err.message },
         waarden,
+      });
+    }
+  });
+
+  // Account toevoegen aan een bestaande klant (SPEC §14.2a).
+  app.post('/admin/klanten/:slug/accounts', async (c) => {
+    const sessie = laadSessie(c, sessies);
+    if (!sessie) return c.redirect('/admin/login', 303);
+    const form = await c.req.parseBody();
+    if (!csrfConstanteTijdGelijk(getString(form, 'csrf'), sessie.csrfToken)) {
+      c.status(403);
+      return c.text('CSRF-token ontbreekt of klopt niet.');
+    }
+    const slug = c.req.param('slug');
+    const klant = await vindKlant(slug);
+    if (!klant) {
+      c.status(404);
+      return c.text('Onbekende klant.');
+    }
+    const waarden: AccountWaarden = {
+      eigenaarNaam: getString(form, 'eigenaarNaam').trim(),
+      eigenaarEmail: getString(form, 'eigenaarEmail').trim(),
+      abonnement: getString(form, 'abonnement'),
+      tijdzone: tijdzoneUitFormulier(form),
+    };
+    try {
+      eisIngevuldeAndereTijdzone(waarden.tijdzone);
+      const r = await voegAccountToe(
+        deps.db,
+        { slug: klant.slug, ...waarden, abonnement: waarden.abonnement as Abonnement },
+        uitnodigingOpties(),
+      );
+      return await toonKoppellink(c, sessie, r.uitnodiging);
+    } catch (err) {
+      if (!(err instanceof NieuweKlantFout)) throw err;
+      c.status(400);
+      return await toonKlantDetail(c, sessie, slug, {
+        melding: { soort: 'fout', tekst: err.message },
+        accountWaarden: waarden,
       });
     }
   });
@@ -865,6 +910,20 @@ function krijgOfMaakPreCsrf(c: AdminContext, deps: AdminDeps): string {
 /** Zelfde voorstel als het formulier-script: accenten weg, dan maakSlug. */
 function slugVoorstel(naam: string): string {
   return maakSlug(naam.normalize('NFD').replace(/[\u0300-\u036f]/g, ''));
+}
+
+/** Een ingevuld veld "Andere tijdzone" gaat voor de keuzelijst. */
+function tijdzoneUitFormulier(form: Record<string, unknown>): string {
+  const andere = getString(form, 'andereTijdzone').trim();
+  return andere || getString(form, 'tijdzone').trim();
+}
+
+function eisIngevuldeAndereTijdzone(tijdzone: string): void {
+  if (tijdzone === ANDERE_TIJDZONE) {
+    throw new NieuweKlantFout(
+      'Vul bij "Andere" een tijdzone in (een IANA-naam zoals America/New_York), of kies een tijdzone uit de lijst.',
+    );
+  }
 }
 
 function geheelGetal(w: string): number {

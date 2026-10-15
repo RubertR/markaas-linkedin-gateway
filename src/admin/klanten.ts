@@ -16,6 +16,7 @@ export interface AccountRegel {
   eigenaarNaam: string;
   eigenaarEmail: string | null;
   abonnement: Abonnement;
+  tijdzone: string;
   status: AccountStatus;
   gekoppeld: boolean;
   uitnodiging: UitnodigingStand;
@@ -39,6 +40,7 @@ interface Rij {
   eigenaar_naam: string | null;
   eigenaar_email: string | null;
   abonnement: Abonnement | null;
+  tijdzone: string | null;
   status: AccountStatus | null;
   unipile_account_id: string | null;
   verloopt_op: string | Date | null;
@@ -53,7 +55,7 @@ function alsDatum(w: string | Date | null): Date | null {
 export async function lijstKlanten(db: Backend, klok: Klok): Promise<KlantRegel[]> {
   const rijen = await db.query<Rij>(
     `select c.id as client_id, c.naam as client_naam, c.slug, c.abonnement_vereist,
-            a.id as account_id, a.eigenaar_naam, a.eigenaar_email, a.abonnement, a.status,
+            a.id as account_id, a.eigenaar_naam, a.eigenaar_email, a.abonnement, a.tijdzone, a.status,
             a.unipile_account_id, u.verloopt_op, u.gebruikt_op
      from clients c
      left join accounts a on a.client_id = c.id
@@ -93,6 +95,7 @@ export async function lijstKlanten(db: Backend, klok: Klok): Promise<KlantRegel[
       eigenaarNaam: r.eigenaar_naam ?? '',
       eigenaarEmail: r.eigenaar_email,
       abonnement: r.abonnement as Abonnement,
+      tijdzone: r.tijdzone ?? '',
       status: r.status as AccountStatus,
       gekoppeld: r.unipile_account_id !== null,
       uitnodiging: stand,

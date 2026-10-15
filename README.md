@@ -32,8 +32,10 @@ Geteste Unipile-endpoints staan in `docs/unipile-notities.md`.
 
 1. Log in op `/admin/` en kies **Klanten** → **Nieuwe klant**.
 2. Vul klantnaam, slug (leeg = voorstel uit de naam), naam en e-mail van de
-   accounteigenaar en het LinkedIn-abonnement in. Laat **Abonnement vereist** aan, behalve
-   voor MARKaaS, IPknowledge en TAG (SPEC §14.4).
+   accounteigenaar, het LinkedIn-abonnement en de tijdzone van het account in (standaard
+   Europe/Amsterdam; staat de tijdzone niet in de lijst, vul dan bij **Andere** een IANA-naam
+   in, zoals `America/New_York`). Laat **Abonnement vereist** aan, behalve voor MARKaaS,
+   IPknowledge en TAG (SPEC §14.4).
 3. De volgende pagina toont de koppellink (`<PUBLIC_BASE_URL>/koppelen/<token>`) en een
    voorbeeldmail. **Kopieer ze meteen**: de link is daarna niet meer op te vragen (alleen een
    hash staat in de database). Plak de mail in je eigen mailprogramma en verstuur hem.
@@ -44,6 +46,17 @@ Geteste Unipile-endpoints staan in `docs/unipile-notities.md`.
    en meldt de koppeling via de webhook; het account gaat dan van `CONNECTING` naar `OK`.
 6. Verlopen of kwijt? Klik bij het account in **Klanten** op **Nieuwe koppellink**. De vorige
    link vervalt daarmee.
+
+### Account toevoegen aan een bestaande klant (SPEC §14.2a)
+
+Heeft een klant een tweede LinkedIn-account (bijvoorbeeld een afzender per markt), open dan
+de klant (`/admin/klanten/<slug>`) en klap **Account toevoegen** open. Vul naam en e-mail van
+de eigenaar, het abonnement en de tijdzone in. Daarna verloopt alles als bij stap 3–6
+hierboven: koppellink met voorbeeldmail, koppelpagina met drie vinkjes, toestemming in
+`account_consents`. Per klant kan elk e-mailadres van een eigenaar maar één keer voorkomen.
+Het account telt pas mee in het Stripe-aantal na een geslaagde koppeling. Registreer een
+account van een betalende klant nooit met `npm run account:registreer`: die slaat de
+toestemming over.
 
 Nieuwe versie van de voorwaarden of verwerkersovereenkomst: pas `versie` (en eventueel
 `url`) aan in `config/juridisch.json`. Lege `url` = de pagina meldt dat MARKaaS het document

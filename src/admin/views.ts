@@ -4,6 +4,8 @@ import { datumTekst, type AbonnementWeergave } from '../abonnement/weergave.ts';
 
 import { formatteerAmsterdam } from './datum.ts';
 import type { GebruikerRegel } from '../portaal/gebruikers.ts';
+import { ABONNEMENTEN } from '../register/registreer.ts';
+import { STANDAARD_TIJDZONE, TIJDZONE_KEUZES } from '../register/tijdzone.ts';
 
 import type { KlantRegel, UitnodigingStand } from './klanten.ts';
 import type {
@@ -459,6 +461,40 @@ export interface NieuweKlantWaarden {
   eigenaarEmail: string;
   abonnement: string;
   abonnementVereist: boolean;
+  /** Keuze uit de lijst, een eigen IANA-naam, of `anders` (nog leeg). */
+  tijdzone: string;
+}
+
+/** Waarde van de keuzelijst voor "Andere (hieronder invullen)". */
+export const ANDERE_TIJDZONE = 'anders';
+
+function abonnementOpties(abonnementen: readonly string[], gekozen: string): string {
+  return abonnementen
+    .map((a) => `<option value="${h(a)}"${a === gekozen ? ' selected' : ''}>${h(a)}</option>`)
+    .join('');
+}
+
+/**
+ * Tijdzoneveld zonder JavaScript (SPEC §14.2a): keuzelijst met de vaste
+ * tijdzones plus "Andere", en een tekstveld voor een eigen IANA-naam. Een
+ * ingevuld tekstveld gaat voor de keuzelijst.
+ */
+function tijdzoneVelden(waarde: string): string {
+  const inLijst = TIJDZONE_KEUZES.includes(waarde);
+  const gekozen = inLijst ? waarde : waarde ? ANDERE_TIJDZONE : STANDAARD_TIJDZONE;
+  const andere = inLijst || waarde === ANDERE_TIJDZONE ? '' : waarde;
+  const opties = [...TIJDZONE_KEUZES, ANDERE_TIJDZONE]
+    .map((tz) => {
+      const label = tz === ANDERE_TIJDZONE ? 'Andere (hieronder invullen)' : tz === STANDAARD_TIJDZONE ? `${tz} (standaard)` : tz;
+      return `<option value="${h(tz)}"${tz === gekozen ? ' selected' : ''}>${h(label)}</option>`;
+    })
+    .join('');
+  return `
+    <label for="tijdzone">Tijdzone van het account</label>
+    <select id="tijdzone" name="tijdzone">${opties}</select>
+    <label for="andereTijdzone">Andere tijdzone (IANA-naam)</label>
+    <input id="andereTijdzone" name="andereTijdzone" type="text" maxlength="64" placeholder="bijvoorbeeld America/New_York" value="${h(andere)}">
+    <p class="uitleg">Alleen invullen als de tijdzone niet in de lijst staat; een ingevulde naam gaat voor de keuzelijst.</p>`;
 }
 
 export interface NieuweKlantViewOpties {
@@ -494,10 +530,9 @@ export function nieuweKlantView(opts: NieuweKlantViewOpties): string {
     eigenaarEmail: '',
     abonnement: 'premium_business',
     abonnementVereist: true,
+    tijdzone: STANDAARD_TIJDZONE,
   };
-  const opties = opts.abonnementen
-    .map((a) => `<option value="${h(a)}"${a === w.abonnement ? ' selected' : ''}>${h(a)}</option>`)
-    .join('');
+  const opties = abonnementOpties(opts.abonnementen, w.abonnement);
   const inhoud = `
 ${adminHeader('Nieuwe klant', opts.csrfToken)}
 <main>
@@ -515,6 +550,7 @@ ${adminHeader('Nieuwe klant', opts.csrfToken)}
     <input id="eigenaarEmail" name="eigenaarEmail" type="email" required maxlength="254" value="${h(w.eigenaarEmail)}">
     <label for="abonnement">LinkedIn-abonnement</label>
     <select id="abonnement" name="abonnement">${opties}</select>
+    ${tijdzoneVelden(w.tijdzone)}
     <label class="checkbox"><input type="checkbox" name="abonnementVereist" value="ja"${w.abonnementVereist ? ' checked' : ''}> Abonnement vereist (betaalpoort, SPEC §14.4)</label>
     <p><button type="submit">Klant aanmaken en koppellink maken</button></p>
   </form>
@@ -599,6 +635,14 @@ export interface GebruikerWaarden {
   email: string;
 }
 
+/** Ingevulde waarden van "Account toevoegen" (SPEC §14.2a). */
+export interface AccountWaarden {
+  eigenaarNaam: string;
+  eigenaarEmail: string;
+  abonnement: string;
+  tijdzone: string;
+}
+
 export interface KlantAbonnementWeergave {
   weergave: AbonnementWeergave;
   abonnement: KlantAbonnement | null;
@@ -614,6 +658,8 @@ export interface KlantDetailViewOpties {
   abonnement?: KlantAbonnementWeergave;
   melding?: { soort: 'ok' | 'fout'; tekst: string };
   waarden?: GebruikerWaarden;
+  /** Na een fout bij "Account toevoegen": formulier open en opnieuw gevuld. */
+  accountWaarden?: AccountWaarden;
   /** Klantprofiel (SPEC §14.6) in gewone taal; ontbreekt: intake niet ingericht. */
   profielStatus?: string;
 }
@@ -625,16 +671,49 @@ export function klantDetailView(o: KlantDetailViewOpties): string {
     k.accounts.length === 0
       ? '<p class="leeg">Geen accounts.</p>'
       : `<table class="klanten">
-    <thead><tr><th>Accounteigenaar</th><th>Status</th><th>Gekoppeld</th></tr></thead>
+    <thead><tr><th>Accounteigenaar</th><th>Abonnement</th><th>Tijdzone</th><th>Status</th><th>Gekoppeld</th><th></th></tr></thead>
     <tbody>${k.accounts
       .map(
         (a) => `
       <tr><td>${h(a.eigenaarNaam)}${a.eigenaarEmail ? `<br><small>${h(a.eigenaarEmail)}</small>` : ''}</td>
-      <td>${h(STATUS_TEKST[a.status] ?? a.status)}<br><small>${h(a.abonnement)}</small></td>
-      <td>${a.gekoppeld ? 'ja' : `nee<br><small>${h(uitnodigingTekst(a.uitnodiging, a.uitnodigingVerlooptOp))}</small>`}</td></tr>`,
+      <td>${h(a.abonnement)}</td>
+      <td>${h(a.tijdzone)}</td>
+      <td>${h(STATUS_TEKST[a.status] ?? a.status)}</td>
+      <td>${a.gekoppeld ? 'ja' : `nee<br><small>${h(uitnodigingTekst(a.uitnodiging, a.uitnodigingVerlooptOp))}</small>`}</td>
+      <td>${
+        a.gekoppeld
+          ? ''
+          : `<form method="post" action="/admin/klanten/${h(a.id)}/koppellink">
+          <input type="hidden" name="csrf" value="${h(o.csrfToken)}">
+          <button type="submit" class="secundair">Nieuwe koppellink</button>
+        </form>`
+      }</td></tr>`,
       )
       .join('')}</tbody>
   </table>`;
+  const aw: AccountWaarden = o.accountWaarden ?? {
+    eigenaarNaam: '',
+    eigenaarEmail: '',
+    abonnement: 'premium_business',
+    tijdzone: STANDAARD_TIJDZONE,
+  };
+  const accountToevoegen = `
+    <details class="actie-kaart"${o.accountWaarden ? ' open' : ''}>
+      <summary><strong>Account toevoegen</strong></summary>
+      <form method="post" action="${basis}/accounts" class="formulier" autocomplete="off">
+        <input type="hidden" name="csrf" value="${h(o.csrfToken)}">
+        <label for="accountEigenaarNaam">Naam accounteigenaar</label>
+        <input id="accountEigenaarNaam" name="eigenaarNaam" type="text" required maxlength="200" value="${h(aw.eigenaarNaam)}">
+        <label for="accountEigenaarEmail">E-mail accounteigenaar</label>
+        <input id="accountEigenaarEmail" name="eigenaarEmail" type="email" required maxlength="254" value="${h(aw.eigenaarEmail)}">
+        <label for="accountAbonnement">LinkedIn-abonnement</label>
+        <select id="accountAbonnement" name="abonnement">${abonnementOpties(ABONNEMENTEN, aw.abonnement)}</select>
+        ${tijdzoneVelden(aw.tijdzone)}
+        <p class="uitleg">Het account wacht op koppelen tot de eigenaar via de koppellink toestemming geeft en
+          inlogt. Het telt pas mee in het abonnement na een geslaagde koppeling.</p>
+        <p><button type="submit">Account toevoegen en koppellink maken</button></p>
+      </form>
+    </details>`;
   const gebruikers =
     o.gebruikers.length === 0
       ? '<p class="leeg">Nog geen portaalgebruikers.</p>'
@@ -682,6 +761,7 @@ ${adminHeader(k.naam, o.csrfToken)}
   <section>
     <h2>LinkedIn-accounts</h2>
     ${accounts}
+    ${accountToevoegen}
   </section>
   <section>
     <h2>Portaalgebruikers</h2>
