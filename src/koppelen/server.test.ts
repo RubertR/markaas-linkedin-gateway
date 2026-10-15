@@ -6,6 +6,7 @@ import { vasteKlok } from '../budget/klok.ts';
 import { laadLimieten, type Limieten } from '../budget/limits.ts';
 import { laadJuridisch, type Juridisch } from '../config/juridisch.ts';
 import type { Backend } from '../db/backend.ts';
+import { voegAccountToe } from '../register/accounttoevoegen.ts';
 import { maakNieuweKlant } from '../register/nieuweklant.ts';
 import { vindGeldigeUitnodiging } from '../register/uitnodiging.ts';
 import { maakUnipileClient, type UnipileClient } from '../unipile/client.ts';
@@ -326,6 +327,51 @@ describe('POST /koppelen/:token', () => {
     });
     assert.equal(res.status, 410);
     assert.equal(await aantalConsents(), 0);
+  });
+});
+
+describe('tweede account van dezelfde klant (SPEC §14.2a)', () => {
+  it('de uitnodiging werkt via de koppelpagina en account_consents legt de toestemming vast', async () => {
+    const extra = await voegAccountToe(
+      db,
+      {
+        slug: 'acme',
+        eigenaarNaam: 'Tom Baker',
+        eigenaarEmail: 'tom@acme.co.uk',
+        abonnement: 'salesnav_core',
+        tijdzone: 'Europe/London',
+      },
+      { klok: vasteKlok(NU), geldigDagen: 7 },
+    );
+    const t = extra.uitnodiging.token;
+    const pagina = await app().request(`/koppelen/${t}`);
+    assert.equal(pagina.status, 200);
+    const html = await pagina.text();
+    assert.match(html, /value="tom@acme\.co\.uk"/);
+    assert.equal(csrfUit(html), csrfVoor(t));
+
+    fake.antwoord('POST', LINK, { status: 200, body: { object: 'HostedAuthUrl', url: UNIPILE_URL } });
+    const res = await post(t, { ...volledigFormulier(t), naam: 'Tom Baker', email: 'tom@acme.co.uk' });
+    assert.equal(res.status, 303);
+    assert.equal(res.headers.get('location'), UNIPILE_URL);
+
+    const rijen = await db.query<Record<string, unknown>>('select * from account_consents');
+    assert.equal(rijen.length, 1);
+    const c = rijen[0]!;
+    assert.equal(c['account_id'], extra.accountId);
+    assert.notEqual(c['account_id'], accountId);
+    assert.equal(c['client_id'], extra.clientId);
+    assert.equal(c['klantnaam'], 'Acme B.V.');
+    assert.equal(c['account_eigenaar_naam'], 'Tom Baker');
+    assert.equal(c['email'], 'tom@acme.co.uk');
+    assert.ok(c['uitnodiging_id']);
+    const body = fake.aanroepen[0]?.body as Record<string, unknown>;
+    assert.equal(body['type'], 'create');
+    assert.equal(body['name'], extra.accountId);
+
+    // De uitnodiging van het eerste account blijft los daarvan bruikbaar.
+    assert.ok(await vindGeldigeUitnodiging(db, token, vasteKlok(NU)));
+    assert.equal(await vindGeldigeUitnodiging(db, t, vasteKlok(NU)), null, 'eenmalig');
   });
 });
 

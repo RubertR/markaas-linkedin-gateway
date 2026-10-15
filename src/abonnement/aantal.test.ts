@@ -5,6 +5,7 @@ import type { Klok } from '../budget/klok.ts';
 import type { AbonnementConfig } from '../config/abonnement.ts';
 import type { Backend } from '../db/backend.ts';
 import { markeerAccountGekoppeld, registreerAccount } from '../register/accounts.ts';
+import { voegAccountToe } from '../register/accounttoevoegen.ts';
 import { maakClient } from '../register/clients.ts';
 import { maakStripeClient, type StripeClient } from '../stripe/client.ts';
 import { startFakeStripe, type FakeStripe } from '../../test/fake-stripe/server.ts';
@@ -84,6 +85,28 @@ describe('synchroniseerAantal', () => {
     await koppel(1);
     assert.equal((await synchroniseerAantal(deps(), klant, 'admin')).resultaat, 'ongewijzigd');
     assert.ok(!fake.aanroepen.some((a) => a.method === 'POST'));
+  });
+
+  it('een toegevoegd maar niet gekoppeld account telt niet mee (SPEC §14.2a punt 5)', async () => {
+    const [eerste] = await koppel(2);
+    assert.deepEqual(await synchroniseerAantalVoorAccount(deps(), eerste!, 'koppeling'), {
+      resultaat: 'bijgewerkt',
+      van: 1,
+      naar: 2,
+    });
+    const extra = await voegAccountToe(
+      db,
+      { slug: 'acme', eigenaarNaam: 'Tom', eigenaarEmail: 'tom@acme.nl', abonnement: 'free', tijdzone: 'Europe/London' },
+      { klok, geldigDagen: 7 },
+    );
+    assert.deepEqual(await synchroniseerAantal(deps(), klant, 'admin'), { resultaat: 'ongewijzigd', naar: 2 });
+    assert.equal(quantity(), 2);
+    await markeerAccountGekoppeld(db, extra.accountId, 'uni-extra');
+    assert.deepEqual(await synchroniseerAantalVoorAccount(deps(), extra.accountId, 'koppeling'), {
+      resultaat: 'bijgewerkt',
+      van: 2,
+      naar: 3,
+    });
   });
 
   it('na ontkoppelen gaat het aantal omlaag (minimaal 1)', async () => {

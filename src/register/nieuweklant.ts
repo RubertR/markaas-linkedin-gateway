@@ -3,15 +3,15 @@ import type { Backend } from '../db/backend.ts';
 import { registreerAccount, vindAccount, type Abonnement } from './accounts.ts';
 import { maakClient, vindClientBijSlug } from './clients.ts';
 import { ABONNEMENTEN } from './registreer.ts';
+import { leesTijdzone } from './tijdzone.ts';
 import { maakUitnodiging, type NieuweUitnodiging, type UitnodigingOpties } from './uitnodiging.ts';
 
 /**
  * Onboarding van een nieuwe klant (SPEC §14.2 punt 1): client + account
  * (status CONNECTING, opbouw 0.5, nog geen unipile_account_id) + koppeluitnodiging,
- * in één transactie.
+ * in één transactie. De tijdzone van het account komt uit de invoer (§14.2a).
  */
 
-const TIJDZONE = 'Europe/Amsterdam';
 const SLUG_PATROON = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const EMAIL_PATROON = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -29,6 +29,8 @@ export interface NieuweKlantInvoer {
   eigenaarEmail: string;
   abonnement: Abonnement;
   abonnementVereist: boolean;
+  /** IANA-naam; leeg of ontbrekend = Europe/Amsterdam (SPEC §14.2a). */
+  tijdzone?: string;
 }
 
 export interface NieuweKlantUitkomst {
@@ -55,29 +57,51 @@ export function valideerEmail(email: string): string | null {
   return null;
 }
 
-function controleer(invoer: NieuweKlantInvoer): NieuweKlantInvoer {
-  const schoon: NieuweKlantInvoer = {
-    klantNaam: invoer.klantNaam.trim(),
-    slug: invoer.slug.trim(),
-    eigenaarNaam: invoer.eigenaarNaam.trim(),
-    eigenaarEmail: invoer.eigenaarEmail.trim(),
-    abonnement: invoer.abonnement,
-    abonnementVereist: invoer.abonnementVereist,
-  };
-  const meldingen: string[] = [];
-  if (!schoon.klantNaam) meldingen.push('Vul een klantnaam in.');
-  if (schoon.klantNaam.length > 200) meldingen.push('De klantnaam is te lang (maximaal 200 tekens).');
-  const slugFout = valideerSlug(schoon.slug);
-  if (slugFout) meldingen.push(slugFout);
-  if (!schoon.eigenaarNaam) meldingen.push('Vul de naam van de accounteigenaar in.');
-  if (schoon.eigenaarNaam.length > 200) meldingen.push('De naam van de accounteigenaar is te lang.');
-  const emailFout = valideerEmail(schoon.eigenaarEmail);
+export interface EigenaarVelden {
+  eigenaarNaam: string;
+  eigenaarEmail: string;
+  abonnement: Abonnement;
+  tijdzone: string;
+}
+
+/**
+ * Gedeelde controle van de accountvelden (nieuwe klant en account toevoegen).
+ * Voegt NL-meldingen toe aan `meldingen` en geeft de opgeschoonde waarden terug.
+ */
+export function controleerEigenaarVelden(
+  invoer: { eigenaarNaam: string; eigenaarEmail: string; abonnement: Abonnement; tijdzone?: string | undefined },
+  meldingen: string[],
+): EigenaarVelden {
+  const eigenaarNaam = invoer.eigenaarNaam.trim();
+  const eigenaarEmail = invoer.eigenaarEmail.trim();
+  if (!eigenaarNaam) meldingen.push('Vul de naam van de accounteigenaar in.');
+  if (eigenaarNaam.length > 200) meldingen.push('De naam van de accounteigenaar is te lang.');
+  const emailFout = valideerEmail(eigenaarEmail);
   if (emailFout) meldingen.push(emailFout);
-  if (!ABONNEMENTEN.includes(schoon.abonnement)) {
-    meldingen.push(`Onbekend LinkedIn-abonnement "${String(schoon.abonnement)}". Kies uit: ${ABONNEMENTEN.join(', ')}.`);
+  if (!ABONNEMENTEN.includes(invoer.abonnement)) {
+    meldingen.push(`Onbekend LinkedIn-abonnement "${String(invoer.abonnement)}". Kies uit: ${ABONNEMENTEN.join(', ')}.`);
   }
+  const tz = leesTijdzone(invoer.tijdzone);
+  if ('fout' in tz) meldingen.push(tz.fout);
+  return {
+    eigenaarNaam,
+    eigenaarEmail,
+    abonnement: invoer.abonnement,
+    tijdzone: 'fout' in tz ? '' : tz.tijdzone,
+  };
+}
+
+function controleer(invoer: NieuweKlantInvoer): NieuweKlantInvoer & EigenaarVelden {
+  const meldingen: string[] = [];
+  const klantNaam = invoer.klantNaam.trim();
+  const slug = invoer.slug.trim();
+  if (!klantNaam) meldingen.push('Vul een klantnaam in.');
+  if (klantNaam.length > 200) meldingen.push('De klantnaam is te lang (maximaal 200 tekens).');
+  const slugFout = valideerSlug(slug);
+  if (slugFout) meldingen.push(slugFout);
+  const eigenaar = controleerEigenaarVelden(invoer, meldingen);
   if (meldingen.length > 0) throw new NieuweKlantFout(meldingen.join(' '));
-  return schoon;
+  return { klantNaam, slug, abonnementVereist: invoer.abonnementVereist, ...eigenaar };
 }
 
 export async function maakNieuweKlant(
@@ -107,7 +131,7 @@ export async function maakNieuweKlant(
       eigenaarNaam: schoon.eigenaarNaam,
       eigenaarEmail: schoon.eigenaarEmail,
       abonnement: schoon.abonnement,
-      tijdzone: TIJDZONE,
+      tijdzone: schoon.tijdzone,
     });
     const uitnodiging = await maakUitnodiging(tx, account.id, opties);
     return { clientId, accountId: account.id, uitnodiging };
