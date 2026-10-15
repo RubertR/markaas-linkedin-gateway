@@ -18,7 +18,8 @@ export interface OpgevangenAanroep {
   raw: string;
 }
 
-type ScenarioBron = Scenario | (() => Scenario | Promise<Scenario>);
+/** Een vast antwoord, of een functie die per aanroep kiest (bijv. op `account_id`). */
+type ScenarioBron = Scenario | ((aanroep: OpgevangenAanroep) => Scenario | Promise<Scenario>);
 
 interface Handler {
   method: string;
@@ -72,13 +73,14 @@ export async function startFakeUnipile(): Promise<FakeUnipile> {
       headers[sleutel.toLowerCase()] = waarde;
     });
 
-    aanroepen.push({
+    const aanroep: OpgevangenAanroep = {
       method: c.req.method,
       path: c.req.path + (c.req.raw.url.includes('?') ? '?' + c.req.raw.url.split('?').slice(1).join('?') : ''),
       headers,
       body,
       raw,
-    });
+    };
+    aanroepen.push(aanroep);
 
     const handler = handlers.find(
       (h) => h.method.toUpperCase() === c.req.method && padMatcht(h.pad, c.req.path),
@@ -91,7 +93,7 @@ export async function startFakeUnipile(): Promise<FakeUnipile> {
     }
 
     const scenario = await Promise.resolve(
-      typeof handler.scenario === 'function' ? handler.scenario() : handler.scenario,
+      typeof handler.scenario === 'function' ? handler.scenario(aanroep) : handler.scenario,
     );
 
     if (scenario.delayMs && scenario.delayMs > 0) {

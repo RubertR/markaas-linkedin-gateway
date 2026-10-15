@@ -340,6 +340,44 @@ voordat de aanvraag naar LinkedIn gaat. Het schema zegt dat niet letterlijk. De 
 ("invalid parameters", "malformed request") en het feit dat er geen LinkedIn-resultaat in
 zit, wijzen er wel op.
 
+## 401 en 403: per account of gateway-breed (SPEC §6a, 15 okt 2026)
+
+Een 401/403 gaat volgens de referentie bijna altijd over één account of één functie, niet
+over onze Access Token. De client (`src/unipile/client.ts`) leest daarom bij 401/403 de
+body en kiest op het `type`:
+
+| Type (`errors/…`) | Foutklasse | Gevolg in de gateway |
+| --- | --- | --- |
+| `disconnected_account`, `expired_credentials`, `invalid_credentials`, `missing_credentials`, `multiple_sessions`, `checkpoint_error`, `invalid_checkpoint_solution`, `wrong_account`, `session_mismatch`, `unknown_authentication_context`, `account_mismatch` | `UnipileAccountCredentialsFout` | account → `CREDENTIALS`, reconnect-link |
+| `account_restricted` | `UnipileAccountBeperktFout` | account → `STOPPED`, geen reconnect-link |
+| `feature_not_subscribed`, `insufficient_permissions`, `insufficient_privileges`, `disconnected_feature` | `UnipileFunctieNietInAbonnementFout` | alleen de actie `failed`; account blijft `OK` |
+| geen of onbekend | `UnipileOnbekendeAuthFout` | controle-aanroep (zie hieronder) |
+
+- Het type wordt gelezen ongeacht of de status 401 of 403 is; de tabel in de referentie
+  verdeelt ze wel, maar de betekenis zit in het type.
+- Een 401/403 op een aanroep **zonder** account-context (`GET /api/v1/accounts`,
+  `GET /api/v1/webhooks`, koppellink `create`) blijft `UnipileGatewayAuthFout`: dan kan het
+  alleen de sleutel zijn.
+- **Controle-aanroep:** `controleerGatewaySleutel()` doet `GET /api/v1/accounts?limit=1`
+  (`limit` 1–250 volgens de referentie, opgezocht 15 okt 2026) zonder `account_id`.
+  401/403 → sleutel kapot, de planner-lus stopt tot een herstart. 200 → het ligt aan het
+  account: `ERROR` met status en type in de reden. Time-out of 5xx → geen uitsluitsel,
+  account ongewijzigd, actie over 5 minuten opnieuw.
+- Per account hoogstens één controle per `unipile_controle.min_interval_minuten`
+  (`config/limits.json`, 5). Elke controle staat als gateway-event `unipile_controle` met het
+  moment van de klok; binnen het interval geldt die uitkomst.
+- Elke statuswijziging door de gateway staat als gateway-event `account_status` (met
+  `status`, `vorige_status`, `reden`, `http_status`, `fout_type`, `endpoint`). De gateway
+  verlaagt nooit een strengere status (`STOPPED` > `ERROR` > `CREDENTIALS`); de
+  `account_status`-webhook ook niet. Een `ok`/`reconnected`-webhook heft `CREDENTIALS` op,
+  maar een `ERROR`/`STOPPED` van de gateway alleen niet (die blijft staan tot Rubert hem
+  opheft). Een `ERROR`/`STOPPED` die Unipile zelf meldde, heft zo'n webhook wel op.
+- **Nog te bevestigen bij een echte fout:** dat `account_restricted`,
+  `feature_not_subscribed` en `session_mismatch` echt als `type` in de body staan (de
+  referentie noemt ze bij 403, het `UnauthorizedResponse`-schema van `GET /api/v1/accounts`
+  noemt alleen de 401-types). Bij een afwijkende vorm komt de fout als "onbekend" binnen en
+  beslist de controle-aanroep, dus de veilige kant.
+
 ## Opruimen na fase 1
 
 - 30 sep 2026: de drie testwebhooks naar webhook.site verwijderd (`DELETE /api/v1/webhooks/{id}`,

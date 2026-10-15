@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { mapUnipileStatus, type AccountStatus } from './status.ts';
+import { mapUnipileStatus, statusStrengte, type AccountStatus } from './status.ts';
 
 describe('mapUnipileStatus', () => {
   const bekend: Array<[string, AccountStatus]> = [
@@ -36,5 +36,15 @@ describe('mapUnipileStatus', () => {
 
   it('accepteert ook UNKNOWN als expliciete waarde', () => {
     assert.equal(mapUnipileStatus('UNKNOWN'), 'UNKNOWN');
+  });
+});
+
+describe('statusStrengte (SPEC §6a regel 5)', () => {
+  it('STOPPED > ERROR > CREDENTIALS > overige', () => {
+    assert.ok(statusStrengte('STOPPED') > statusStrengte('ERROR'));
+    assert.ok(statusStrengte('ERROR') > statusStrengte('CREDENTIALS'));
+    assert.ok(statusStrengte('CREDENTIALS') > statusStrengte('OK'));
+    assert.equal(statusStrengte('RECONNECTED'), 0);
+    assert.equal(statusStrengte('PERMISSIONS'), 0);
   });
 });

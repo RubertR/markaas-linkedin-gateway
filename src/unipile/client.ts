@@ -8,6 +8,7 @@ import {
   accountCredentialsCodeUitBody,
   codeUit422Body,
   foutTypeUitBody,
+  maakAccountAuthFout,
   UnipileValidatieFout,
   VALIDATIE_400_VOOR_LINKEDIN,
   maak422Fout,
@@ -159,6 +160,12 @@ export interface WebhookAanvraag {
 
 export interface UnipileClient {
   haalAccounts(): Promise<UnipileAccount[]>;
+  /**
+   * Controle-aanroep (SPEC §6a): één `GET /api/v1/accounts?limit=1` zonder
+   * account-context. Lukt hij, dan werkt onze API-sleutel. Bij 401/403 gooit
+   * hij `UnipileGatewayAuthFout`; andere fouten (time-out, 5xx) gaan ongewijzigd door.
+   */
+  controleerGatewaySleutel(): Promise<void>;
   /** Alle webhooks van deze Unipile-omgeving, alle pagina's. */
   haalWebhooks(): Promise<UnipileWebhook[]>;
   /** Zonder `account_ids`: geldt voor alle huidige én toekomstige accounts. */
@@ -237,7 +244,12 @@ export function maakUnipileClient(opties: UnipileOpties): UnipileClient {
       );
     }
     if (res.status === 401 || res.status === 403) {
-      throw new UnipileGatewayAuthFout(endpoint, res.status);
+      // Zonder account-context kan het alleen onze sleutel zijn (SPEC §6a).
+      if (!ctx.accountId) throw new UnipileGatewayAuthFout(endpoint, res.status);
+      // Met account-context beslist het `type` in de body: sessie, beperking,
+      // ontbrekende functie, of onbekend (dan volgt een controle-aanroep).
+      const raw = await res.text();
+      throw maakAccountAuthFout(res.status, foutTypeUitBody(raw), endpoint, ctx.accountId);
     }
     if (res.status >= 400 && res.status < 500) {
       const raw = await res.text();
@@ -282,6 +294,12 @@ export function maakUnipileClient(opties: UnipileOpties): UnipileClient {
       const res = await verzoek('GET', '/api/v1/accounts');
       const body = await ontleed<{ items?: UnipileAccount[] }>(res, '/api/v1/accounts');
       return body.items ?? [];
+    },
+
+    async controleerGatewaySleutel() {
+      const pad = '/api/v1/accounts?limit=1';
+      const res = await verzoek('GET', pad);
+      await ontleed(res, pad);
     },
 
     async haalWebhooks() {

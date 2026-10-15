@@ -705,6 +705,192 @@ describe('klanten en koppellinks (SPEC §14.2)', () => {
 });
 
 
+describe('account toevoegen aan een bestaande klant (SPEC §14.2a)', () => {
+  const PAD = '/admin/klanten/markaas-ui/accounts';
+
+  function tokenUit(html: string): string {
+    const m = html.match(/https:\/\/gateway\.test\/koppelen\/([A-Za-z0-9_-]{43})/);
+    if (!m) throw new Error('geen koppellink in pagina');
+    return m[1]!;
+  }
+
+  function velden(csrf: string, extra: Record<string, string> = {}): Record<string, string> {
+    return {
+      csrf,
+      eigenaarNaam: 'Tom Baker',
+      eigenaarEmail: 'tom@acme.co.uk',
+      abonnement: 'salesnav_advanced',
+      tijdzone: 'Europe/London',
+      andereTijdzone: '',
+      ...extra,
+    };
+  }
+
+  async function detail(jar: CookieJar): Promise<{ html: string; csrf: string }> {
+    const r = await get('/admin/klanten/markaas-ui', jar);
+    assert.equal(r.status, 200);
+    const html = await r.text();
+    return { html, csrf: csrfUit(html) };
+  }
+
+  async function accountsVanKlant(): Promise<Array<{ eigenaar_naam: string; tijdzone: string }>> {
+    return await db.query<{ eigenaar_naam: string; tijdzone: string }>(
+      `select a.eigenaar_naam, a.tijdzone from accounts a join clients c on c.id = a.client_id
+       where c.slug = 'markaas-ui' order by a.aangemaakt_op, a.id`,
+    );
+  }
+
+  it('klantpagina toont per account eigenaar, abonnement, tijdzone en status, en het formulier', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    const { html } = await detail(jar);
+    assert.match(html, /Account toevoegen/);
+    assert.match(html, /<th>Abonnement<\/th>/);
+    assert.match(html, /<th>Tijdzone<\/th>/);
+    assert.match(html, /salesnav_core/);
+    assert.match(html, /<td>Europe\/Amsterdam<\/td>/);
+    assert.match(html, /werkt/);
+    assert.match(html, new RegExp(`action="${PAD}"`));
+    for (const tz of ['Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Brussels']) {
+      assert.match(html, new RegExp(`<option value="${tz}">`));
+    }
+    assert.match(html, /<option value="Europe\/Amsterdam" selected>/);
+    assert.match(html, /<option value="anders">/);
+    assert.match(html, /name="andereTijdzone"/);
+    // Gekoppeld account: geen knop voor een nieuwe koppellink.
+    assert.doesNotMatch(html, /Nieuwe koppellink/);
+  });
+
+  it('vereist een sessie en CSRF; zonder geldig token 403 en niets aangemaakt', async () => {
+    const zonderSessie = await post(PAD, velden('x'), nieuweJar());
+    assert.equal(zonderSessie.status, 303);
+    assert.equal(zonderSessie.headers.get('location'), '/admin/login');
+    const jar = nieuweJar();
+    await logIn(jar);
+    const r = await post(PAD, velden('fout-token'), jar);
+    assert.equal(r.status, 403);
+    assert.equal((await accountsVanKlant()).length, 1);
+  });
+
+  it('succes: toont de koppellink eenmalig; het account staat met tijdzone op de klantpagina', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    const { csrf } = await detail(jar);
+    const r = await post(PAD, velden(csrf), jar);
+    assert.equal(r.status, 200);
+    assert.match(r.headers.get('cache-control') ?? '', /no-store/);
+    const html = await r.text();
+    assert.match(html, /Koppellink gemaakt voor Tom Baker \(tom@acme\.co\.uk\), Markaas/);
+    assert.match(html, /Beste Tom/);
+    const token = tokenUit(html);
+    const u = await vindGeldigeUitnodiging(db, token, vasteKlok(NU));
+    assert.ok(u);
+    const [acc] = await db.query<{ status: string; tijdzone: string; abonnement: string; opbouw_factor: string }>(
+      'select status, tijdzone, abonnement::text as abonnement, opbouw_factor::text from accounts where id = $1',
+      [u!.accountId],
+    );
+    assert.deepEqual(acc, {
+      status: 'CONNECTING',
+      tijdzone: 'Europe/London',
+      abonnement: 'salesnav_advanced',
+      opbouw_factor: '0.50',
+    });
+
+    const na = (await detail(jar)).html;
+    assert.match(na, /Tom Baker/);
+    assert.match(na, /<td>Europe\/London<\/td>/);
+    assert.match(na, /wacht op koppelen/);
+    assert.match(na, new RegExp(`action="/admin/klanten/${u!.accountId}/koppellink"`));
+    assert.match(na, /Nieuwe koppellink/);
+    assert.ok(!na.includes(token), 'token mag niet op de klantpagina staan');
+  });
+
+  it('"Andere" met een eigen IANA-naam wordt opgeslagen', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    const { csrf } = await detail(jar);
+    const r = await post(PAD, velden(csrf, { tijdzone: 'anders', andereTijdzone: 'America/New_York' }), jar);
+    assert.equal(r.status, 200);
+    assert.equal((await accountsVanKlant())[1]?.tijdzone, 'America/New_York');
+  });
+
+  it('fout: formulier opnieuw met NL-melding (400), ingevulde waarden blijven staan, niets aangemaakt', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    const { csrf } = await detail(jar);
+
+    const ongeldig = await post(PAD, velden(csrf, { tijdzone: 'anders', andereTijdzone: 'Europe/Londen<b>' }), jar);
+    assert.equal(ongeldig.status, 400);
+    const html = await ongeldig.text();
+    assert.match(html, /geen geldige tijdzone/);
+    assert.match(html, /value="tom@acme\.co\.uk"/);
+    assert.match(html, /value="Europe\/Londen&lt;b&gt;"/);
+    assert.match(html, /<option value="anders" selected>/);
+    assert.match(html, /<details[^>]*open/);
+    assert.doesNotMatch(html, /<b>/);
+
+    const leegAnders = await post(PAD, velden(csrf, { tijdzone: 'anders' }), jar);
+    assert.equal(leegAnders.status, 400);
+    assert.match(await leegAnders.text(), /Vul bij &quot;Andere&quot; een tijdzone in/);
+
+    const abonnement = await post(PAD, velden(csrf, { abonnement: 'gratis' }), jar);
+    assert.equal(abonnement.status, 400);
+    assert.match(await abonnement.text(), /Onbekend LinkedIn-abonnement/);
+
+    assert.equal((await accountsVanKlant()).length, 1);
+  });
+
+  it('dubbel e-mailadres van de eigenaar binnen de klant: 400 met NL-melding', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    const { csrf } = await detail(jar);
+    assert.equal((await post(PAD, velden(csrf), jar)).status, 200);
+    const dubbel = await post(PAD, velden(csrf, { eigenaarNaam: 'Tom B.', eigenaarEmail: 'TOM@acme.co.uk' }), jar);
+    assert.equal(dubbel.status, 400);
+    assert.match(await dubbel.text(), /heeft al een account van tom@acme\.co\.uk \(Tom Baker\)/);
+    assert.equal((await accountsVanKlant()).length, 2);
+  });
+
+  it('onbekende klant: 404', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    const { csrf } = await detail(jar);
+    const r = await post('/admin/klanten/bestaat-niet/accounts', velden(csrf), jar);
+    assert.equal(r.status, 404);
+  });
+
+  it('formulier Nieuwe klant heeft het tijdzoneveld; Europe/London wordt bewaard, onzin geweigerd', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    const form = await (await get('/admin/klanten/nieuw', jar)).text();
+    assert.match(form, /<option value="Europe\/Amsterdam" selected>/);
+    assert.match(form, /name="andereTijdzone"/);
+    const basis = {
+      csrf: csrfUit(form),
+      klantNaam: 'Gamma Ltd',
+      slug: 'gamma',
+      eigenaarNaam: 'Gail',
+      eigenaarEmail: 'gail@gamma.co.uk',
+      abonnement: 'premium_business',
+      abonnementVereist: 'ja',
+      andereTijdzone: '',
+    };
+    const fout = await post('/admin/klanten/nieuw', { ...basis, tijdzone: 'anders', andereTijdzone: 'Nergens' }, jar);
+    assert.equal(fout.status, 400);
+    const foutHtml = await fout.text();
+    assert.match(foutHtml, /"Nergens" is geen geldige tijdzone|&quot;Nergens&quot; is geen geldige tijdzone/);
+    assert.match(foutHtml, /value="Nergens"/);
+    assert.equal(await vindClientBijSlug(db, 'gamma'), null);
+
+    const ok = await post('/admin/klanten/nieuw', { ...basis, tijdzone: 'Europe/London' }, jar);
+    assert.equal(ok.status, 200);
+    const [acc] = await db.query<{ tijdzone: string }>(
+      "select a.tijdzone from accounts a join clients c on c.id = a.client_id where c.slug = 'gamma'",
+    );
+    assert.equal(acc?.tijdzone, 'Europe/London');
+  });
+});
+
 describe('klantgebruikers uitnodigen (SPEC §14.3)', () => {
   const KLOK = vasteKlok(NU);
 

@@ -16,8 +16,10 @@ import type { PauzeKiezer } from './pauze.ts';
  * tick over en kijkt na een nieuwe willekeurige pauze opnieuw. De budgetmotor
  * blijft per account zelf het tijdvenster bewaken; dit is een extra rem.
  *
- * Meldt de tick `gatewayGestopt` (onze Unipile-sleutel geweigerd), dan stopt
- * de lus volledig tot een herstart — Rubert moet eerst kijken.
+ * Meldt de tick `gatewayGestopt` (onze Unipile-sleutel geweigerd, ook bij de
+ * controle-aanroep uit SPEC §6a), dan stopt de lus volledig tot een herstart —
+ * Rubert moet eerst kijken. Een 401/403 die over één account gaat, stopt de lus
+ * niet: dat account gaat op CREDENTIALS/STOPPED/ERROR en de rest loopt door.
  */
 
 export interface TickUitkomst {

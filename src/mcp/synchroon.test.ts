@@ -280,3 +280,67 @@ describe('synchroon — terugboeken bij weigering vóór LinkedIn (SPEC §5.1)',
     assert.equal(Number(rijen[0]?.aantal), 1);
   });
 });
+
+describe('synchroon — 401/403 per account (SPEC §6a)', () => {
+  async function accountStatus(): Promise<string | undefined> {
+    const rijen = await db.query<{ status: string }>('select status from accounts where id = $1', [accountId]);
+    return rijen[0]?.status;
+  }
+
+  it('403 feature_not_subscribed: structurele NL-fout, account blijft OK, zoekrun telt mee', async () => {
+    fake.antwoord('POST', '/api/v1/linkedin/search', {
+      status: 403,
+      body: { status: 403, type: 'errors/feature_not_subscribed' },
+    });
+    await assert.rejects(
+      () =>
+        voerSynchroonUit(maakCtx(), {
+          accountId,
+          type: 'search',
+          payload: { api: 'sales_navigator', keywords: 'x' },
+        }),
+      (err: Error) => {
+        assert.ok(err instanceof McpSynchroonFout);
+        assert.equal(err.structureel, true);
+        assert.match(err.message, /functie zit niet in het LinkedIn-abonnement van dit account/);
+        return true;
+      },
+    );
+    assert.equal(await accountStatus(), 'OK');
+    const rijen = await db.query<{ aantal: number }>(
+      `select coalesce(sum(aantal), 0)::int as aantal from usage where account_id = $1 and type = 'search'`,
+      [accountId],
+    );
+    assert.equal(Number(rijen[0]?.aantal), 1);
+  });
+
+  it('401 expired_credentials op een profiel: account naar CREDENTIALS, NL-fout', async () => {
+    fake.antwoord('GET', /^\/api\/v1\/users\//, {
+      status: 401,
+      body: { status: 401, type: 'errors/expired_credentials' },
+    });
+    await assert.rejects(
+      () => voerSynchroonUit(maakCtx(), { accountId, type: 'profile', payload: { identifier: 'jan' } }),
+      (err: Error) => {
+        assert.ok(err instanceof McpSynchroonFout);
+        assert.match(err.message, /sessie/i);
+        return true;
+      },
+    );
+    assert.equal(await accountStatus(), 'CREDENTIALS');
+  });
+
+  it('401 zonder type, controle-aanroep geslaagd: account naar ERROR, geen gateway-stop', async () => {
+    fake.antwoord('GET', /^\/api\/v1\/users\//, { status: 401, body: {} });
+    fake.antwoord('GET', '/api/v1/accounts', { status: 200, body: { items: [] } });
+    await assert.rejects(
+      () => voerSynchroonUit(maakCtx(), { accountId, type: 'profile', payload: { identifier: 'jan' } }),
+      (err: Error) => {
+        assert.ok(err instanceof McpSynchroonFout);
+        assert.match(err.message, /controle-aanroep geslaagd/);
+        return true;
+      },
+    );
+    assert.equal(await accountStatus(), 'ERROR');
+  });
+});
