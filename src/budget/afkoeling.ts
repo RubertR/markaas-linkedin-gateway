@@ -25,6 +25,33 @@ export async function startAfkoeling(
   );
 }
 
+/**
+ * Start alleen de opbouwperiode van na een afkoeling, zonder pauze ervoor.
+ * Gebruikt bij het vrijgeven van een account dat op `STOPPED` stond
+ * (SPEC §6b punt 3): opbouw_factor naar `opbouw_factor_na` voor
+ * `opbouw_periode_dagen`.
+ *
+ * Hetzelfde mechanisme als na een afkoeling: de opbouwperiode hangt aan
+ * `afkoeling_tot` (zie `mogelijkeOpbouwNaAfkoeling`). Daarom zetten we
+ * `afkoeling_tot` op nu — de afkoeling is dus direct voorbij (`inAfkoeling`
+ * is strikt), maar de verlaagde opbouw geldt de volgende dagen. Een lopende
+ * afkoeling die verder in de toekomst ligt, blijft staan.
+ */
+export async function startOpbouwPeriode(
+  db: Backend,
+  accountId: string,
+  nu: Date,
+  afkoeling: Afkoeling,
+): Promise<void> {
+  await db.query(
+    `update accounts
+     set afkoeling_tot = greatest(coalesce(afkoeling_tot, $2::timestamptz), $2::timestamptz),
+         opbouw_factor = $3
+     where id = $1`,
+    [accountId, nu.toISOString(), afkoeling.opbouw_factor_na],
+  );
+}
+
 export interface AfkoelingState {
   afkoelingTot: Date | null;
 }

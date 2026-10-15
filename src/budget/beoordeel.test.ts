@@ -73,28 +73,36 @@ describe('beoordeel — controle 1: account gezond', () => {
     assert.equal(uitslag.status, 'toegestaan');
   });
 
-  it('CREDENTIALS → weigering met NL-reden over sessie', async () => {
-    const invoer = await invoerVoor({ status: 'CREDENTIALS' });
-    const uitslag = beoordeel(invoer);
+  // SPEC §6b punt 1: account op pauze → wachtrij (geparkeerd), niet weigeren.
+  for (const [status, patroon] of [
+    ['CREDENTIALS', /sessie|gekoppeld/i],
+    ['ERROR', /ERROR|fout/i],
+    ['STOPPED', /gestopt/i],
+  ] as const) {
+    it(`${status} → wachtrij (accountpauze, niet structureel) met NL-reden`, async () => {
+      for (const actieType of ['invite', 'message', 'inmail', 'search', 'profile'] as const) {
+        const uitslag = geblokkeerd(beoordeel(await invoerVoor({ status, actieType })));
+        assert.equal(uitslag.status, 'wachtrij', actieType);
+        assert.equal(uitslag.controle, 'account_gezond');
+        assert.equal(uitslag.structureel, false);
+        assert.equal(uitslag.status === 'wachtrij' && uitslag.accountPauze, true);
+        assert.match(uitslag.reden, patroon);
+        assert.match(uitslag.reden, /geparkeerd/);
+      }
+    });
+  }
+
+  it('PERMISSIONS → blijft weigering (SPEC §6b)', async () => {
+    const uitslag = geblokkeerd(beoordeel(await invoerVoor({ status: 'PERMISSIONS' })));
     assert.equal(uitslag.status, 'weigering');
     assert.equal(uitslag.controle, 'account_gezond');
-    assert.match(uitslag.reden!, /sessie|koppelen|credentials/i);
   });
 
-  it('ERROR → weigering', async () => {
-    const invoer = await invoerVoor({ status: 'ERROR' });
-    const uitslag = beoordeel(invoer);
-    assert.equal(uitslag.status, 'weigering');
+  it('accountpauze gaat vóór de betaalpoort (controle 1 vóór 1a)', async () => {
+    const uitslag = geblokkeerd(
+      beoordeel(await invoerVoor({ status: 'STOPPED', betaalpoort: { vereist: true, status: null } })),
+    );
     assert.equal(uitslag.controle, 'account_gezond');
-    assert.match(uitslag.reden!, /ERROR|fout/i);
-  });
-
-  it('STOPPED → weigering', async () => {
-    const invoer = await invoerVoor({ status: 'STOPPED' });
-    const uitslag = beoordeel(invoer);
-    assert.equal(uitslag.status, 'weigering');
-    assert.equal(uitslag.controle, 'account_gezond');
-    assert.match(uitslag.reden!, /gestopt/i);
   });
 
   it('CONNECTING → wachtrij (tijdelijk)', async () => {
@@ -445,7 +453,7 @@ describe('beoordeel — volgorde van controles', () => {
 
 describe('beoordeel — Nederlandse redenen en tijdelijk/structureel', () => {
   it('weigeringen zijn structureel (hernieuwde aanbieding helpt niet)', async () => {
-    const invoer = await invoerVoor({ status: 'STOPPED' });
+    const invoer = await invoerVoor({ status: 'PERMISSIONS' });
     const uitslag = beoordeel(invoer);
     assert.equal(uitslag.status, 'weigering');
     assert.equal(uitslag.structureel, true);

@@ -344,3 +344,59 @@ describe('synchroon — 401/403 per account (SPEC §6a)', () => {
     assert.equal(await accountStatus(), 'ERROR');
   });
 });
+
+describe('synchroon — account op pauze (SPEC §6b)', () => {
+  async function tellen(): Promise<{ acties: number; usage: number }> {
+    const [a] = await db.query<{ n: number }>('select count(*)::int as n from actions where account_id = $1', [accountId]);
+    const [u] = await db.query<{ n: number }>(
+      'select coalesce(sum(aantal), 0)::int as n from usage where account_id = $1',
+      [accountId],
+    );
+    return { acties: Number(a?.n), usage: Number(u?.n) };
+  }
+
+  for (const status of ['CREDENTIALS', 'ERROR', 'STOPPED'] as const) {
+    for (const type of ['search', 'profile'] as const) {
+      it(`${type} op een account met ${status}: NL-weigering, geen Unipile-aanroep, geen budget, geen actie`, async () => {
+        await db.query(`update accounts set status = $2::account_status where id = $1`, [accountId, status]);
+        fake.antwoord('POST', '/api/v1/linkedin/search', { status: 200, body: { items: [] } });
+        fake.antwoord('GET', /^\/api\/v1\/users\//, { status: 200, body: { provider_id: 'ACo-x' } });
+        await assert.rejects(
+          () =>
+            voerSynchroonUit(maakCtx(), {
+              accountId,
+              type,
+              payload: type === 'search' ? { keywords: 'x' } : { identifier: 'jan' },
+            }),
+          (err: Error) => {
+            assert.ok(err instanceof McpSynchroonFout);
+            const f = err as McpSynchroonFout;
+            assert.equal(f.oorzaak, 'weigering');
+            assert.equal(f.structureel, true);
+            assert.equal(f.actieId, null);
+            assert.match(err.message, /geweigerd: dit account staat op pauze/);
+            assert.match(err.message, new RegExp(status));
+            assert.match(err.message, /niet geparkeerd/);
+            assert.match(err.message, /geen budget verbruikt/);
+            return true;
+          },
+        );
+        assert.equal(fake.aanroepen.length, 0, 'Unipile mag niet aangeroepen zijn');
+        assert.deepEqual(await tellen(), { acties: 0, usage: 0 });
+      });
+    }
+  }
+
+  it('401 tijdens de aanroep zet het account op pauze: de actie wordt rejected, niet queued', async () => {
+    fake.antwoord('POST', '/api/v1/linkedin/search', {
+      status: 401,
+      body: { status: 401, type: 'errors/disconnected_account' },
+    });
+    await assert.rejects(() => voerSynchroonUit(maakCtx(), { accountId, type: 'search', payload: { keywords: 'x' } }));
+    const rijen = await db.query<{ status: string }>(
+      'select status::text as status from actions where account_id = $1',
+      [accountId],
+    );
+    assert.deepEqual(rijen.map((r) => r.status), ['rejected']);
+  });
+});

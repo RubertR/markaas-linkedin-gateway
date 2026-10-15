@@ -13,6 +13,7 @@ import {
 
 import { maakClient } from './clients.ts';
 import { registreerAccount, vindAccount } from './accounts.ts';
+import { zetAccountStatusDoorGateway } from './accountauth.ts';
 import {
   KoppelflowFout,
   maakCreateLink,
@@ -327,5 +328,68 @@ describe('koppelflow — foutpad UnipileTijdelijkeFout expliciet', () => {
       assert.ok(err instanceof KoppelflowFout);
       assert.ok((err as KoppelflowFout).origineel instanceof UnipileTimeoutFout);
     }
+  });
+});
+
+describe('RECONNECTED heft alleen sessieproblemen op (SPEC §6b punt 2)', () => {
+  const NU = new Date('2026-10-06T10:00:00Z');
+
+  beforeEach(async () => {
+    await db.query("update accounts set unipile_account_id = 'unipile-p', status = 'OK' where id = $1", [accountId]);
+  });
+
+  async function callback(nu = new Date('2026-10-06T10:30:00Z')) {
+    return await verwerkKoppelCallback(db, { status: 'RECONNECTED', account_id: 'unipile-p' }, { nu });
+  }
+
+  async function gestoptEvents(): Promise<number> {
+    const rijen = await db.query(
+      `select 1 from events where bron = 'gateway' and type = 'account_status' and account_id = $1
+         and payload ->> 'reden' = 'opnieuw gekoppeld, maar nog gestopt door beperking'`,
+      [accountId],
+    );
+    return rijen.length;
+  }
+
+  it('heft CREDENTIALS van de gateway op', async () => {
+    await zetAccountStatusDoorGateway(db, accountId, 'CREDENTIALS', { reden: 'sessie' }, NU);
+    assert.equal((await callback()).verwerkt, true);
+    assert.equal((await vindAccount(db, accountId))?.status, 'OK');
+  });
+
+  it('heft een §6a-ERROR (onbekende 401/403, gezet door de gateway) op', async () => {
+    await zetAccountStatusDoorGateway(
+      db,
+      accountId,
+      'ERROR',
+      { reden: 'onbekend', httpStatus: 401, endpoint: '/api/v1/users/invite' },
+      NU,
+    );
+    assert.equal((await callback()).verwerkt, true);
+    assert.equal((await vindAccount(db, accountId))?.status, 'OK');
+    assert.equal(await gestoptEvents(), 0);
+  });
+
+  it('heft een STOPPED van de gateway (account_restricted) niet op; event "opnieuw gekoppeld, maar nog gestopt door beperking"', async () => {
+    await zetAccountStatusDoorGateway(
+      db,
+      accountId,
+      'STOPPED',
+      { reden: 'beperkt', httpStatus: 403, foutType: 'errors/account_restricted', endpoint: '/api/v1/users/invite' },
+      NU,
+    );
+    const uit = await callback();
+    assert.equal(uit.verwerkt, true);
+    assert.match(uit.reden ?? '', /opnieuw gekoppeld, maar nog gestopt door beperking/);
+    const acc = await vindAccount(db, accountId);
+    assert.equal(acc?.status, 'STOPPED');
+    assert.equal(acc?.unipileAccountId, 'unipile-p', 'de koppeling zelf blijft bewaard');
+    assert.equal(await gestoptEvents(), 1);
+  });
+
+  it('een STOPPED die Unipile zelf meldde (geen gateway-event), heft RECONNECTED wel op', async () => {
+    await db.query("update accounts set status = 'STOPPED', status_sinds = now() where id = $1", [accountId]);
+    await callback();
+    assert.equal((await vindAccount(db, accountId))?.status, 'OK');
   });
 });

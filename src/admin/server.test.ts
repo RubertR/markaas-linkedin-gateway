@@ -1135,3 +1135,165 @@ describe('aantal in Stripe vanuit de admin (SPEC §14.4)', () => {
     assert.match(na, /Stripe-serverfout \(HTTP 500\)/);
   });
 });
+
+describe('account vrijgeven (SPEC §6b punt 3)', () => {
+  const PAD = () => `/admin/klanten/markaas-ui/accounts/${accountId}/vrijgeven`;
+
+  async function zetStatus(status: string, opbouw = 1.0): Promise<void> {
+    await db.query(
+      `update accounts set status = $2::account_status, opbouw_factor = $3, afkoeling_tot = null where id = $1`,
+      [accountId, status, opbouw],
+    );
+  }
+
+  async function account(): Promise<{ status: string; opbouw: number; afkoeling: Date | null }> {
+    const [r] = await db.query<{ status: string; opbouw_factor: string | number; afkoeling_tot: Date | string | null }>(
+      'select status::text as status, opbouw_factor, afkoeling_tot from accounts where id = $1',
+      [accountId],
+    );
+    return {
+      status: r!.status,
+      opbouw: Number(r!.opbouw_factor),
+      afkoeling: r!.afkoeling_tot === null ? null : new Date(r!.afkoeling_tot),
+    };
+  }
+
+  async function detailHtml(jar: CookieJar): Promise<string> {
+    const r = await get('/admin/klanten/markaas-ui', jar);
+    assert.equal(r.status, 200);
+    return await r.text();
+  }
+
+  it('knop "Account vrijgeven" met verplichte reden staat er bij ERROR en STOPPED', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    for (const status of ['ERROR', 'STOPPED']) {
+      await zetStatus(status);
+      const html = await detailHtml(jar);
+      assert.match(html, new RegExp(`action="/admin/klanten/markaas-ui/accounts/${accountId}/vrijgeven"`), status);
+      assert.match(html, /Account vrijgeven/);
+      assert.match(html, /name="reden" required/);
+    }
+  });
+
+  it('de knop staat er niet bij CREDENTIALS of OK', async () => {
+    const jar = nieuweJar();
+    await logIn(jar);
+    for (const status of ['CREDENTIALS', 'OK']) {
+      await zetStatus(status);
+      const html = await detailHtml(jar);
+      assert.doesNotMatch(html, /vrijgeven"/, status);
+      assert.doesNotMatch(html, /Account vrijgeven/, status);
+    }
+  });
+
+  it('een POST op een CREDENTIALS-account geeft niets vrij (NL-melding)', async () => {
+    await zetStatus('CREDENTIALS');
+    const jar = nieuweJar();
+    await logIn(jar);
+    const csrf = csrfUit(await detailHtml(jar));
+    const r = await post(PAD(), { csrf, reden: 'toch proberen' }, jar);
+    assert.equal(r.status, 400);
+    assert.match(await r.text(), /opnieuw inloggen|reconnect-link/);
+    assert.equal((await account()).status, 'CREDENTIALS');
+  });
+
+  it('zonder of met fout CSRF-token: 403 en het account blijft STOPPED', async () => {
+    await zetStatus('STOPPED');
+    const jar = nieuweJar();
+    await logIn(jar);
+    assert.equal((await post(PAD(), { reden: 'gecontroleerd' }, jar)).status, 403);
+    assert.equal((await post(PAD(), { csrf: 'fout', reden: 'gecontroleerd' }, jar)).status, 403);
+    assert.equal((await account()).status, 'STOPPED');
+    // Zonder sessie: naar login.
+    const zonder = await post(PAD(), { csrf: 'x', reden: 'gecontroleerd' }, nieuweJar());
+    assert.equal(zonder.status, 303);
+    assert.equal(zonder.headers.get('location'), '/admin/login');
+    assert.equal((await account()).status, 'STOPPED');
+  });
+
+  it('vrijgeven vereist een reden: leeg of alleen spaties → 400, account ongewijzigd', async () => {
+    await zetStatus('STOPPED');
+    const jar = nieuweJar();
+    await logIn(jar);
+    const csrf = csrfUit(await detailHtml(jar));
+    for (const reden of ['', '   ']) {
+      const r = await post(PAD(), { csrf, reden }, jar);
+      assert.equal(r.status, 400);
+      assert.match(await r.text(), /Vul een reden in/);
+    }
+    assert.equal((await account()).status, 'STOPPED');
+    const events = await db.query(`select 1 from events where type = 'account_status'`);
+    assert.equal(events.length, 0);
+  });
+
+  it('STOPPED vrijgeven: OK, opbouw_factor naar afkoeling.opbouw_factor_na voor de opbouwperiode, event met reden en rubert', async () => {
+    await zetStatus('STOPPED', 1.0);
+    const jar = nieuweJar();
+    await logIn(jar);
+    const csrf = csrfUit(await detailHtml(jar));
+    const r = await post(
+      PAD(),
+      { csrf, reden: 'eigenaar heeft in LinkedIn gecontroleerd, beperking opgeheven' },
+      jar,
+    );
+    assert.equal(r.status, 303);
+    assert.equal(r.headers.get('location'), '/admin/klanten/markaas-ui');
+    const na = await account();
+    assert.equal(na.status, 'OK');
+    assert.equal(na.opbouw, limieten.afkoeling.opbouw_factor_na);
+    // Zelfde mechanisme als na afkoeling: de periode hangt aan afkoeling_tot (= nu).
+    assert.equal(na.afkoeling?.toISOString(), NU.toISOString());
+
+    const [e] = await db.query<{ bron: string; payload: Record<string, unknown> }>(
+      `select bron::text as bron, payload from events where type = 'account_status' and account_id = $1`,
+      [accountId],
+    );
+    assert.equal(e?.bron, 'gateway');
+    assert.equal(e?.payload['status'], 'OK');
+    assert.equal(e?.payload['vorige_status'], 'STOPPED');
+    assert.equal(e?.payload['door'], 'rubert');
+    assert.match(String(e?.payload['reden']), /beperking opgeheven/);
+
+    const html = await detailHtml(jar);
+    assert.match(html, /is vrijgegeven \(was STOPPED\)/);
+    assert.doesNotMatch(html, /Account vrijgeven/);
+  });
+
+  it('ERROR vrijgeven: OK, opbouw_factor blijft staan', async () => {
+    await zetStatus('ERROR', 0.7);
+    const jar = nieuweJar();
+    await logIn(jar);
+    const csrf = csrfUit(await detailHtml(jar));
+    const r = await post(PAD(), { csrf, reden: 'oorzaak gevonden bij Unipile' }, jar);
+    assert.equal(r.status, 303);
+    const na = await account();
+    assert.equal(na.status, 'OK');
+    assert.equal(na.opbouw, 0.7);
+    assert.equal(na.afkoeling, null);
+  });
+
+  it('account van een andere klant: 404, niets vrijgegeven', async () => {
+    const ander = await maakClient(db, { naam: 'Ander', slug: 'ander' });
+    const acc = await registreerAccount(db, { clientId: ander.id, eigenaarNaam: 'Eva', abonnement: 'free' });
+    await db.query(`update accounts set status = 'STOPPED' where id = $1`, [acc.id]);
+    const jar = nieuweJar();
+    await logIn(jar);
+    const csrf = csrfUit(await detailHtml(jar));
+    const r = await post(`/admin/klanten/markaas-ui/accounts/${acc.id}/vrijgeven`, { csrf, reden: 'x' }, jar);
+    assert.equal(r.status, 404);
+    const [rij] = await db.query<{ status: string }>('select status::text as status from accounts where id = $1', [acc.id]);
+    assert.equal(rij?.status, 'STOPPED');
+  });
+
+  it('invoer wordt ge-escaped in de HTML (naam in de melding)', async () => {
+    await db.query(`update accounts set eigenaar_naam = '<script>x</script>', status = 'STOPPED' where id = $1`, [accountId]);
+    const jar = nieuweJar();
+    await logIn(jar);
+    const csrf = csrfUit(await detailHtml(jar));
+    await post(PAD(), { csrf, reden: '<b>gecontroleerd</b>' }, jar);
+    const html = await detailHtml(jar);
+    assert.doesNotMatch(html, /<script>x<\/script>/);
+    assert.match(html, /&lt;script&gt;x&lt;\/script&gt;/);
+  });
+});

@@ -7,7 +7,7 @@ import type { GebruikerRegel } from '../portaal/gebruikers.ts';
 import { ABONNEMENTEN } from '../register/registreer.ts';
 import { STANDAARD_TIJDZONE, TIJDZONE_KEUZES } from '../register/tijdzone.ts';
 
-import type { KlantRegel, UitnodigingStand } from './klanten.ts';
+import type { AccountRegel, KlantRegel, UitnodigingStand } from './klanten.ts';
 import type {
   DraftWeergave,
   OnzekerWeergave,
@@ -664,6 +664,26 @@ export interface KlantDetailViewOpties {
   profielStatus?: string;
 }
 
+/**
+ * Knop "Account vrijgeven" (SPEC §6b punt 3): alleen bij `ERROR` of
+ * `STOPPED`, met een verplichte reden. Niet bij `CREDENTIALS`: dat lost zich op
+ * door opnieuw te koppelen.
+ */
+function vrijgeefFormulier(basis: string, a: AccountRegel, csrfToken: string): string {
+  if (a.status !== 'ERROR' && a.status !== 'STOPPED') return '';
+  const opbouw =
+    a.status === 'STOPPED'
+      ? '<br><small>Na vrijgeven start de opbouw opnieuw op een lager niveau, net als na een afkoeling.</small>'
+      : '';
+  return `<form method="post" action="${h(basis)}/accounts/${h(encodeURIComponent(a.id))}/vrijgeven" class="formulier vrijgeven" autocomplete="off">
+          <input type="hidden" name="csrf" value="${h(csrfToken)}">
+          <label>Reden voor vrijgeven
+            <input type="text" name="reden" required maxlength="500" placeholder="bijv. eigenaar heeft in LinkedIn gecontroleerd, beperking opgeheven">
+          </label>
+          <button type="submit">Account vrijgeven</button>${opbouw}
+        </form>`;
+}
+
 export function klantDetailView(o: KlantDetailViewOpties): string {
   const k = o.klant;
   const basis = `/admin/klanten/${encodeURIComponent(k.slug)}`;
@@ -682,7 +702,7 @@ export function klantDetailView(o: KlantDetailViewOpties): string {
       <td>${a.gekoppeld ? 'ja' : `nee<br><small>${h(uitnodigingTekst(a.uitnodiging, a.uitnodigingVerlooptOp))}</small>`}</td>
       <td>${
         a.gekoppeld
-          ? ''
+          ? vrijgeefFormulier(basis, a, o.csrfToken)
           : `<form method="post" action="/admin/klanten/${h(a.id)}/koppellink">
           <input type="hidden" name="csrf" value="${h(o.csrfToken)}">
           <button type="submit" class="secundair">Nieuwe koppellink</button>

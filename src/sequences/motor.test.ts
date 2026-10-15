@@ -516,6 +516,40 @@ describe('verwerkSequentieTick', () => {
     assert.equal(Number(rijen[0]?.aantal), 0);
   });
 
+  for (const status of ['ERROR', 'STOPPED'] as const) {
+    it(`slaat sequenties over wanneer het account ${status} heeft (SPEC §6b, §8a.4)`, async () => {
+      const uit = await startSequentie(db, { accountId, lead: basisLead(), teksten: basisTeksten() });
+      await db.query(
+        `update sequences
+           set status = 'geaccepteerd', stap = 1, volgende_actie_op = now() - interval '1 hour'
+         where id = $1`,
+        [uit.sequentie.id],
+      );
+      await werkAccountStatusBij(db, accountId, status);
+      const r = await verwerkSequentieTick({ db, klok: vasteKlok(new Date()), limieten, werkdagen: vasteWerkdagen(6) });
+      assert.deepEqual(r.stap2Aangemaakt, []);
+      const rijen = await db.query<{ aantal: string }>(
+        `select count(*)::text as aantal from actions where sequence_id = $1 and sequence_stap = 2`,
+        [uit.sequentie.id],
+      );
+      assert.equal(Number(rijen[0]?.aantal), 0);
+      // De sequentie zelf loopt door (wordt niet gestopt).
+      const [seq] = await db.query<{ status: string }>('select status from sequences where id = $1', [uit.sequentie.id]);
+      assert.equal(seq?.status, 'geaccepteerd');
+    });
+  }
+
+  it('21-dagen-stop blijft gelden op een account met pauze (SPEC §6b)', async () => {
+    const uit = await startSequentie(db, { accountId, lead: basisLead(), teksten: basisTeksten() });
+    await db.query(
+      `update sequences set aangemaakt_op = now() - interval '22 days' where id = $1`,
+      [uit.sequentie.id],
+    );
+    await werkAccountStatusBij(db, accountId, 'CREDENTIALS');
+    const r = await verwerkSequentieTick({ db, klok: vasteKlok(new Date()), limieten, werkdagen: vasteWerkdagen(6) });
+    assert.deepEqual(r.verlopen, [uit.sequentie.id]);
+  });
+
   describe('gesprek voor stap 2 en 3', () => {
     async function geaccepteerdeSequentie() {
       const uit = await startSequentie(db, { accountId, lead: basisLead(), teksten: basisTeksten() });

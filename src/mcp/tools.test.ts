@@ -426,16 +426,38 @@ describe('get_profile', () => {
 
   it('geeft een NL-fout wanneer de budgetmotor weigert', async () => {
     await db.query(
+      `update accounts set status = 'PERMISSIONS'::account_status where id = $1`,
+      [accountId],
+    );
+    await assert.rejects(
+      () => voerTool(deps, 'get_profile', { accountId, identifier: 'rubert' }),
+      (err: Error) => {
+        assert.match(err.message, /Geweigerd — .*permissies/);
+        return true;
+      },
+    );
+  });
+
+  it('account op pauze (CREDENTIALS): directe NL-weigering, geen actie, geen Unipile-aanroep (SPEC §6b)', async () => {
+    await db.query(
       `update accounts set status = 'CREDENTIALS'::account_status where id = $1`,
       [accountId],
     );
     await assert.rejects(
       () => voerTool(deps, 'get_profile', { accountId, identifier: 'rubert' }),
       (err: Error) => {
-        assert.match(err.message, /opnieuw koppelen/);
+        assert.ok(err instanceof McpSynchroonFout);
+        assert.equal((err as McpSynchroonFout).oorzaak, 'weigering');
+        assert.match(err.message, /pauze.*opnieuw gekoppeld/);
         return true;
       },
     );
+    const rijen = await db.query<{ aantal: number }>(
+      `select count(*)::int as aantal from actions where account_id = $1`,
+      [accountId],
+    );
+    assert.equal(Number(rijen[0]?.aantal), 0);
+    assert.equal(fake.aanroepen.length, 0);
   });
 });
 

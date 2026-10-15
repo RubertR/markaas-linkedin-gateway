@@ -355,7 +355,8 @@ const STAND_TEKST: Record<AccountStand, { label: string; klasse: string; uitleg:
   storing: {
     label: 'Storing',
     klasse: 'let-op',
-    uitleg: 'Er is een storing met dit account. MARKaaS kijkt ernaar.',
+    uitleg:
+      'Er is een storing met dit account (bijvoorbeeld een beperking door LinkedIn). Tot die tijd wordt niets verstuurd. Neem contact op met MARKaaS.',
   },
 };
 

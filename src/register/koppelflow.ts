@@ -12,6 +12,8 @@ import {
   vindAccountBijUnipileId,
   werkAccountStatusBij,
 } from './accounts.ts';
+import { statusDoorGatewayGezet } from './accountauth.ts';
+import { herstelHeftStatusOp, meldGestoptNaKoppelen, REDEN_GESTOPT_NA_KOPPELEN } from './accountpauze.ts';
 
 export interface KoppelflowOpties {
   notifyUrl: string;
@@ -203,6 +205,19 @@ export async function verwerkKoppelCallback(
       return {
         verwerkt: false,
         reden: `Onbekend unipile_account_id "${payload.account_id}" bij RECONNECTED; event opgeslagen voor onderzoek.`,
+      };
+    }
+    // SPEC §6b punt 2: opnieuw koppelen heft alleen sessieproblemen op
+    // (CREDENTIALS, en een ERROR uit een onbekende 401/403). Een STOPPED die
+    // de gateway zette (LinkedIn beperkte het account) blijft staan tot
+    // Rubert hem vrijgeeft; de koppeling zelf is wel geldig.
+    const doorGateway =
+      account.status === 'STOPPED' ? await statusDoorGatewayGezet(db, account.id) : false;
+    if (!herstelHeftStatusOp(account.status, doorGateway)) {
+      await meldGestoptNaKoppelen(db, account.id, 'hosted_auth', nu);
+      return {
+        verwerkt: true,
+        reden: `${REDEN_GESTOPT_NA_KOPPELEN}; het account blijft STOPPED tot Rubert het in de admin vrijgeeft.`,
       };
     }
     // Alleen status naar OK. afkoeling_tot komt van een LinkedIn-waarschuwing/429

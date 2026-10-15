@@ -4,6 +4,7 @@ import type { ActieType, Limieten } from '../budget/limits.ts';
 import { reserveerEnVerbruik } from '../budget/verbruik.ts';
 import type { Beoordeling, ControleNaam } from '../budget/beoordeel.ts';
 import { vindAccount, type Account } from '../register/accounts.ts';
+import { REDEN_TE_LANG_OP_PAUZE, pauzeUitleg } from '../register/accountpauze.ts';
 import type { UnipileClient } from '../unipile/client.ts';
 
 import {
@@ -26,6 +27,9 @@ import { voerActieUit, type WorkerContext, type WorkerUitkomst } from './worker.
  * - wachtrij (tijdelijk) → actie terug in de wachtrij met reden en een
  *   nieuwe gepland_op op het vroegst toegestane moment.
  * - weigering (structureel) → actie "rejected" met reden.
+ * - wachtrij omdat het account op pauze staat (SPEC §6b) → zie
+ *   `parkeerOmAccountPauze`: 60 minuten geparkeerd, vervalt na
+ *   `account_pauze.max_parkeer_dagen`.
  *
  * Een 401/403 van Unipile stopt alleen het account waar hij over gaat (SPEC
  * §6a; de worker beslist via src/register/accountauth.ts): andere accounts
@@ -151,18 +155,31 @@ async function verwerkActie(ctx: PlannerContext, actie: Actie): Promise<PlannerD
     laatsteActieOp,
   });
 
+  if (beoordeling.status === 'wachtrij' && beoordeling.accountPauze) {
+    return await parkeerOmAccountPauze(ctx, actie, account, beoordeling);
+  }
+
+  // Niet (meer) om een accountpauze geparkeerd: het ijkpunt vervalt, zodat
+  // een latere pauze weer vanaf nul telt.
+  const wisPauze = actie.pauzeGeparkeerdSinds ? { pauzeGeparkeerdSinds: null } : {};
+
   if (beoordeling.status === 'wachtrij') {
     const geplandOp = volgendeToegestaneMoment(ctx, account, beoordeling);
     await zetActieStatus(ctx.db, actie.id, 'queued', {
       reden: beoordeling.reden,
       geplandOp,
+      ...wisPauze,
     });
     return basisDetail(actie, 'queued', beoordeling.reden);
   }
 
   if (beoordeling.status === 'weigering') {
-    await zetActieStatus(ctx.db, actie.id, 'rejected', { reden: beoordeling.reden });
+    await zetActieStatus(ctx.db, actie.id, 'rejected', { reden: beoordeling.reden, ...wisPauze });
     return basisDetail(actie, 'rejected', beoordeling.reden);
+  }
+
+  if (actie.pauzeGeparkeerdSinds) {
+    await zetActieStatus(ctx.db, actie.id, 'running', wisPauze);
   }
 
   // Toegestaan: worker voert uit.
@@ -175,6 +192,62 @@ async function verwerkActie(ctx: PlannerContext, actie: Actie): Promise<PlannerD
   };
   const uitkomst = await voerActieUit(workerCtx, actie);
   return werkDetail(actie, uitkomst);
+}
+
+/** Minuten tot een om accountpauze geparkeerde actie opnieuw wordt beoordeeld (SPEC §6b). */
+const ACCOUNT_PAUZE_WACHT_MINUTEN = 60;
+
+/**
+ * Account op pauze (SPEC §6b punt 1).
+ *
+ * - `invite`, `message`, `inmail`: blijven `queued` en worden elke 60 minuten
+ *   opnieuw beoordeeld, net als bij de betaalpoort. Is het account weer `OK`,
+ *   dan lopen ze door.
+ * - Vervallen: na `account_pauze.max_parkeer_dagen` wordt de actie
+ *   `rejected` met "account stond te lang op pauze".
+ *   **IJkpunt** is `pauze_geparkeerd_sinds`: het moment waarop de planner de
+ *   actie voor het eerst om de accountpauze parkeerde. Niet `goedgekeurd_op`
+ *   of `aangemaakt_op`: een actie die al dagen op dagbudget of de betaalpoort
+ *   wachtte, krijgt zo bij een pauze nog steeds de volle termijn, en de
+ *   termijn telt alleen tijd dat het account echt op pauze stond. Wordt de
+ *   actie daarna om een andere reden beoordeeld (account weer `OK`), dan wist
+ *   `verwerkActie` het ijkpunt; een latere pauze begint opnieuw.
+ * - `search`/`profile` in de wachtrij worden niet geparkeerd maar direct
+ *   `rejected`: een zoekopdracht die uren later vanzelf draait, heeft geen nut
+ *   (zelfde regel als de synchrone MCP-tools). Er is geen budget verbruikt.
+ */
+async function parkeerOmAccountPauze(
+  ctx: PlannerContext,
+  actie: Actie,
+  account: Account,
+  beoordeling: Extract<Beoordeling, { status: 'wachtrij' }>,
+): Promise<PlannerDetail> {
+  const nu = ctx.klok.nu();
+  if (actie.type === 'search' || actie.type === 'profile') {
+    const reden =
+      `Niet uitgevoerd: ${pauzeUitleg(account.status)}. Een ${actie.type} wordt op een account met pauze niet geparkeerd; ` +
+      'er is geen budget verbruikt. Vraag hem opnieuw aan zodra het account weer werkt.';
+    await zetActieStatus(ctx.db, actie.id, 'rejected', { reden, pauzeGeparkeerdSinds: null });
+    return basisDetail(actie, 'rejected', reden);
+  }
+
+  const sinds = actie.pauzeGeparkeerdSinds ?? nu;
+  const maxDagen = ctx.limieten.account_pauze.max_parkeer_dagen;
+  if (nu.getTime() - sinds.getTime() >= maxDagen * 86_400_000) {
+    const reden =
+      `${REDEN_TE_LANG_OP_PAUZE}: ` +
+      `de actie wachtte sinds ${sinds.toISOString()} langer dan ${maxDagen} dagen omdat ${pauzeUitleg(account.status)}. ` +
+      'De actie is vervallen zodat er geen verouderd bericht meer weggaat; keur zo nodig een nieuwe versie goed.';
+    await zetActieStatus(ctx.db, actie.id, 'rejected', { reden });
+    return basisDetail(actie, 'rejected', reden);
+  }
+
+  await zetActieStatus(ctx.db, actie.id, 'queued', {
+    reden: beoordeling.reden,
+    geplandOp: new Date(nu.getTime() + ACCOUNT_PAUZE_WACHT_MINUTEN * 60_000),
+    pauzeGeparkeerdSinds: sinds,
+  });
+  return basisDetail(actie, 'queued', beoordeling.reden);
 }
 
 function werkDetail(actie: Actie, uitkomst: WorkerUitkomst): PlannerDetail {

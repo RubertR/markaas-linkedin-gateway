@@ -5,12 +5,14 @@ import type { Backend } from '../db/backend.ts';
 import { vasteKlok } from '../budget/klok.ts';
 import { laadLimieten, type Limieten } from '../budget/limits.ts';
 import { markeerAccountGekoppeld, registreerAccount, vindAccount } from '../register/accounts.ts';
+import { zetAccountStatusDoorGateway } from '../register/accountauth.ts';
+import { verwerkKoppelCallback } from '../register/koppelflow.ts';
 import { maakClient } from '../register/clients.ts';
 import { startFakeUnipile, type FakeUnipile } from '../../test/fake-unipile/server.ts';
 import { maakUnipileClient, type UnipileClient } from '../unipile/client.ts';
 import { verseDatabaseMetMigraties } from '../../test/helpers/pglite.ts';
 
-import { keurActieGoed, maakActie, vindActie } from './acties.ts';
+import { keurActieGoed, maakActie, vindActie, zetActieStatus } from './acties.ts';
 import { vastePauze } from './pauze.ts';
 import { voerPlannerTickUit, type PlannerContext } from './planner.ts';
 
@@ -218,9 +220,9 @@ describe('planner — budget', () => {
     assert.match(na.reden!, /dagnorm|budget|dag/i);
   });
 
-  it('bij weigering (STOPPED): zet actie op "rejected"', async () => {
+  it('bij weigering (PERMISSIONS): zet actie op "rejected"', async () => {
     await db.query(
-      `update accounts set status = 'STOPPED'::account_status where id = $1`,
+      `update accounts set status = 'PERMISSIONS'::account_status where id = $1`,
       [accountId],
     );
     const actie = await maakGoedgekeurdeInvite({ accountId, providerId: 'ACo-stop' });
@@ -230,7 +232,7 @@ describe('planner — budget', () => {
     assert.equal(resultaat.details[0]?.resultaat, 'rejected');
     const na = await vindActie(db, actie.id);
     assert.equal(na?.status, 'rejected');
-    assert.match(na?.reden ?? '', /gestopt/i);
+    assert.match(na?.reden ?? '', /permissies/i);
   });
 });
 
@@ -385,5 +387,170 @@ describe('planner — betaalpoort (SPEC §14.4)', () => {
     await db.query("insert into subscriptions(client_id, status) values ($1, 'trialing')", [c!.id]);
     await voerPlannerTickUit(basisContext({ klok: vasteKlok('2026-10-06T11:05:00Z') }));
     assert.equal((await vindActie(db, actie.id))?.status, 'done');
+  });
+});
+
+describe('planner — account op pauze: wachtende acties blijven bewaard (SPEC §6b)', () => {
+  const T0 = new Date('2026-10-06T10:00:00Z');
+  const DAG = 86_400_000;
+
+  async function zetStatus(status: 'CREDENTIALS' | 'ERROR' | 'STOPPED'): Promise<void> {
+    await zetAccountStatusDoorGateway(db, accountId, status, { reden: 'test' }, T0);
+  }
+
+  async function usageTotaal(): Promise<number> {
+    const [r] = await db.query<{ n: number }>(
+      'select coalesce(sum(aantal), 0)::int as n from usage where account_id = $1',
+      [accountId],
+    );
+    return Number(r?.n);
+  }
+
+  function naarEerste(): number {
+    return fake.aanroepen.filter(
+      (a) => (a.body as { account_id?: string } | undefined)?.account_id === UNIPILE_ACCOUNT_ID,
+    ).length;
+  }
+
+  for (const status of ['CREDENTIALS', 'ERROR', 'STOPPED'] as const) {
+    it(`${status}: goedgekeurde invite, message en inmail blijven queued, 60 minuten later opnieuw, geen Unipile-aanroep, geen verbruik`, async () => {
+      await zetStatus(status);
+      for (const type of ['invite', 'message', 'inmail'] as const) {
+        await db.query('delete from actions');
+        const actie = await maakActie(db, { accountId, type, payload: { providerId: 'ACo-p', tekst: 'Hoi' } });
+        await keurActieGoed(db, actie.id, 'rubert', T0);
+        const r = await voerPlannerTickUit(basisContext());
+        assert.equal(r.details[0]?.resultaat, 'queued', `${status}/${type}`);
+        const na = await vindActie(db, actie.id);
+        assert.equal(na?.status, 'queued');
+        assert.equal(na?.goedgekeurdDoor, 'rubert');
+        assert.equal(na?.geplandOp?.toISOString(), new Date(T0.getTime() + 60 * 60_000).toISOString());
+        assert.equal(na?.pauzeGeparkeerdSinds?.toISOString(), T0.toISOString());
+        assert.match(na?.reden ?? '', /geparkeerd/);
+      }
+      assert.equal(naarEerste(), 0);
+      assert.equal(await usageTotaal(), 0);
+    });
+  }
+
+  it('CREDENTIALS: invite blijft queued en loopt door na RECONNECTED', async () => {
+    fake.antwoord('POST', '/api/v1/users/invite', {
+      status: 200,
+      body: { object: 'UserInvitationSent', invitation_id: 'inv-na-reconnect' },
+    });
+    await zetStatus('CREDENTIALS');
+    const actie = await maakGoedgekeurdeInvite({ accountId, providerId: 'ACo-wacht' });
+
+    await voerPlannerTickUit(basisContext());
+    assert.equal((await vindActie(db, actie.id))?.status, 'queued');
+    // Tweede tick binnen het uur: niet opnieuw aan de beurt.
+    const binnen = await voerPlannerTickUit(basisContext({ klok: vasteKlok('2026-10-06T10:30:00Z') }));
+    assert.equal(binnen.verwerkt, 0);
+    assert.equal(naarEerste(), 0);
+
+    const cb = await verwerkKoppelCallback(
+      db,
+      { status: 'RECONNECTED', account_id: UNIPILE_ACCOUNT_ID },
+      { nu: new Date('2026-10-06T10:40:00Z') },
+    );
+    assert.equal(cb.verwerkt, true);
+    assert.equal((await vindAccount(db, accountId))?.status, 'OK');
+
+    const r = await voerPlannerTickUit(basisContext({ klok: vasteKlok('2026-10-06T11:01:00Z') }));
+    assert.equal(r.details[0]?.resultaat, 'done');
+    const na = await vindActie(db, actie.id);
+    assert.equal(na?.status, 'done');
+    assert.equal(na?.pauzeGeparkeerdSinds, null);
+    assert.equal(naarEerste(), 1);
+  });
+
+  it('STOPPED door de gateway: na RECONNECTED blijft de actie geparkeerd', async () => {
+    await zetStatus('STOPPED');
+    const actie = await maakGoedgekeurdeInvite({ accountId, providerId: 'ACo-stop' });
+    await voerPlannerTickUit(basisContext());
+    await verwerkKoppelCallback(db, { status: 'RECONNECTED', account_id: UNIPILE_ACCOUNT_ID }, { nu: T0 });
+    assert.equal((await vindAccount(db, accountId))?.status, 'STOPPED');
+    await voerPlannerTickUit(basisContext({ klok: vasteKlok('2026-10-06T11:01:00Z') }));
+    assert.equal((await vindActie(db, actie.id))?.status, 'queued');
+    assert.equal(naarEerste(), 0);
+  });
+
+  it(`een geparkeerde actie vervalt na account_pauze.max_parkeer_dagen (rejected, "account stond te lang op pauze")`, async () => {
+    const maxDagen = limieten.account_pauze.max_parkeer_dagen;
+    assert.equal(maxDagen, 14);
+    await zetStatus('CREDENTIALS');
+    const actie = await maakGoedgekeurdeInvite({ accountId, providerId: 'ACo-oud' });
+
+    await voerPlannerTickUit(basisContext());
+    // Net vóór de grens: nog steeds geparkeerd, ijkpunt blijft het eerste parkeermoment.
+    const bijna = new Date(T0.getTime() + maxDagen * DAG - 60_000);
+    await voerPlannerTickUit(basisContext({ klok: vasteKlok(bijna) }));
+    let na = await vindActie(db, actie.id);
+    assert.equal(na?.status, 'queued');
+    assert.equal(na?.pauzeGeparkeerdSinds?.toISOString(), T0.toISOString());
+
+    // Volgende herbeoordeling (60 minuten later) valt voorbij de grens.
+    const voorbij = new Date(bijna.getTime() + 61 * 60_000);
+    const r = await voerPlannerTickUit(basisContext({ klok: vasteKlok(voorbij) }));
+    assert.equal(r.details[0]?.resultaat, 'rejected');
+    na = await vindActie(db, actie.id);
+    assert.equal(na?.status, 'rejected');
+    assert.match(na?.reden ?? '', /^account stond te lang op pauze/);
+    assert.match(na?.reden ?? '', /14 dagen/);
+    assert.equal(naarEerste(), 0);
+    assert.equal(await usageTotaal(), 0);
+  });
+
+  it('ijkpunt is het eerste parkeermoment om de pauze, niet goedkeuring of aanmaak', async () => {
+    // Al 20 dagen geleden goedgekeurd en aangemaakt (wachtte op iets anders).
+    const actie = await maakGoedgekeurdeInvite({
+      accountId,
+      providerId: 'ACo-lang',
+      aangemaaktOp: '2026-09-16T10:00:00Z',
+    });
+    await db.query(`update actions set goedgekeurd_op = '2026-09-16T10:00:00Z' where id = $1`, [actie.id]);
+    await zetStatus('ERROR');
+    await voerPlannerTickUit(basisContext());
+    const na = await vindActie(db, actie.id);
+    assert.equal(na?.status, 'queued');
+    assert.equal(na?.pauzeGeparkeerdSinds?.toISOString(), T0.toISOString());
+  });
+
+  it('ijkpunt wordt gewist als de actie om een andere reden wacht; een nieuwe pauze telt opnieuw', async () => {
+    await zetStatus('CREDENTIALS');
+    const actie = await maakGoedgekeurdeInvite({ accountId, providerId: 'ACo-reset' });
+    await voerPlannerTickUit(basisContext());
+    assert.ok((await vindActie(db, actie.id))?.pauzeGeparkeerdSinds);
+
+    // Account weer OK, maar dagbudget vol → wachtrij om dagbudget.
+    await db.query(`update accounts set status = 'OK', opbouw_factor = 1.0 where id = $1`, [accountId]);
+    await db.query(
+      `insert into usage(account_id, type, dag, aantal) values ($1, 'invite'::action_type, '2026-10-06'::date, 20)`,
+      [accountId],
+    );
+    await voerPlannerTickUit(basisContext({ klok: vasteKlok('2026-10-06T11:01:00Z') }));
+    const na = await vindActie(db, actie.id);
+    assert.equal(na?.status, 'queued');
+    assert.match(na?.reden ?? '', /Dagnorm/);
+    assert.equal(na?.pauzeGeparkeerdSinds, null);
+  });
+
+  it('search en profile in de wachtrij worden op een account met pauze niet geparkeerd maar rejected, zonder verbruik', async () => {
+    await zetStatus('STOPPED');
+    const search = await maakActie(db, { accountId, type: 'search', payload: { keywords: 'x' }, directApproved: true });
+    await zetActieStatus(db, search.id, 'queued');
+    await voerPlannerTickUit(basisContext());
+    const na = await vindActie(db, search.id);
+    assert.equal(na?.status, 'rejected');
+    assert.match(na?.reden ?? '', /niet geparkeerd.*geen budget verbruikt/);
+    assert.equal(await usageTotaal(), 0);
+    assert.equal(naarEerste(), 0);
+  });
+
+  it('PERMISSIONS blijft weigeren (rejected)', async () => {
+    await db.query(`update accounts set status = 'PERMISSIONS' where id = $1`, [accountId]);
+    const actie = await maakGoedgekeurdeInvite({ accountId, providerId: 'ACo-perm' });
+    await voerPlannerTickUit(basisContext());
+    assert.equal((await vindActie(db, actie.id))?.status, 'rejected');
   });
 });
