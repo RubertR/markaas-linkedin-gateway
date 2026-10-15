@@ -9,7 +9,9 @@ import { binnenWerkuren, isWerkdag } from './tijdvenster.ts';
 
 /**
  * Zes controles uit SPEC §5, in deze volgorde:
- * 1. account_gezond — status van het Unipile-account.
+ * 1. account_gezond — status van het Unipile-account. `CREDENTIALS`,
+ *    `ERROR` en `STOPPED` geven `wachtrij` met `accountPauze: true` (SPEC
+ *    §6b): de actie blijft bewaard. `PERMISSIONS` blijft een weigering.
  *    1a. abonnement — betaalpoort (SPEC §14.4): bij klanten met
  *    `abonnement_vereist` alleen verzending (invite/message/inmail) als het
  *    abonnement `trialing`, `active` of `past_due` is. Anders wachtrij: de
@@ -52,6 +54,11 @@ export type Beoordeling =
       controle: ControleNaam;
       reden: string;
       structureel: false;
+      /**
+       * Gezet als controle 1 parkeert omdat het account op pauze staat
+       * (`CREDENTIALS`, `ERROR`, `STOPPED`; SPEC §6b).
+       */
+      accountPauze?: true;
     }
   | {
       status: 'weigering';
@@ -109,20 +116,18 @@ function controle1AccountGezond(invoer: BeoordelingsInvoer): Beoordeling | null 
     case 'RECONNECTED':
       return null;
     case 'CREDENTIALS':
-      return weigering(
-        'account_gezond',
-        'LinkedIn-sessie is verlopen; account opnieuw koppelen voordat acties doorgaan.',
-      );
     case 'ERROR':
-      return weigering(
-        'account_gezond',
-        'Account staat op fout (ERROR) bij Unipile; eerst oorzaak opzoeken en herstellen.',
-      );
     case 'STOPPED':
-      return weigering(
-        'account_gezond',
-        'Account is gestopt; door Rubert heractiveren voordat acties lopen.',
-      );
+      // SPEC §6b punt 1: account op pauze → parkeren, niet weigeren. De
+      // planner herbeoordeelt na 60 minuten en laat de actie na
+      // `account_pauze.max_parkeer_dagen` vervallen.
+      return {
+        status: 'wachtrij',
+        controle: 'account_gezond',
+        reden: PAUZE_REDEN[status],
+        structureel: false,
+        accountPauze: true,
+      };
     case 'PERMISSIONS':
       return weigering(
         'account_gezond',
@@ -141,6 +146,15 @@ function controle1AccountGezond(invoer: BeoordelingsInvoer): Beoordeling | null 
       );
   }
 }
+
+const PAUZE_REDEN: Record<'CREDENTIALS' | 'ERROR' | 'STOPPED', string> = {
+  CREDENTIALS:
+    'LinkedIn-sessie is verlopen; de actie blijft geparkeerd tot het account opnieuw gekoppeld is.',
+  ERROR:
+    'Account staat op fout (ERROR) bij Unipile; de actie blijft geparkeerd tot Rubert het account herstelt of vrijgeeft.',
+  STOPPED:
+    'Account is gestopt (bijv. beperkt door LinkedIn); de actie blijft geparkeerd tot Rubert het account vrijgeeft.',
+};
 
 // -- controle 1a: betaalpoort ------------------------------------------------
 

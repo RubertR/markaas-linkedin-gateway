@@ -23,6 +23,7 @@ describe('laadLimieten', () => {
     assert.equal(limieten.verzoeken_sync.max_paginas, 5);
     assert.equal(limieten.terugboeken.max_per_dag_per_type, 3);
     assert.equal(limieten.unipile_controle.min_interval_minuten, 5);
+    assert.equal(limieten.account_pauze.max_parkeer_dagen, 14);
     assert.equal(limieten.tekst_max_tekens.invite, 300);
     assert.equal(limieten.tekst_max_tekens.message, 8000);
     assert.equal(limieten.tekst_max_tekens.inmail, 2000);
@@ -112,6 +113,7 @@ describe('limietenUitObject', () => {
       verzoeken_sync: { pagina_grootte: 100, max_paginas: 5 },
       terugboeken: { max_per_dag_per_type: 3 },
       unipile_controle: { min_interval_minuten: 5 },
+      account_pauze: { max_parkeer_dagen: 14 },
       abonnementen: {
         free: {},
       },
@@ -150,6 +152,20 @@ describe('limietenUitObject', () => {
     const kapot = basisConfig();
     kapot['unipile_controle'] = { min_interval_minuten: 0 };
     assert.throws(() => limietenUitObject(kapot), /min_interval_minuten/);
+  });
+
+  it('werpt NL-fout als account_pauze ontbreekt of geen geheel getal ≥ 1 is (SPEC §6b)', () => {
+    const zonder = basisConfig();
+    delete (zonder as Record<string, unknown>)['account_pauze'];
+    assert.throws(() => limietenUitObject(zonder), /account_pauze/);
+    for (const fout of [0, -3, 2.5, '14']) {
+      const kapot = basisConfig();
+      kapot['account_pauze'] = { max_parkeer_dagen: fout };
+      assert.throws(() => limietenUitObject(kapot), /max_parkeer_dagen/, String(fout));
+    }
+    const goed = basisConfig();
+    goed['account_pauze'] = { max_parkeer_dagen: 30 };
+    assert.equal(limietenUitObject(goed).account_pauze.max_parkeer_dagen, 30);
   });
 
   it('werpt NL-fout als start_factor buiten [0.5, 1.0] ligt', () => {
@@ -225,6 +241,7 @@ function basisConfig(): Record<string, Record<string, unknown>> & {
     verzoeken_sync: { pagina_grootte: 100, max_paginas: 5 },
     terugboeken: { max_per_dag_per_type: 3 },
     unipile_controle: { min_interval_minuten: 5 },
+    account_pauze: { max_parkeer_dagen: 14 },
     abonnementen: {
       free: perAbonnement(),
       premium_career: perAbonnement(),

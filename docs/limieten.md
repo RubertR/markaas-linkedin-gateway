@@ -25,6 +25,9 @@ Regels:
 - Weigert Unipile een aanvraag vóór LinkedIn (400-validatiefout of eigen payloadfout), dan
   kost hij geen budget. Hoogstens 3 van zulke terugboekingen per account, actietype en dag;
   daarna telt een weigering wel mee (SPEC §5.1).
+- Staat een account op pauze (`CREDENTIALS`, `ERROR` of `STOPPED`), dan blijven goedgekeurde
+  verzoeken en berichten geparkeerd. Na 14 dagen geparkeerd vervallen ze, zodat er geen
+  verouderd bericht meer weggaat. Vrijgeven na `STOPPED`: een week op 50% (SPEC §6b).
 
 Bronnen:
 

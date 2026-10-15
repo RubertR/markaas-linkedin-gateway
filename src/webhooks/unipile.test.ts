@@ -148,14 +148,36 @@ describe('account_status webhook', () => {
       assert.equal((await vindAccount(db, accountId))?.status, 'RECONNECTED');
     });
 
-    it('webhook reconnected of ok heft een STOPPED/ERROR van de gateway niet op', async () => {
+    it('webhook reconnected of ok heft een STOPPED van de gateway niet op; event "opnieuw gekoppeld, maar nog gestopt" (SPEC §6b)', async () => {
       await gatewayZet('STOPPED');
-      await webhook('reconnected', '2026-10-01T10:00:00Z');
+      const uit = await webhook('reconnected', '2026-10-01T10:00:00Z');
+      assert.equal(uit.verwerkt, false);
       await webhook('ok', '2026-10-01T10:01:00Z');
       assert.equal((await vindAccount(db, accountId))?.status, 'STOPPED');
+      const events = await db.query<{ status: string; reden: string }>(
+        `select payload ->> 'status' as status, payload ->> 'reden' as reden from events
+         where bron = 'gateway' and type = 'account_status' and account_id = $1
+           and payload ->> 'reden' = 'opnieuw gekoppeld, maar nog gestopt door beperking'`,
+        [accountId],
+      );
+      assert.equal(events.length, 2);
+      assert.equal(events[0]?.status, 'STOPPED');
+    });
+
+    it('webhook ok of reconnected heft een ERROR van de gateway (onbekende 401/403, §6a) wel op (SPEC §6b)', async () => {
+      await gatewayZet('ERROR');
+      const uit = await webhook('ok', '2026-10-01T11:05:00Z');
+      assert.equal(uit.verwerkt, true);
+      assert.equal((await vindAccount(db, accountId))?.status, 'OK');
       await db.query("update accounts set status = 'OK' where id = $1", [accountId]);
-      await zetAccountStatusDoorGateway(db, accountId, 'ERROR', { reden: 'test' }, new Date('2026-10-01T11:00:00Z'));
-      await webhook('ok', '2026-10-01T11:05:00Z');
+      await zetAccountStatusDoorGateway(db, accountId, 'ERROR', { reden: 'test' }, new Date('2026-10-01T12:00:00Z'));
+      await webhook('reconnected', '2026-10-01T12:05:00Z');
+      assert.equal((await vindAccount(db, accountId))?.status, 'RECONNECTED');
+    });
+
+    it('een andere niet-storingsstatus (permissions) heft een gateway-ERROR niet op', async () => {
+      await gatewayZet('ERROR');
+      await webhook('permissions', '2026-10-01T10:00:00Z');
       assert.equal((await vindAccount(db, accountId))?.status, 'ERROR');
     });
 
@@ -175,6 +197,10 @@ describe('account_status webhook', () => {
       assert.equal(webhookMagStatusZetten('CREDENTIALS', 'RECONNECTED', true), true);
       assert.equal(webhookMagStatusZetten('STOPPED', 'RECONNECTED', true), false);
       assert.equal(webhookMagStatusZetten('STOPPED', 'RECONNECTED', false), true);
+      assert.equal(webhookMagStatusZetten('STOPPED', 'OK', true), false);
+      assert.equal(webhookMagStatusZetten('ERROR', 'OK', true), true);
+      assert.equal(webhookMagStatusZetten('ERROR', 'RECONNECTED', true), true);
+      assert.equal(webhookMagStatusZetten('ERROR', 'PERMISSIONS', true), false);
       assert.equal(webhookMagStatusZetten('OK', 'CREDENTIALS', false), true);
     });
   });

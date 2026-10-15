@@ -139,6 +139,12 @@ export interface UnipileControle {
   min_interval_minuten: number;
 }
 
+/** Wachtende acties op een account met pauze (SPEC §6b). */
+export interface AccountPauze {
+  /** Na zoveel dagen geparkeerd om de accountpauze vervalt een actie (rejected). */
+  max_parkeer_dagen: number;
+}
+
 export interface Limieten {
   opbouw: Opbouw;
   afkoeling: Afkoeling;
@@ -149,6 +155,7 @@ export interface Limieten {
   verzoeken_sync: VerzoekenSync;
   terugboeken: Terugboeken;
   unipile_controle: UnipileControle;
+  account_pauze: AccountPauze;
   abonnementen: Record<Abonnement, AbonnementLimieten>;
 }
 
@@ -190,6 +197,7 @@ export function limietenUitObject(obj: unknown): Limieten {
   const verzoeken_sync = parseVerzoekenSync(obj['verzoeken_sync']);
   const terugboeken = parseTerugboeken(obj['terugboeken']);
   const unipile_controle = parseUnipileControle(obj['unipile_controle']);
+  const account_pauze = parseAccountPauze(obj['account_pauze']);
 
   const bronAbonnementen = obj['abonnementen'];
   if (!isRecord(bronAbonnementen)) {
@@ -216,8 +224,22 @@ export function limietenUitObject(obj: unknown): Limieten {
     verzoeken_sync,
     terugboeken,
     unipile_controle,
+    account_pauze,
     abonnementen,
   };
+}
+
+function parseAccountPauze(raw: unknown): AccountPauze {
+  if (!isRecord(raw)) {
+    throw new Error('Veld "account_pauze" ontbreekt in limieten-configuratie (SPEC §6b).');
+  }
+  const dagen = raw['max_parkeer_dagen'];
+  if (typeof dagen !== 'number' || !Number.isInteger(dagen) || dagen < 1) {
+    throw new Error(
+      'Veld "account_pauze.max_parkeer_dagen" moet een geheel getal van 1 of hoger zijn.',
+    );
+  }
+  return { max_parkeer_dagen: dagen };
 }
 
 function parseUnipileControle(raw: unknown): UnipileControle {

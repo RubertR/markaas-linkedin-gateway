@@ -25,6 +25,7 @@ import {
 } from '../profiel/profielen.ts';
 import type { Backend } from '../db/backend.ts';
 import type { Abonnement } from '../register/accounts.ts';
+import { AccountVrijgaveFout, geefAccountVrij } from '../register/accountpauze.ts';
 import { voegAccountToe } from '../register/accounttoevoegen.ts';
 import {
   NieuweKlantFout,
@@ -548,6 +549,50 @@ export function maakAdminApp(deps: AdminDeps) {
         melding: { soort: 'fout', tekst: err.message },
         accountWaarden: waarden,
       });
+    }
+  });
+
+  // Account vrijgeven na ERROR of STOPPED (SPEC §6b punt 3).
+  app.post('/admin/klanten/:slug/accounts/:accountId/vrijgeven', async (c) => {
+    const sessie = laadSessie(c, sessies);
+    if (!sessie) return c.redirect('/admin/login', 303);
+    const form = await c.req.parseBody();
+    if (!csrfConstanteTijdGelijk(getString(form, 'csrf'), sessie.csrfToken)) {
+      c.status(403);
+      return c.text('CSRF-token ontbreekt of klopt niet.');
+    }
+    const slug = c.req.param('slug');
+    const klant = await vindKlant(slug);
+    if (!klant) {
+      c.status(404);
+      return c.text('Onbekende klant.');
+    }
+    const account = klant.accounts.find((a) => a.id === c.req.param('accountId'));
+    if (!account) {
+      c.status(404);
+      return c.text('Onbekend account bij deze klant; er is niets vrijgegeven.');
+    }
+    try {
+      const u = await geefAccountVrij(deps.db, {
+        accountId: account.id,
+        reden: getString(form, 'reden'),
+        door: 'rubert',
+        nu: deps.klok.nu(),
+        afkoeling: deps.limieten.afkoeling,
+      });
+      zetFlash(c, deps, {
+        soort: 'ok',
+        tekst:
+          `Account van ${account.eigenaarNaam} is vrijgegeven (was ${u.vorigeStatus}). Wachtende acties lopen weer door.` +
+          (u.opbouwVerlaagd
+            ? ` De opbouw staat ${deps.limieten.afkoeling.opbouw_periode_dagen} dagen op ${Math.round(deps.limieten.afkoeling.opbouw_factor_na * 100)}%.`
+            : ''),
+      });
+      return c.redirect(`/admin/klanten/${encodeURIComponent(slug)}`, 303);
+    } catch (err) {
+      if (!(err instanceof AccountVrijgaveFout)) throw err;
+      c.status(400);
+      return await toonKlantDetail(c, sessie, slug, { melding: { soort: 'fout', tekst: err.message } });
     }
   });
 

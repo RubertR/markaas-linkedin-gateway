@@ -26,6 +26,11 @@ export interface Actie {
   uitgevoerdOp: Date | null;
   /** Gezet als het verbruik is teruggeboekt (SPEC §5.1). */
   teruggeboektOp: Date | null;
+  /**
+   * Voor het eerst geparkeerd omdat het account op pauze stond (SPEC §6b);
+   * ijkpunt voor `account_pauze.max_parkeer_dagen`.
+   */
+  pauzeGeparkeerdSinds: Date | null;
   unipileResponse: Record<string, unknown> | null;
   aangemaaktOp: Date;
 }
@@ -43,6 +48,7 @@ interface ActieRij {
   gepland_op: string | Date | null;
   uitgevoerd_op: string | Date | null;
   teruggeboekt_op: string | Date | null;
+  pauze_geparkeerd_sinds: string | Date | null;
   unipile_response: Record<string, unknown> | string | null;
   aangemaakt_op: string | Date;
 }
@@ -76,6 +82,7 @@ function map(rij: ActieRij): Actie {
     geplandOp: alsDatumOfNull(rij.gepland_op),
     uitgevoerdOp: alsDatumOfNull(rij.uitgevoerd_op),
     teruggeboektOp: alsDatumOfNull(rij.teruggeboekt_op),
+    pauzeGeparkeerdSinds: alsDatumOfNull(rij.pauze_geparkeerd_sinds),
     unipileResponse: alsJson(rij.unipile_response),
     aangemaaktOp: alsDatum(rij.aangemaakt_op),
   };
@@ -83,7 +90,7 @@ function map(rij: ActieRij): Actie {
 
 const KOLOMMEN = `id, account_id, type, payload, status, reden,
     goedgekeurd_door, goedgekeurd_op, afgewezen_door, gepland_op, uitgevoerd_op,
-    teruggeboekt_op, unipile_response, aangemaakt_op`;
+    teruggeboekt_op, pauze_geparkeerd_sinds, unipile_response, aangemaakt_op`;
 
 const VEREIST_GOEDKEURING: ReadonlySet<ActieType> = new Set(['invite', 'message', 'inmail']);
 const EINDSTATUSSEN: ReadonlySet<ActieStatus> = new Set(['done', 'failed', 'rejected']);
@@ -166,6 +173,8 @@ export interface StatusOpties {
   unipileResponse?: Record<string, unknown> | null;
   /** Alleen bij afwijzen: wie wees af (`rubert` of `klant:<e-mail>`). */
   afgewezenDoor?: string | null;
+  /** Moment van eerste parkeren om accountpauze (SPEC §6b); `null` wist het. */
+  pauzeGeparkeerdSinds?: Date | null;
 }
 
 export async function zetActieStatus(
@@ -196,6 +205,10 @@ export async function zetActieStatus(
   if (Object.prototype.hasOwnProperty.call(opties, 'afgewezenDoor')) {
     params.push(opties.afgewezenDoor ?? null);
     sets.push(`afgewezen_door = $${params.length}`);
+  }
+  if (Object.prototype.hasOwnProperty.call(opties, 'pauzeGeparkeerdSinds')) {
+    params.push(opties.pauzeGeparkeerdSinds ? opties.pauzeGeparkeerdSinds.toISOString() : null);
+    sets.push(`pauze_geparkeerd_sinds = $${params.length}`);
   }
 
   const rijen = await db.query<ActieRij>(

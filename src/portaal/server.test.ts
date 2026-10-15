@@ -645,6 +645,18 @@ describe('portaal: resultaten', () => {
     assert.match(html, new RegExp(`/portaal/accounts/${accA}/opnieuw-koppelen`));
   });
 
+  it('ERROR of STOPPED: status en "Neem contact op met MARKaaS", geen vrijgeef- of koppelknop (SPEC §6b)', async () => {
+    const { j } = await ingelogd();
+    for (const status of ['ERROR', 'STOPPED'] as const) {
+      await werkAccountStatusBij(db, accA, status);
+      const html = await (await get('/portaal/resultaten', j)).text();
+      assert.match(html, /Storing/, status);
+      assert.match(html, /Neem contact op met MARKaaS/, status);
+      assert.doesNotMatch(html, /vrijgeven/i, status);
+      assert.doesNotMatch(html, new RegExp(`/portaal/accounts/${accA}/opnieuw-koppelen`), status);
+    }
+  });
+
   it('opnieuw koppelen bij CREDENTIALS maakt een reconnect-link en stuurt door (303)', async () => {
     await werkAccountStatusBij(db, accA, 'CREDENTIALS');
     fake.antwoord('POST', LINK, { status: 200, body: { object: 'HostedAuthUrl', url: UNIPILE_URL } });

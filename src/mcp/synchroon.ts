@@ -8,6 +8,9 @@ import {
   type Actie,
 } from '../queue/acties.ts';
 import type { PauzeKiezer } from '../queue/pauze.ts';
+import { vindAccount } from '../register/accounts.ts';
+import { isAccountPauze, pauzeUitleg } from '../register/accountpauze.ts';
+import type { AccountStatus } from '../register/status.ts';
 import { voerActieUit, type WorkerContext } from '../queue/worker.ts';
 import type { UnipileClient } from '../unipile/client.ts';
 
@@ -24,6 +27,14 @@ import type { UnipileClient } from '../unipile/client.ts';
  * account. Is de minimale pauze nog niet verstreken, dan antwoordt deze
  * helper direct met "probeer opnieuw over N seconden" — zonder actie aan te
  * maken en zonder Unipile aan te roepen.
+ *
+ * Account op pauze (SPEC §6b): staat het account op `CREDENTIALS`, `ERROR`
+ * of `STOPPED`, dan weigert deze helper direct met een NL-melding. Er wordt
+ * geen actie aangemaakt, geen Unipile-aanroep gedaan en geen budget
+ * verbruikt. Een zoekopdracht wordt niet geparkeerd: uren later heeft hij
+ * geen nut. Gaat het account tijdens de aanroep op pauze, dan wordt de actie
+ * `rejected` in plaats van `queued`, zodat de planner hem later niet alsnog
+ * uitvoert.
  */
 
 export type McpSyncOorzaak = 'wachtrij' | 'weigering' | 'fout';
@@ -73,6 +84,11 @@ export async function voerSynchroonUit(
   ctx: SynchroonContext,
   invoer: SynchroonInvoer,
 ): Promise<SynchroonResultaat> {
+  const account = await vindAccount(ctx.db, invoer.accountId);
+  if (account && isAccountPauze(account.status)) {
+    throw new McpSynchroonFout('weigering', pauzeMelding(account.status, invoer.type), null, true);
+  }
+
   const grens = kiesPauzeGrens(ctx.limieten, invoer.type);
   const minPauzeSeconden = ctx.pauzeKiezer.kiesSeconden(grens);
 
@@ -116,6 +132,13 @@ export async function voerSynchroonUit(
     laatsteActieOp: null,
   });
 
+  if (beoordeling.status === 'wachtrij' && beoordeling.accountPauze) {
+    // Tussen de controle hierboven en de reservering op pauze gegaan.
+    const status = (await vindAccount(ctx.db, invoer.accountId))?.status ?? 'UNKNOWN';
+    const melding = pauzeMelding(status, invoer.type);
+    await zetActieStatus(ctx.db, actie.id, 'rejected', { reden: melding });
+    throw new McpSynchroonFout('weigering', melding, actie.id, true);
+  }
   if (beoordeling.status === 'wachtrij') {
     await zetActieStatus(ctx.db, actie.id, 'queued', { reden: beoordeling.reden });
     throw new McpSynchroonFout(
@@ -147,7 +170,24 @@ export async function voerSynchroonUit(
   }
   const reden =
     uitkomst.reden ?? `Uitvoeren van ${invoer.type} mislukte zonder opgegeven reden.`;
+  if (uitkomst.status === 'queued') {
+    // Zette de worker het account net op pauze (401/403, SPEC §6a), dan niet
+    // laten staan: de planner zou de zoekopdracht anders later uitvoeren.
+    const na = await vindAccount(ctx.db, invoer.accountId);
+    if (na && isAccountPauze(na.status)) {
+      await zetActieStatus(ctx.db, actie.id, 'rejected', { reden });
+    }
+  }
   throw new McpSynchroonFout('fout', reden, actie.id, uitkomst.status === 'failed');
+}
+
+function pauzeMelding(status: AccountStatus, type: 'search' | 'profile'): string {
+  const wat = type === 'search' ? 'Zoekopdracht' : 'Profiel opvragen';
+  return (
+    `${wat} geweigerd: dit account staat op pauze (${status}); ${pauzeUitleg(status)}. ` +
+    `Een ${type} wordt niet geparkeerd. Er is geen aanvraag naar LinkedIn gegaan en er is geen budget verbruikt. ` +
+    'Probeer het opnieuw zodra het account weer werkt.'
+  );
 }
 
 function kiesPauzeGrens(limieten: Limieten, type: 'search' | 'profile'): PauzeGrensSeconden {

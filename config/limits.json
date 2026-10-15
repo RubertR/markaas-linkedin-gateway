@@ -63,6 +63,11 @@
     "min_interval_minuten": 5
   },
 
+  "account_pauze": {
+    "$toelichting": "SPEC §6b: staat een account op CREDENTIALS, ERROR of STOPPED, dan blijven goedgekeurde invite/message/inmail-acties geparkeerd (queued, elke 60 minuten opnieuw beoordeeld). Na zoveel dagen geparkeerd (gerekend vanaf het moment dat de actie voor het eerst om de accountpauze werd geparkeerd) vervalt de actie: rejected met reden \"account stond te lang op pauze\".",
+    "max_parkeer_dagen": 14
+  },
+
   "unipile_usage_signaal": {
     "$toelichting": "Unipile geeft in het invite-antwoord soms een usage-percentage terug bij 50/75/90/95%. Bij deze drempel of hoger direct opbouw_factor omlaag.",
     "afremmen_bij_percentage": 75,

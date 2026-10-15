@@ -2,6 +2,7 @@ import type { Backend } from '../db/backend.ts';
 import { vindAccountBijUnipileId, werkAccountStatusBij } from '../register/accounts.ts';
 import { maakReconnectLink, type KoppelflowOpties } from '../register/koppelflow.ts';
 import { statusDoorGatewayGezet } from '../register/accountauth.ts';
+import { meldGestoptNaKoppelen } from '../register/accountpauze.ts';
 import { mapUnipileStatus, statusStrengte, type AccountStatus } from '../register/status.ts';
 import { opMessageReceived, opNewRelation, type SequentieHookDeps } from '../sequences/hooks.ts';
 import type { UnipileClient } from '../unipile/client.ts';
@@ -101,6 +102,10 @@ async function verwerkAccountStatus(
   const doorGateway =
     statusStrengte(account.status) >= 2 ? await statusDoorGatewayGezet(db, account.id) : false;
   if (!webhookMagStatusZetten(account.status, nieuweStatus, doorGateway)) {
+    if (account.status === 'STOPPED' && doorGateway && isHerstel(nieuweStatus)) {
+      // SPEC §6b punt 2: sessie weer geldig, maar de beperking blijft staan.
+      await meldGestoptNaKoppelen(db, account.id, `webhook_${nieuweStatus.toLowerCase()}`, new Date());
+    }
     return {
       verwerkt: false,
       reden: `Account staat op ${account.status}${doorGateway ? ' (gezet door de gateway)' : ''}; webhook-status ${nieuweStatus} is minder streng en verandert dat niet (SPEC §6a regel 5).`,
@@ -142,9 +147,11 @@ async function verwerkAccountStatus(
  * - Nieuwe storingsstatus: alleen als hij minstens zo streng is als de huidige.
  *   Een `credentials` zet een `STOPPED`- of `ERROR`-account dus niet terug.
  * - Herstel of overige status (`ok`, `reconnected`, `permissions`, ...): heft
- *   `CREDENTIALS` op, en `ERROR`/`STOPPED` alleen als Unipile die zelf had
- *   gemeld. Een `ERROR`/`STOPPED` van de gateway (bijv. `account_restricted`)
- *   blijft staan tot Rubert het account heractiveert.
+ *   `CREDENTIALS` op, en `ERROR`/`STOPPED` als Unipile die zelf had gemeld.
+ * - Van de gateway (SPEC §6b punt 2): een herstel (`ok`, `reconnected`) heft
+ *   ook een gateway-`ERROR` op (onbekende 401/403; opnieuw inloggen kan die
+ *   oplossen). Een gateway-`STOPPED` (`account_restricted`) blijft staan tot
+ *   Rubert het account in de admin vrijgeeft.
  */
 export function webhookMagStatusZetten(
   huidig: AccountStatus,
@@ -155,7 +162,12 @@ export function webhookMagStatusZetten(
   const huidigStreng = statusStrengte(huidig);
   if (nieuwStreng > 0) return nieuwStreng >= huidigStreng;
   if (huidigStreng <= 1) return true;
-  return !huidigDoorGateway;
+  if (!huidigDoorGateway) return true;
+  return huidig === 'ERROR' && isHerstel(nieuw);
+}
+
+function isHerstel(status: AccountStatus): boolean {
+  return status === 'OK' || status === 'RECONNECTED';
 }
 
 /**
