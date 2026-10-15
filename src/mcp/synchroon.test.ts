@@ -229,3 +229,54 @@ describe('synchroon-pauze per type', () => {
     assert.deepEqual(gezien[1], { min: 120, max: 480 });
   });
 });
+
+describe('synchroon — terugboeken bij weigering vóór LinkedIn (SPEC §5.1)', () => {
+  it('400 invalid_parameters: NL-melding "zoekrun is niet verbruikt", verbruik 0, direct opnieuw kan', async () => {
+    let aanroepen = 0;
+    fake.antwoord('POST', '/api/v1/linkedin/search', () => {
+      aanroepen += 1;
+      return aanroepen === 1
+        ? { status: 400, body: { status: 400, type: 'errors/invalid_parameters', title: 'Invalid parameters' } }
+        : { status: 200, body: { items: [{ id: 'ACo-1' }], paging: { total_count: 1 } } };
+    });
+    const ctx = maakCtx({ pauzeSec: 180 });
+    await assert.rejects(
+      () => voerSynchroonUit(ctx, { accountId, type: 'search', payload: { keywords: 'x' } }),
+      (err: Error) => {
+        assert.ok(err instanceof McpSynchroonFout);
+        assert.match(err.message, /vóór LinkedIn/);
+        assert.match(err.message, /errors\/invalid_parameters/);
+        assert.match(err.message, /zoekrun is niet verbruikt/);
+        return true;
+      },
+    );
+    const rijen = await db.query<{ aantal: number }>(
+      `select coalesce(sum(aantal), 0)::int as aantal from usage where account_id = $1 and type = 'search'`,
+      [accountId],
+    );
+    assert.equal(Number(rijen[0]?.aantal), 0);
+
+    // Gecorrigeerde aanvraag: geen pauze-blokkade en het dagbudget is er nog.
+    const uit = await voerSynchroonUit(ctx, { accountId, type: 'search', payload: { keywords: 'y' } });
+    assert.equal((uit.response as { items: unknown[] }).items.length, 1);
+  });
+
+  it('400 target_audience_too_small: zoekrun telt wel mee', async () => {
+    fake.antwoord('POST', '/api/v1/linkedin/search', {
+      status: 400,
+      body: { status: 400, type: 'errors/target_audience_too_small' },
+    });
+    await assert.rejects(
+      () => voerSynchroonUit(maakCtx(), { accountId, type: 'search', payload: { keywords: 'x' } }),
+      (err: Error) => {
+        assert.doesNotMatch(err.message, /niet verbruikt/);
+        return true;
+      },
+    );
+    const rijen = await db.query<{ aantal: number }>(
+      `select coalesce(sum(aantal), 0)::int as aantal from usage where account_id = $1 and type = 'search'`,
+      [accountId],
+    );
+    assert.equal(Number(rijen[0]?.aantal), 1);
+  });
+});

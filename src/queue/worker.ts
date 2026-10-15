@@ -1,5 +1,6 @@
 import type { Backend } from '../db/backend.ts';
 import { startAfkoeling } from '../budget/afkoeling.ts';
+import { boekTerug } from '../budget/terugboeken.ts';
 import type { Klok } from '../budget/klok.ts';
 import type { Limieten } from '../budget/limits.ts';
 import { telInviteAlsOpenstaand } from '../budget/openstaand.ts';
@@ -14,6 +15,7 @@ import {
   UnipileGatewayAuthFout,
   UnipileTijdelijkeFout,
   UnipileTimeoutFout,
+  UnipileValidatieFout,
   type Unipile422Code,
 } from '../unipile/errors.ts';
 
@@ -35,6 +37,9 @@ import {
  * - UnipileGatewayAuthFout (401/403) → signaal `gatewayAuthFout: true` zodat
  *   de planner alles stopt; account blijft ongewijzigd (het is onze API-sleutel).
  * - Overige 422 → `failed` (permanent, NL-reden).
+ * - UnipileValidatieFout (400 vóór LinkedIn) of een eigen payloadfout →
+ *   `failed` en het verbruik wordt teruggeboekt (SPEC §5.1), tot de grens per
+ *   dag en type; daarboven telt de actie mee.
  * - Timeout bij `invite`/`message`/`inmail` → status `onzeker`: LinkedIn
  *   kan het verzoek wél hebben verstuurd; automatisch opnieuw proberen
  *   zou dubbele verzending naar dezelfde persoon betekenen. Een event
@@ -72,6 +77,8 @@ export interface WorkerUitkomst {
   alleenDitAccountPauzeren?: boolean;
   /** Signaal naar planner: gateway-sleutel is kapot, stop alles. */
   gatewayAuthFout?: boolean;
+  /** Het verbruik van deze actie is teruggeboekt (SPEC §5.1). */
+  teruggeboekt?: boolean;
 }
 
 const UITVOER_TIME_OUT_HERPLANNING_SECONDEN = 300;
@@ -283,9 +290,8 @@ async function verwerkFout(
   actie: Actie,
   err: unknown,
 ): Promise<WorkerUitkomst> {
-  if (err instanceof BerichtPayloadFout) {
-    await persisteer(ctx.db, actie.id, 'failed', { reden: err.message });
-    return { status: 'failed', reden: err.message };
+  if (err instanceof BerichtPayloadFout || err instanceof UnipileValidatieFout) {
+    return await failMetTerugboeking(ctx, actie, err.message);
   }
 
   if (err instanceof UnipileGatewayAuthFout) {
@@ -365,6 +371,45 @@ async function verwerkFout(
   const reden = `Onverwachte fout tijdens uitvoeren van actie: ${(err as Error)?.message ?? String(err)}`;
   await persisteer(ctx.db, actie.id, 'failed', { reden });
   return { status: 'failed', reden };
+}
+
+const ACTIE_LABEL: Record<Actie['type'], string> = {
+  search: 'zoekrun',
+  profile: 'profielbezoek',
+  invite: 'uitnodiging',
+  message: 'bericht',
+  inmail: 'InMail',
+};
+
+/**
+ * De aanvraag heeft LinkedIn niet bereikt: actie `failed` en, in dezelfde
+ * transactie, het verbruik terugboeken (SPEC §5.1). Geen `uitgevoerd_op`, zodat
+ * de MCP-pauze (§7) niet van deze actie uitgaat.
+ */
+async function failMetTerugboeking(
+  ctx: WorkerContext,
+  actie: Actie,
+  oorzaak: string,
+): Promise<WorkerUitkomst> {
+  const max = ctx.limieten.terugboeken.max_per_dag_per_type;
+  const label = ACTIE_LABEL[actie.type];
+  let teruggeboekt = false;
+  let reden = oorzaak;
+  await ctx.db.transaction(async (tx) => {
+    teruggeboekt = await boekTerug(tx, {
+      accountId: actie.accountId,
+      actieId: actie.id,
+      type: actie.type,
+      nu: ctx.klok.nu(),
+      maxPerDagPerType: max,
+    });
+    reden = teruggeboekt
+      ? `${oorzaak} Je ${label} is niet verbruikt.`
+      : `${oorzaak} De grens van ${max} terugboekingen per dag voor dit actietype is bereikt: deze ${label} telt mee.`;
+    await zetActieStatus(tx, actie.id, 'failed', { reden });
+    return true;
+  });
+  return teruggeboekt ? { status: 'failed', reden, teruggeboekt } : { status: 'failed', reden };
 }
 
 async function persisteer(

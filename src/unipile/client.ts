@@ -7,6 +7,9 @@ import {
   UnipileTimeoutFout,
   accountCredentialsCodeUitBody,
   codeUit422Body,
+  foutTypeUitBody,
+  UnipileValidatieFout,
+  VALIDATIE_400_VOOR_LINKEDIN,
   maak422Fout,
 } from './errors.ts';
 
@@ -246,6 +249,12 @@ export function maakUnipileClient(opties: UnipileOpties): UnipileClient {
         const code = codeUit422Body(raw) ?? 'onbekend';
         throw maak422Fout(code, endpoint);
       }
+      if (res.status === 400) {
+        const foutType = foutTypeUitBody(raw);
+        if (foutType && VALIDATIE_400_VOOR_LINKEDIN.has(foutType)) {
+          throw new UnipileValidatieFout(foutType, endpoint, detailUitBody(raw));
+        }
+      }
       const kort = raw ? `: ${raw.slice(0, 200)}` : '';
       throw new UnipileFout(
         'onverwacht',
@@ -469,6 +478,17 @@ function leesUsage(raw: unknown): UsageSignaal | undefined {
         : NaN;
   if (getal === 50 || getal === 75 || getal === 90 || getal === 95) {
     return { percentage: getal };
+  }
+  return undefined;
+}
+
+function detailUitBody(raw: string): string | undefined {
+  try {
+    const obj = JSON.parse(raw) as { detail?: unknown; title?: unknown };
+    if (typeof obj.detail === 'string') return obj.detail;
+    if (typeof obj.title === 'string') return obj.title;
+  } catch {
+    /* geen JSON */
   }
   return undefined;
 }

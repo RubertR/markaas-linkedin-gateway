@@ -107,7 +107,7 @@ verzoeken ≥ 30%; maximaal 1.0.
 
 ### 5.1 Terugboeken als de aanvraag LinkedIn niet heeft bereikt
 
-*Voorstel 15 okt 2026, nog niet vastgesteld.* Aanleiding: op 15 okt 2026 kostte een
+*Vastgesteld 15 okt 2026.* Aanleiding: op 15 okt 2026 kostte een
 zoekopdracht met een verkeerd filterformaat de enige zoekrun van de dag. Unipile weigerde
 de aanvraag met HTTP 400 en er ging niets naar LinkedIn. Daarna moest de teller in
 `usage` met de hand worden teruggezet.
@@ -123,8 +123,9 @@ die tegelijk aankomen nooit samen over de grens gaan. Nieuw is dat de reserverin
   `errors/content_too_large`.
 - Een fout in onze eigen payload, gevonden vóór de Unipile-aanroep (bijv. een
   berichttekst die niet klopt).
-- Een geweigerde of verlopen Access Token van de gateway zelf. Herkennen aan het
-  fouttype, niet alleen aan de HTTP-status (zie §11).
+- Later, na het besluit over §11: een geweigerde of verlopen Access Token van de gateway
+  zelf, herkend aan het fouttype en niet alleen aan de HTTP-status. Tot dat besluit valt
+  een 401/403 onder "terugboeken niet".
 
 **Terugboeken niet.** Hier kan de aanvraag LinkedIn wél hebben bereikt, of telt de uitkomst
 als signaal:
@@ -141,8 +142,9 @@ als signaal:
 1. Terugboeken gebeurt in dezelfde transactie als de statuswijziging van de actie naar
    `failed`. Het verlaagt de `usage`-rij van dezelfde dag waarop gereserveerd is (lokale dag
    van het account) met 1, en nooit onder 0.
-2. De actie krijgt de velden `teruggeboekt_op` en de reden (fouttype van Unipile), zodat het
-   terug te vinden is op de goedkeuringspagina en in `get_results`.
+2. De actie krijgt `teruggeboekt_op` (kolom, migratie 0011). De reden bevat het fouttype
+   van Unipile en de zin "… is niet verbruikt", zodat het terug te vinden is op de
+   goedkeuringspagina en in `get_results`.
 3. Een teruggeboekte actie krijgt geen `uitgevoerd_op`, dus de MCP-pauze (§7) gaat niet
    van deze actie uit. Een gecorrigeerde aanvraag kan zo direct opnieuw.
 4. **Grens tegen herhaling:** per account en actietype mogen hoogstens

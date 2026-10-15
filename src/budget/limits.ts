@@ -127,6 +127,12 @@ export interface VerzoekenSync {
   max_paginas: number;
 }
 
+/** Terugboeken van budget bij een weigering vóór LinkedIn (SPEC §5.1). */
+export interface Terugboeken {
+  /** Hoogstens zoveel terugboekingen per account, actietype en lokale dag; 0 = nooit. */
+  max_per_dag_per_type: number;
+}
+
 export interface Limieten {
   opbouw: Opbouw;
   afkoeling: Afkoeling;
@@ -135,6 +141,7 @@ export interface Limieten {
   sequenties: SequentieLimieten;
   unipile_usage_signaal: UnipileSignaal;
   verzoeken_sync: VerzoekenSync;
+  terugboeken: Terugboeken;
   abonnementen: Record<Abonnement, AbonnementLimieten>;
 }
 
@@ -174,6 +181,7 @@ export function limietenUitObject(obj: unknown): Limieten {
   const sequenties = parseSequenties(obj['sequenties']);
   const unipile_usage_signaal = parseUnipileSignaal(obj['unipile_usage_signaal']);
   const verzoeken_sync = parseVerzoekenSync(obj['verzoeken_sync']);
+  const terugboeken = parseTerugboeken(obj['terugboeken']);
 
   const bronAbonnementen = obj['abonnementen'];
   if (!isRecord(bronAbonnementen)) {
@@ -198,8 +206,22 @@ export function limietenUitObject(obj: unknown): Limieten {
     sequenties,
     unipile_usage_signaal,
     verzoeken_sync,
+    terugboeken,
     abonnementen,
   };
+}
+
+function parseTerugboeken(raw: unknown): Terugboeken {
+  if (!isRecord(raw)) {
+    throw new Error('Veld "terugboeken" ontbreekt in limieten-configuratie (SPEC §5.1).');
+  }
+  const max = raw['max_per_dag_per_type'];
+  if (typeof max !== 'number' || !Number.isInteger(max) || max < 0) {
+    throw new Error(
+      'Veld "terugboeken.max_per_dag_per_type" moet een geheel getal van 0 of hoger zijn.',
+    );
+  }
+  return { max_per_dag_per_type: max };
 }
 
 function parseVerzoekenSync(raw: unknown): VerzoekenSync {
