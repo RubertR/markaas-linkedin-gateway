@@ -318,6 +318,28 @@ De verzoekensync gebruikt daarom 100 per pagina en maximaal 5 pagina's (= 500).
 - Bij de eerste echte koppeling via de koppelpagina nakijken: komt de browser op
   `/koppelen/klaar` terecht, en welke queryparameters hangen eraan? Hier vastleggen.
 
+## Fouttypes (schema `POST /api/v1/linkedin/search`, opgezocht 15 okt 2026)
+
+Unipile geeft bij fouten een body met `type`, `title`, `status` en soms `detail`. Voor
+het terugboeken van budget (SPEC §5.1) telt het `type`, niet alleen de status.
+
+| Status | Types | Bereikt LinkedIn? |
+| --- | --- | --- |
+| 400 | `invalid_parameters`, `malformed_request`, `missing_parameters`, `limit_too_high`, `invalid_url`, `too_many_characters`, `unescaped_characters`, `content_too_large` | Nee: validatie door Unipile |
+| 400 | `target_audience_too_small` | Ja: antwoord op de uitgevoerde zoekopdracht |
+| 401 | `disconnected_account`, `expired_credentials`, `invalid_credentials`, `missing_credentials`, `multiple_sessions`, `checkpoint_error`, `insufficient_privileges`, `wrong_account` … | Account- of sessieprobleem, geen sleutelprobleem |
+| 403 | `insufficient_permissions`, `account_restricted`, `account_mismatch`, `unknown_authentication_context`, `session_mismatch`, `feature_not_subscribed` | Wisselend; als het meetelt, nemen we het zekere voor het onzekere |
+| 500 | `unexpected_error`, `provider_error`, `authentication_intent_error` | Onbekend |
+| 503 | `no_client_session`, `no_channel`, `no_handler`, `network_down`, `service_unavailable` | Onbekend |
+| 504 | `request_timeout` | Onbekend |
+
+Alle types hebben het voorvoegsel `errors/`.
+
+**Aanname, nog te bevestigen bij Unipile:** de 400-validatietypes worden afgewezen
+voordat de aanvraag naar LinkedIn gaat. Het schema zegt dat niet letterlijk. De naam
+("invalid parameters", "malformed request") en het feit dat er geen LinkedIn-resultaat in
+zit, wijzen er wel op.
+
 ## Opruimen na fase 1
 
 - 30 sep 2026: de drie testwebhooks naar webhook.site verwijderd (`DELETE /api/v1/webhooks/{id}`,
