@@ -27,10 +27,13 @@ import { voerActieUit, type WorkerContext, type WorkerUitkomst } from './worker.
  *   nieuwe gepland_op op het vroegst toegestane moment.
  * - weigering (structureel) → actie "rejected" met reden.
  *
- * Bij een gateway-sleutelfout (401/403 van onze eigen API-key) stopt de
- * planner alles: hij geeft `gatewayGestopt: true` terug zodat de bestuurder
- * (CLI/cron) kan ingrijpen; de account-status wordt NIET aangepast omdat
- * de LinkedIn-sessies zelf prima zijn.
+ * Een 401/403 van Unipile stopt alleen het account waar hij over gaat (SPEC
+ * §6a; de worker beslist via src/register/accountauth.ts): andere accounts
+ * lopen in dezelfde tick gewoon door. Alleen als ook de controle-aanroep
+ * (`GET /api/v1/accounts` zonder account-context) wordt geweigerd, is onze
+ * eigen API-sleutel kapot. Dan stopt de planner alles: hij geeft
+ * `gatewayGestopt: true` terug zodat de lus stopt tot een herstart; de
+ * account-status wordt dan NIET aangepast.
  */
 
 export interface PlannerContext {
@@ -50,6 +53,8 @@ export interface PlannerDetail {
   type: ActieType;
   resultaat: PlannerDetailStatus;
   reden: string | null;
+  /** De worker meldde dat onze Unipile-sleutel kapot is (SPEC §6a). */
+  gatewayAuthFout?: boolean;
 }
 
 export interface PlannerTickResultaat {
@@ -70,9 +75,7 @@ export async function voerPlannerTickUit(ctx: PlannerContext): Promise<PlannerTi
     if (!actie) continue;
     const detail = await verwerkActie(ctx, actie);
     details.push(detail);
-    if (detail.resultaat === 'queued' && detail.reden?.includes('Gateway-API-sleutel')) {
-      gatewayGestopt = true;
-    }
+    if (detail.gatewayAuthFout) gatewayGestopt = true;
   }
 
   return { verwerkt: details.length, gatewayGestopt, details };
@@ -175,7 +178,9 @@ async function verwerkActie(ctx: PlannerContext, actie: Actie): Promise<PlannerD
 }
 
 function werkDetail(actie: Actie, uitkomst: WorkerUitkomst): PlannerDetail {
-  return basisDetail(actie, uitkomst.status, uitkomst.reden);
+  const detail = basisDetail(actie, uitkomst.status, uitkomst.reden);
+  if (uitkomst.gatewayAuthFout) detail.gatewayAuthFout = true;
+  return detail;
 }
 
 function basisDetail(

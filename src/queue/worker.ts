@@ -5,17 +5,18 @@ import type { Klok } from '../budget/klok.ts';
 import type { Limieten } from '../budget/limits.ts';
 import { telInviteAlsOpenstaand } from '../budget/openstaand.ts';
 import { verlagingNaUnipileSignaal } from '../budget/opbouw.ts';
-import { vindAccount, werkAccountStatusBij } from '../register/accounts.ts';
+import { vindAccount } from '../register/accounts.ts';
 import type { Account } from '../register/accounts.ts';
+import { verwerkAccountAuthFout } from '../register/accountauth.ts';
 import type { UnipileClient } from '../unipile/client.ts';
 import {
   Unipile422Fout,
-  UnipileAccountCredentialsFout,
   UnipileFout,
   UnipileGatewayAuthFout,
   UnipileTijdelijkeFout,
   UnipileTimeoutFout,
   UnipileValidatieFout,
+  isAccountAuthFout,
   type Unipile422Code,
 } from '../unipile/errors.ts';
 
@@ -32,10 +33,22 @@ import {
  *
  * - 429 of 422 `limit_exceeded` / `connection_limit_reached` → account in
  *   afkoeling (48u), actie terug naar `queued`.
- * - UnipileAccountCredentialsFout → alleen dit account naar `CREDENTIALS` en
- *   `reconnectHook` aanroepen; actie terug naar `queued`.
- * - UnipileGatewayAuthFout (401/403) → signaal `gatewayAuthFout: true` zodat
- *   de planner alles stopt; account blijft ongewijzigd (het is onze API-sleutel).
+ * - 401/403 per account (SPEC §6a, src/register/accountauth.ts):
+ *   - sessie (UnipileAccountCredentialsFout) → alleen dit account naar
+ *     `CREDENTIALS` en `reconnectHook`; actie terug naar `queued`.
+ *   - `account_restricted` (UnipileAccountBeperktFout) → alleen dit account
+ *     naar `STOPPED`, géén reconnect; actie terug naar `queued` (de
+ *     budgetmotor laat niets door zolang het account `STOPPED` is).
+ *   - functie niet in abonnement (UnipileFunctieNietInAbonnementFout) →
+ *     alleen deze actie `failed`; account blijft `OK`, verbruik telt mee.
+ *   - onbekend type (UnipileOnbekendeAuthFout) → controle-aanroep (hoogstens
+ *     eens per 5 min per account). Sleutel kapot → `gatewayAuthFout: true`;
+ *     sleutel werkt → alleen dit account naar `ERROR`; controle zonder
+ *     uitsluitsel (time-out/5xx) → `queued` + 5 minuten.
+ *   Geen terugboeking bij een 401/403 (SPEC §6a regel 6).
+ * - UnipileGatewayAuthFout (401/403 zonder account-context) → signaal
+ *   `gatewayAuthFout: true` zodat de planner alles stopt; account blijft
+ *   ongewijzigd (het is onze API-sleutel).
  * - Overige 422 → `failed` (permanent, NL-reden).
  * - UnipileValidatieFout (400 vóór LinkedIn) of een eigen payloadfout →
  *   `failed` en het verbruik wordt teruggeboekt (SPEC §5.1), tot de grens per
@@ -73,7 +86,7 @@ export interface WorkerUitkomst {
   response?: Record<string, unknown>;
   usageSignaalPercentage?: number;
   typeDagStop?: boolean;
-  /** Alleen dit account pauzeren (CREDENTIALS); andere accounts blijven lopen. */
+  /** Alleen dit account staat stil (CREDENTIALS/STOPPED/ERROR); andere accounts blijven lopen. */
   alleenDitAccountPauzeren?: boolean;
   /** Signaal naar planner: gateway-sleutel is kapot, stop alles. */
   gatewayAuthFout?: boolean;
@@ -301,19 +314,37 @@ async function verwerkFout(
     return { status: 'queued', reden, gatewayAuthFout: true };
   }
 
-  if (err instanceof UnipileAccountCredentialsFout) {
-    const reden =
-      'LinkedIn-sessie voor dit account is verlopen; alleen dit account gepauzeerd en reconnect-link aangemaakt.';
-    await werkAccountStatusBij(ctx.db, account.id, 'CREDENTIALS');
-    if (ctx.reconnectHook) {
-      try {
-        await ctx.reconnectHook(account.id);
-      } catch {
-        /* reconnect-link is best-effort; webhook ontvangt reconnect normaal gesproken ook. */
+  if (isAccountAuthFout(err)) {
+    const auth = await verwerkAccountAuthFout(
+      {
+        db: ctx.db,
+        unipile: ctx.unipile,
+        klok: ctx.klok,
+        limieten: ctx.limieten,
+        ...(ctx.reconnectHook ? { reconnectHook: ctx.reconnectHook } : {}),
+      },
+      account,
+      err,
+    );
+    const reden = auth.reden;
+    switch (auth.gevolg) {
+      case 'functie_ontbreekt':
+        await persisteer(ctx.db, actie.id, 'failed', { reden });
+        return { status: 'failed', reden };
+      case 'gateway_kapot':
+        await persisteer(ctx.db, actie.id, 'queued', { reden });
+        return { status: 'queued', reden, gatewayAuthFout: true };
+      case 'controle_mislukt': {
+        const geplandOp = new Date(ctx.klok.nu().getTime() + UITVOER_TIME_OUT_HERPLANNING_SECONDEN * 1000);
+        await persisteer(ctx.db, actie.id, 'queued', { reden, geplandOp });
+        return { status: 'queued', reden };
       }
+      case 'credentials':
+      case 'gestopt':
+      case 'account_fout':
+        await persisteer(ctx.db, actie.id, 'queued', { reden });
+        return { status: 'queued', reden, alleenDitAccountPauzeren: true };
     }
-    await persisteer(ctx.db, actie.id, 'queued', { reden });
-    return { status: 'queued', reden, alleenDitAccountPauzeren: true };
   }
 
   if (err instanceof UnipileTijdelijkeFout && err.status === 429) {

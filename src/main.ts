@@ -126,7 +126,15 @@ async function main(): Promise<void> {
     logger,
     tick: async () => {
       // Eerst de teller gelijkzetten, zodat de budgetmotor met verse cijfers werkt.
-      const verzoeken = await verwerkVerzoekenSyncTick({ db, unipile, limieten, klok });
+      const verzoeken = await verwerkVerzoekenSyncTick({
+        db,
+        unipile,
+        limieten,
+        klok,
+        reconnectHook: async (accountId) => {
+          await maakReconnectLink(db, unipile, koppelOpties, accountId);
+        },
+      });
       logVerzoekenSync(logger, verzoeken);
       if (verzoeken.gatewayGestopt) return { gatewayGestopt: true };
       const sequenties = await verwerkSequentieTick({

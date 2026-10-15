@@ -9,7 +9,9 @@ import { maakClient } from '../register/clients.ts';
 import { markeerAccountGekoppeld, registreerAccount, vindAccount } from '../register/accounts.ts';
 import type { KoppelflowOpties } from '../register/koppelflow.ts';
 
-import { verwerkUnipileWebhook } from './unipile.ts';
+import { zetAccountStatusDoorGateway } from '../register/accountauth.ts';
+
+import { verwerkUnipileWebhook, webhookMagStatusZetten } from './unipile.ts';
 
 let db: Backend;
 let close: () => Promise<void>;
@@ -99,6 +101,82 @@ describe('account_status webhook', () => {
     assert.equal(uitkomst.verwerkt, true);
     const account = await vindAccount(db, accountId);
     assert.equal(account?.status, 'OK');
+  });
+
+  describe('strengste status wint tegen de gateway (SPEC §6a regel 5)', () => {
+    const NU = new Date('2026-10-01T09:00:00Z');
+
+    async function gatewayZet(status: 'CREDENTIALS' | 'ERROR' | 'STOPPED'): Promise<void> {
+      const gewijzigd = await zetAccountStatusDoorGateway(db, accountId, status, { reden: 'test' }, NU);
+      assert.equal(gewijzigd, true);
+    }
+
+    async function webhook(event: string, timestamp: string) {
+      return await verwerkUnipileWebhook(db, unipile, KOPPEL_OPTIES, {
+        event,
+        account_id: UNIPILE_ACCOUNT_ID,
+        timestamp,
+      });
+    }
+
+    it('webhook credentials zet een door de gateway STOPPED account niet terug; geen reconnect-link', async () => {
+      await gatewayZet('STOPPED');
+      const uit = await webhook('credentials', '2026-10-01T10:00:00Z');
+      assert.equal(uit.verwerkt, false);
+      assert.match(uit.reden ?? '', /STOPPED/);
+      assert.equal((await vindAccount(db, accountId))?.status, 'STOPPED');
+      assert.equal(await tel("events where type = 'reconnect_link_klaar'"), 0);
+      assert.equal(fake.aanroepen.length, 0);
+    });
+
+    it('webhook credentials zet een ERROR-account niet terug naar CREDENTIALS', async () => {
+      await gatewayZet('ERROR');
+      await webhook('credentials', '2026-10-01T10:00:00Z');
+      assert.equal((await vindAccount(db, accountId))?.status, 'ERROR');
+    });
+
+    it('webhook stopped op een CREDENTIALS-account (gateway) → STOPPED (strenger wint)', async () => {
+      await gatewayZet('CREDENTIALS');
+      await webhook('stopped', '2026-10-01T10:00:00Z');
+      assert.equal((await vindAccount(db, accountId))?.status, 'STOPPED');
+    });
+
+    it('webhook reconnected heft CREDENTIALS van de gateway op', async () => {
+      await gatewayZet('CREDENTIALS');
+      const uit = await webhook('reconnected', '2026-10-01T10:00:00Z');
+      assert.equal(uit.verwerkt, true);
+      assert.equal((await vindAccount(db, accountId))?.status, 'RECONNECTED');
+    });
+
+    it('webhook reconnected of ok heft een STOPPED/ERROR van de gateway niet op', async () => {
+      await gatewayZet('STOPPED');
+      await webhook('reconnected', '2026-10-01T10:00:00Z');
+      await webhook('ok', '2026-10-01T10:01:00Z');
+      assert.equal((await vindAccount(db, accountId))?.status, 'STOPPED');
+      await db.query("update accounts set status = 'OK' where id = $1", [accountId]);
+      await zetAccountStatusDoorGateway(db, accountId, 'ERROR', { reden: 'test' }, new Date('2026-10-01T11:00:00Z'));
+      await webhook('ok', '2026-10-01T11:05:00Z');
+      assert.equal((await vindAccount(db, accountId))?.status, 'ERROR');
+    });
+
+    it('een ERROR die Unipile zelf meldde, heft een latere ok-webhook wel op', async () => {
+      await webhook('error', '2026-10-01T10:00:00Z');
+      assert.equal((await vindAccount(db, accountId))?.status, 'ERROR');
+      await webhook('ok', '2026-10-01T10:05:00Z');
+      assert.equal((await vindAccount(db, accountId))?.status, 'OK');
+    });
+
+    it('webhookMagStatusZetten: de beslisregel per combinatie', () => {
+      assert.equal(webhookMagStatusZetten('STOPPED', 'CREDENTIALS', true), false);
+      assert.equal(webhookMagStatusZetten('STOPPED', 'CREDENTIALS', false), false);
+      assert.equal(webhookMagStatusZetten('ERROR', 'CREDENTIALS', false), false);
+      assert.equal(webhookMagStatusZetten('ERROR', 'STOPPED', true), true);
+      assert.equal(webhookMagStatusZetten('CREDENTIALS', 'ERROR', true), true);
+      assert.equal(webhookMagStatusZetten('CREDENTIALS', 'RECONNECTED', true), true);
+      assert.equal(webhookMagStatusZetten('STOPPED', 'RECONNECTED', true), false);
+      assert.equal(webhookMagStatusZetten('STOPPED', 'RECONNECTED', false), true);
+      assert.equal(webhookMagStatusZetten('OK', 'CREDENTIALS', false), true);
+    });
   });
 
   it('onbekende Unipile-status wordt UNKNOWN in plaats van te falen', async () => {

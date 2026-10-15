@@ -270,11 +270,12 @@ describe('planner — foutpaden via worker', () => {
     assert.ok(account?.afkoelingTot);
   });
 
-  it('gateway-sleutelfout stopt de planner (gatewayGestopt=true, overige acties niet aangeraakt)', async () => {
+  it('gateway-sleutelfout (401 + mislukte controle-aanroep) stopt de planner (gatewayGestopt=true, overige acties niet aangeraakt)', async () => {
     fake.antwoord('POST', '/api/v1/users/invite', {
       status: 401,
       body: { error: 'unauthorized' },
     });
+    fake.antwoord('GET', '/api/v1/accounts', { status: 401, body: { error: 'unauthorized' } });
     const a1 = await maakGoedgekeurdeInvite({ accountId, providerId: 'ACo-A' });
     const b1 = await maakGoedgekeurdeInvite({ accountId: tweedeAccountId, providerId: 'ACw-B' });
 
@@ -288,6 +289,70 @@ describe('planner — foutpaden via worker', () => {
       statussen.includes('approved'),
       `verwachte een onaangeraakt approved; kreeg ${JSON.stringify(statussen)}`,
     );
+  });
+});
+
+describe('planner — 401/403 per account: andere accounts lopen door (SPEC §6a)', () => {
+  /** Eerste account krijgt `fout`, het tweede een geslaagde invite. */
+  function inviteAntwoordPerAccount(fout: { status: number; body: unknown }): void {
+    fake.antwoord('POST', '/api/v1/users/invite', (aanroep) => {
+      const body = aanroep.body as { account_id?: string } | undefined;
+      return body?.account_id === UNIPILE_ACCOUNT_ID
+        ? fout
+        : { status: 200, body: { object: 'UserInvitationSent', invitation_id: 'inv-ok' } };
+    });
+  }
+
+  const GEVALLEN: Array<{ naam: string; fout: { status: number; body: unknown }; status: string }> = [
+    {
+      naam: 'CREDENTIALS (401 disconnected_account)',
+      fout: { status: 401, body: { status: 401, type: 'errors/disconnected_account' } },
+      status: 'CREDENTIALS',
+    },
+    {
+      naam: 'STOPPED (403 account_restricted)',
+      fout: { status: 403, body: { status: 403, type: 'errors/account_restricted' } },
+      status: 'STOPPED',
+    },
+    {
+      naam: 'ERROR (401 zonder type, controle-aanroep geslaagd)',
+      fout: { status: 401, body: { error: 'unauthorized' } },
+      status: 'ERROR',
+    },
+  ];
+
+  for (const geval of GEVALLEN) {
+    it(`eerste account op ${geval.naam}; tweede account gaat in dezelfde tick door`, async () => {
+      inviteAntwoordPerAccount(geval.fout);
+      fake.antwoord('GET', '/api/v1/accounts', { status: 200, body: { items: [] } });
+      const a1 = await maakGoedgekeurdeInvite({ accountId, providerId: 'ACo-A' });
+      const b1 = await maakGoedgekeurdeInvite({ accountId: tweedeAccountId, providerId: 'ACw-B' });
+
+      const resultaat = await voerPlannerTickUit(basisContext());
+      assert.equal(resultaat.gatewayGestopt, false);
+      assert.equal(resultaat.verwerkt, 2);
+      assert.equal((await vindActie(db, a1.id))?.status, 'queued');
+      assert.equal((await vindActie(db, b1.id))?.status, 'done');
+      assert.equal((await vindAccount(db, accountId))?.status, geval.status);
+      assert.equal((await vindAccount(db, tweedeAccountId))?.status, 'OK');
+    });
+  }
+
+  it('volgende tick: het stilgelegde account krijgt geen Unipile-aanroep, het tweede account loopt door', async () => {
+    inviteAntwoordPerAccount({ status: 403, body: { status: 403, type: 'errors/account_restricted' } });
+    await maakGoedgekeurdeInvite({ accountId, providerId: 'ACo-A' });
+    await voerPlannerTickUit(basisContext());
+    assert.equal((await vindAccount(db, accountId))?.status, 'STOPPED');
+
+    fake.aanroepen.length = 0;
+    const b2 = await maakGoedgekeurdeInvite({ accountId: tweedeAccountId, providerId: 'ACw-C' });
+    const r2 = await voerPlannerTickUit(basisContext({ klok: vasteKlok('2026-10-06T10:30:00Z') }));
+    assert.equal(r2.gatewayGestopt, false);
+    assert.equal((await vindActie(db, b2.id))?.status, 'done');
+    const naarEerste = fake.aanroepen.filter(
+      (a) => (a.body as { account_id?: string } | undefined)?.account_id === UNIPILE_ACCOUNT_ID,
+    );
+    assert.equal(naarEerste.length, 0, 'geen LinkedIn-verkeer voor een STOPPED account');
   });
 });
 
