@@ -46,6 +46,20 @@ ID's zijn stabiel: cache ze in de gateway in plaats van ze elke keer op te vrage
   huidige bedrijf echt in scope is (hier ca. 5 van 25 twijfelgevallen).
 - **Budget:** telt als 25 zoekresultaten (werknorm 2.500/dag Sales Navigator).
 
+**Filterformaten Sales Navigator people (schema opgezocht 15 okt 2026):**
+
+- `company` (huidig bedrijf), `role` (huidige functie), `location` en vergelijkbare filters
+  zijn objecten met `include`/`exclude`, bijv. `"company": {"include": ["Ebbinge", "UBN"]}`.
+  Bij `company` en `role` mag een plain-text naam in plaats van een ID; `location`
+  vraagt een REGION-ID (Nederland = `102890719`).
+- Het array-formaat `"company": [{"keywords": …, "scope": "CURRENT", "priority": …}]` hoort
+  níet bij Sales Navigator people en geeft HTTP 400 `errors/invalid_parameters`
+  (15 okt 2026).
+- `keywords` matcht ook op persoonsnamen: bedrijfsnamen daarin geven ruis (14 okt 2026,
+  49 van 50 resultaten onbruikbaar).
+- Let op: een zoekopdracht die Unipile met 400 weigert, telt in de gateway nu toch als
+  verbruikte zoekrun van de dag (15 okt 2026).
+
 ## Profiel ophalen
 
 *Getest 30 sep 2026, v1, 3 profielen van 1e-graads connecties.*
