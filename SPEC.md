@@ -212,7 +212,7 @@ als signaal:
 
 ### 6a. 401 en 403 van Unipile: per account of gateway-breed
 
-*Voorstel 15 okt 2026, nog niet vastgesteld.* Nu stopt elke 401 of 403 de hele gateway
+*Vastgesteld 15 okt 2026.* Nu stopt elke 401 of 403 de hele gateway
 (`UnipileGatewayAuthFout`). Volgens de Unipile-documentatie gaat een 401 of 403 meestal over
 één account of één functie. Met meerdere klanten mag één verlopen sessie de rest niet
 stilleggen. De gateway beslist daarom op het `type` in de foutbody:
@@ -470,7 +470,7 @@ welke sequentie het verzoek komt zonder in de database te duiken.
 - ~~Supabase als database, of een beheerde Postgres bij de host?~~ Beslist in fase 2:
   **Supabase, Frankfurt (`eu-central-1`)**.
 - Unipile-API-versie: de proefomgeving (30 sep 2026) is **v1** (DSN `api68.unipile.com:19841`, account-ID's zonder `acc_`). Vaststellen of v1 de basis blijft of dat we naar v2 migreren.
-- **401/403 van Unipile (gevonden 15 okt 2026).** Voorstel in §6a: classificeren op het
+- ~~**401/403 van Unipile (gevonden 15 okt 2026).**~~ Beslist in §6a: classificeren op het
   `type` in de body, en alleen na een mislukte controle-aanroep de hele gateway stoppen.
 - Apart Unipile-account voor productie vóór fase 4? Nu delen ontwikkeling en productie
   één Unipile-account en DSN, en verschillen ze alleen in hun Access Token. Besluiten
@@ -522,7 +522,7 @@ Goedkeuren kan door de klant én door MARKaaS. `goedgekeurd_door` legt vast wie:
 
 ### 14.2a Account toevoegen aan een bestaande klant
 
-*Voorstel 15 okt 2026, nog niet vastgesteld.* Een klant kan meerdere LinkedIn-accounts
+*Vastgesteld 15 okt 2026.* Een klant kan meerdere LinkedIn-accounts
 hebben, bijvoorbeeld één afzender per markt. Nu maakt `/admin/klanten/nieuw` alleen een klant
 met één account.
 
