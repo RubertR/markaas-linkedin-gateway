@@ -247,6 +247,63 @@ Tests (`test/fake-unipile/`), voor elk geval een test:
   staat;
 - de controle-aanroep wordt niet vaker dan eens per 5 minuten per account gedaan.
 
+### 6b. Account op pauze: wachtende acties, opnieuw koppelen en vrijgeven
+
+*Voorstel 15 okt 2026, nog niet vastgesteld.* Drie punten uit de bouw van §6a:
+- wachtende acties gaan nu verloren als een account op pauze staat;
+- opnieuw koppelen heft ook een beperking door LinkedIn op;
+- een account dat de gateway heeft stilgezet, kan in de admin niet weer aan.
+
+**1. Wachtende acties blijven bewaard.**
+- Staat een account op `CREDENTIALS`, `ERROR` of `STOPPED`, dan geeft budgetcontrole 1 (§5) voortaan
+  **wachtrij** in plaats van weigering. Goedgekeurde `invite`-, `message`- en
+  `inmail`-acties blijven `queued` en worden elke 60 minuten opnieuw beoordeeld, net als bij
+  de betaalpoort. Is het account weer `OK`, dan lopen ze door (§6 punt 4).
+- Een geparkeerde actie vervalt na `account_pauze.max_parkeer_dagen` dagen (voorstel: 14, in
+  `config/limits.json`). Daarna wordt hij `rejected`, met als reden "account stond te lang op
+  pauze". Zo gaat er na weken geen verouderd bericht meer weg.
+- `search` en `profile` via de synchrone MCP-tools worden op een account met pauze **direct
+  geweigerd** met een NL-melding. Ze worden niet geparkeerd: een zoekopdracht die uren later
+  vanzelf draait, heeft geen nut. Er wordt geen budget verbruikt.
+- `PERMISSIONS` en een onbekende status blijven weigeren, zoals nu.
+- Sequenties: de tick maakt op een account met pauze nog steeds geen nieuwe stappen (§8a.4).
+  De wachttijd van een sequentie loopt door; het vervallen van een verzoek (21 dagen) blijft
+  gelden.
+
+**2. Opnieuw koppelen heft alleen sessieproblemen op.**
+- De callback `RECONNECTED` van hosted auth (§6) en de webhook met een herstelstatus
+  heffen alleen `CREDENTIALS` op, en ook een `ERROR` die door een onbekende 401/403 kwam
+  (§6a). Opnieuw inloggen kan die oplossen.
+- Een `STOPPED` die de gateway zette (LinkedIn heeft het account beperkt) blijft staan.
+  Ook na opnieuw koppelen moet Rubert het account eerst zelf vrijgeven (punt 3).
+- De koppeling zelf wordt wel opgeslagen (sessie geldig), en er komt een event
+  `account_status` met de reden "opnieuw gekoppeld, maar nog gestopt door beperking".
+
+**3. Vrijgeven in de admin.**
+- Op `/admin/klanten/<slug>` krijgt elk account met `ERROR` of `STOPPED` een knop
+  **Account vrijgeven**. Daarbij moet Rubert een verplichte reden invullen, bijvoorbeeld
+  "eigenaar heeft in LinkedIn gecontroleerd, beperking opgeheven".
+- Vrijgeven zet het account op `OK`. Ging het om `STOPPED`, dan zet het ook de opbouw_factor op
+  `afkoeling.opbouw_factor_na` (0,5) voor `afkoeling.opbouw_periode_dagen` (7). Dat is
+  hetzelfde als na een afkoeling (§5 controle 6).
+- Een vrijgave komt als event `account_status` (bron `gateway`, met reden en wie het deed)
+  in de events-tabel.
+- Het portaal krijgt geen vrijgeefknop (v1). De klant ziet de status en de melding "neem
+  contact op met MARKaaS".
+- Een account op `CREDENTIALS` krijgt geen vrijgeefknop: dat lost zich op door opnieuw te
+  koppelen.
+
+Tests (`test/fake-unipile/`), voor elk geval een test:
+- een goedgekeurde actie op een account met `CREDENTIALS` blijft `queued`, en loopt
+  door na `RECONNECTED`;
+- een geparkeerde actie vervalt na `max_parkeer_dagen`;
+- een synchrone zoekopdracht op een account met pauze geeft een NL-weigering, maakt geen
+  Unipile-aanroep en verbruikt geen budget;
+- `RECONNECTED` heft `CREDENTIALS` en een §6a-`ERROR` op, maar niet een `STOPPED`;
+- vrijgeven vereist een reden, zet `OK`, en verlaagt bij `STOPPED` de opbouw_factor;
+- CSRF op de vrijgeefknop werkt;
+- de knop staat er niet bij `CREDENTIALS`.
+
 ## 7. MCP-tools voor skills
 
 | Tool | Doet | Budget |
