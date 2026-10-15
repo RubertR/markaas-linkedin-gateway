@@ -210,6 +210,43 @@ als signaal:
 4. Status `CREDENTIALS` → account op pauze, nieuwe link met `type: reconnect`, mail naar Rubert
    en eigenaar. Bij `RECONNECTED` lopen wachtende acties door.
 
+### 6a. 401 en 403 van Unipile: per account of gateway-breed
+
+*Voorstel 15 okt 2026, nog niet vastgesteld.* Nu stopt elke 401 of 403 de hele gateway
+(`UnipileGatewayAuthFout`). Volgens de Unipile-documentatie gaat een 401 of 403 meestal over
+één account of één functie. Met meerdere klanten mag één verlopen sessie de rest niet
+stilleggen. De gateway beslist daarom op het `type` in de foutbody:
+
+| Type (`errors/…`) | Betekenis | Gevolg |
+| --- | --- | --- |
+| 401 `disconnected_account`, `expired_credentials`, `invalid_credentials`, `missing_credentials`, `multiple_sessions`, `checkpoint_error`, `invalid_checkpoint_solution`, `wrong_account`; 403 `session_mismatch`, `unknown_authentication_context`, `account_mismatch` | Sessie van dit account werkt niet | Alleen dit account naar `CREDENTIALS`, reconnect-link, mail naar Rubert en eigenaar (§6 punt 4). Actie terug in de wachtrij. |
+| 403 `account_restricted` | LinkedIn heeft dit account beperkt | Alleen dit account naar `STOPPED` met reden, **geen** reconnect-link en geen nieuwe acties. Melding aan Rubert: de eigenaar moet eerst zelf in LinkedIn kijken. Ook de klant ziet het in het portaal. |
+| 403 `feature_not_subscribed`, `insufficient_permissions`, 401 `insufficient_privileges`, `disconnected_feature` | Deze functie hoort niet bij het abonnement (bijv. Sales Navigator-zoekopdracht of InMail op een gewoon account) | Alleen deze actie `failed` met NL-reden ("functie zit niet in het LinkedIn-abonnement van dit account"). Account blijft `OK`. Telt mee in het budget. |
+| Geen of onbekend type | Onbekend | **Controle-aanroep:** de gateway doet één `GET /api/v1/accounts` zonder account-context. Geeft die ook 401/403, dan is de API-sleutel van de gateway kapot: alles stopt, zoals nu. Lukt die wel, dan ligt het aan dit account: alleen dit account naar `ERROR` met de ruwe status en het type in de reden, en een melding aan Rubert. |
+
+Regels:
+1. De classificatie hoort in `src/unipile/` (CLAUDE.md regel 2). De worker, de planner, de
+   verzoeken-sync en de synchrone MCP-tools gebruiken dezelfde foutklassen.
+2. Een gateway-brede stop gebeurt alleen nog na een mislukte controle-aanroep. De lus blijft
+   dan gestopt tot een herstart (zoals nu) en meldt het aan Rubert.
+3. Per account hoogstens één controle-aanroep per 5 minuten, zodat een kapot account de
+   API niet blijft bestoken.
+4. Statuswijzigingen per account komen in de events-tabel (`account_status`, bron `gateway`),
+   zodat de goedkeuringspagina en het portaal ze tonen.
+5. De webhook `account_status` van Unipile (§8) blijft het tweede signaal voor dezelfde
+   toestand. Komen beide binnen, dan wint de strengste status (`STOPPED` > `ERROR` >
+   `CREDENTIALS`).
+6. Budget: een 401 of 403 heeft LinkedIn niet bereikt, maar wordt niet teruggeboekt (§5.1),
+   omdat het account toch stilligt of de functie ontbreekt.
+
+Tests (`test/fake-unipile/`), voor elk geval een test:
+- elk type uit de tabel krijgt het juiste gevolg;
+- een onbekend type met een geslaagde controle-aanroep zet alleen dat account op `ERROR`;
+- een onbekend type met een mislukte controle-aanroep stopt de gateway;
+- een tweede account blijft doorlopen terwijl het eerste op `CREDENTIALS` of `STOPPED`
+  staat;
+- de controle-aanroep wordt niet vaker dan eens per 5 minuten per account gedaan.
+
 ## 7. MCP-tools voor skills
 
 | Tool | Doet | Budget |
@@ -433,13 +470,8 @@ welke sequentie het verzoek komt zonder in de database te duiken.
 - ~~Supabase als database, of een beheerde Postgres bij de host?~~ Beslist in fase 2:
   **Supabase, Frankfurt (`eu-central-1`)**.
 - Unipile-API-versie: de proefomgeving (30 sep 2026) is **v1** (DSN `api68.unipile.com:19841`, account-ID's zonder `acc_`). Vaststellen of v1 de basis blijft of dat we naar v2 migreren.
-- **401/403 van Unipile (gevonden 15 okt 2026).** `src/unipile/client.ts` behandelt elke
-  401/403 als een ongeldige API-sleutel van de gateway en stopt dan alles. Volgens de
-  Unipile-documentatie van `POST /api/v1/linkedin/search` betekent 401 echter meestal een
-  account- of sessieprobleem (`errors/disconnected_account`, `errors/expired_credentials`
-  …). 403 kan ook `errors/account_restricted` of `errors/feature_not_subscribed` zijn.
-  Voorstel: classificeren op het `type` in de body, niet alleen op de status, en alleen een
-  sleutelfout stoppen. Nodig voor §5.1, los te besluiten.
+- **401/403 van Unipile (gevonden 15 okt 2026).** Voorstel in §6a: classificeren op het
+  `type` in de body, en alleen na een mislukte controle-aanroep de hele gateway stoppen.
 - Apart Unipile-account voor productie vóór fase 4? Nu delen ontwikkeling en productie
   één Unipile-account en DSN, en verschillen ze alleen in hun Access Token. Besluiten
   voordat de eerste klantaccounts overgaan.
@@ -487,6 +519,43 @@ Goedkeuren kan door de klant én door MARKaaS. `goedgekeurd_door` legt vast wie:
 5. Daarna maakt de gateway een Unipile hosted-auth-link (`type: create`) en stuurt de browser
    door. Callback `CREATION_SUCCESS` werkt zoals in §6.
 6. De pagina toont na terugkomst "gekoppeld" of een duidelijke foutmelding met vervolgstap.
+
+### 14.2a Account toevoegen aan een bestaande klant
+
+*Voorstel 15 okt 2026, nog niet vastgesteld.* Een klant kan meerdere LinkedIn-accounts
+hebben, bijvoorbeeld één afzender per markt. Nu maakt `/admin/klanten/nieuw` alleen een klant
+met één account.
+
+1. Op `/admin/klanten/<slug>` komt een knop **Account toevoegen** met de velden:
+   - naam en e-mail van de accounteigenaar;
+   - LinkedIn-abonnement (zelfde keuzelijst als bij een nieuwe klant);
+   - **tijdzone**: keuzelijst met Europe/Amsterdam (standaard), Europe/London, Europe/Paris,
+     Europe/Berlin, Europe/Brussels, of een andere geldige IANA-naam. Ongeldige naam →
+     NL-melding.
+2. Ook het formulier **Nieuwe klant** krijgt het veld tijdzone. Het vaste
+   `Europe/Amsterdam` in `src/register/nieuweklant.ts` vervalt.
+3. Het nieuwe account volgt dezelfde regels als het eerste (§14.2): status `CONNECTING`,
+   opbouw_factor 0.5, een koppeluitnodiging van 7 dagen, de koppelpagina met de drie
+   vinkjes en `account_consents`. Een account van een betalende klant wordt **nooit** via de
+   CLI (`account:registreer`) geregistreerd, omdat die de toestemming overslaat.
+4. Heeft de klant al een (niet verwijderd) account met hetzelfde e-mailadres van de eigenaar,
+   dan weigert de admin met een NL-melding. Een eigenaar heeft één LinkedIn-account.
+5. Het aantal accounts op het Stripe-abonnement wordt pas bijgewerkt na een geslaagde
+   koppeling (zoals nu, §14.4). Een toegevoegd maar niet gekoppeld account kost niets.
+6. De klantpagina in de admin toont per account eigenaar, abonnement, tijdzone, status en de
+   knop voor een nieuwe koppellink.
+7. Alleen de admin kan accounts toevoegen. Het portaal krijgt dit niet (v1).
+
+Tests:
+- account toevoegen met elk veld en een geldige tijdzone;
+- weigeren bij een ongeldige tijdzone, een onbekend abonnement en een dubbel e-mailadres;
+- weigeren bij een onbekende klant;
+- de uitnodiging werkt via de koppelpagina en `account_consents` legt de toestemming vast
+  voor het tweede account;
+- een nieuwe klant met tijdzone Europe/London krijgt die tijdzone ook echt.
+
+Buiten deze paragraaf, apart te bouwen: een Engelse versie van koppelpagina en mail, en de
+planner-lus per accounttijdzone (een Brits account mist nu 16:30–17:30 Londense tijd).
 
 ### 14.3 Klantportaal
 
