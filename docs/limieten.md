@@ -22,6 +22,9 @@ Regels:
 - De opbouwfactor geldt **niet voor InMail**: InMail-tegoed is betaald maandtegoed en blijft
   op de volle abonnementsnorm (Sales Navigator Core: 50/maand, ook bij factor 0,5).
 - Waarschuwing, captcha of 429: 48 uur stop, daarna een week op 50%.
+- Weigert Unipile een aanvraag vóór LinkedIn (400-validatiefout of eigen payloadfout), dan
+  kost hij geen budget. Hoogstens 3 van zulke terugboekingen per account, actietype en dag;
+  daarna telt een weigering wel mee (SPEC §5.1).
 
 Bronnen:
 

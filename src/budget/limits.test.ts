@@ -21,6 +21,7 @@ describe('laadLimieten', () => {
     assert.equal(limieten.unipile_usage_signaal.afremmen_bij_percentage, 75);
     assert.equal(limieten.verzoeken_sync.pagina_grootte, 100);
     assert.equal(limieten.verzoeken_sync.max_paginas, 5);
+    assert.equal(limieten.terugboeken.max_per_dag_per_type, 3);
     assert.equal(limieten.tekst_max_tekens.invite, 300);
     assert.equal(limieten.tekst_max_tekens.message, 8000);
     assert.equal(limieten.tekst_max_tekens.inmail, 2000);
@@ -108,6 +109,7 @@ describe('limietenUitObject', () => {
       },
       unipile_usage_signaal: { afremmen_bij_percentage: 75, nieuwe_factor_bij_afremmen: 0.5 },
       verzoeken_sync: { pagina_grootte: 100, max_paginas: 5 },
+      terugboeken: { max_per_dag_per_type: 3 },
       abonnementen: {
         free: {},
       },
@@ -125,6 +127,18 @@ describe('limietenUitObject', () => {
     const basis = basisConfig();
     basis['verzoeken_sync'] = { pagina_grootte: 250, max_paginas: 2 };
     assert.throws(() => limietenUitObject(basis), /pagina_grootte/);
+  });
+
+  it('werpt NL-fout als terugboeken ontbreekt of geen geheel getal ≥ 0 is (SPEC §5.1)', () => {
+    const zonder = basisConfig();
+    delete (zonder as Record<string, unknown>)['terugboeken'];
+    assert.throws(() => limietenUitObject(zonder), /terugboeken/);
+    const kapot = basisConfig();
+    kapot['terugboeken'] = { max_per_dag_per_type: 1.5 };
+    assert.throws(() => limietenUitObject(kapot), /max_per_dag_per_type/);
+    const nul = basisConfig();
+    nul['terugboeken'] = { max_per_dag_per_type: 0 };
+    assert.equal(limietenUitObject(nul).terugboeken.max_per_dag_per_type, 0);
   });
 
   it('werpt NL-fout als start_factor buiten [0.5, 1.0] ligt', () => {
@@ -198,6 +212,7 @@ function basisConfig(): Record<string, Record<string, unknown>> & {
       nieuwe_factor_bij_afremmen: 0.5,
     },
     verzoeken_sync: { pagina_grootte: 100, max_paginas: 5 },
+    terugboeken: { max_per_dag_per_type: 3 },
     abonnementen: {
       free: perAbonnement(),
       premium_career: perAbonnement(),

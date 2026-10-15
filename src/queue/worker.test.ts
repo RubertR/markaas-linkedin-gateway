@@ -4,6 +4,7 @@ import { after, before, beforeEach, describe, it } from 'node:test';
 import type { Backend } from '../db/backend.ts';
 import { laadLimieten, type Limieten } from '../budget/limits.ts';
 import { vasteKlok } from '../budget/klok.ts';
+import { telGebruikOpDag, verhoogGebruik } from '../budget/gebruik.ts';
 import { markeerAccountGekoppeld, registreerAccount, vindAccount } from '../register/accounts.ts';
 import { maakClient } from '../register/clients.ts';
 import { startFakeUnipile, type FakeUnipile } from '../../test/fake-unipile/server.ts';
@@ -633,5 +634,102 @@ describe('worker — openstaande_verzoeken', () => {
     const b = await maakReservedeActie({ type: 'invite', payload: { providerId: 'ACo-o5' } });
     assert.equal((await voerActieUit(basisContext(), b)).status, 'failed');
     assert.equal(await openstaand(), 0);
+  });
+});
+
+describe('worker — terugboeken als Unipile vóór LinkedIn weigert (SPEC §5.1)', () => {
+  const DAG = '2026-10-06';
+
+  async function zoekActieMetReservering() {
+    await verhoogGebruik(db, accountId, 'search', DAG, 1);
+    return maakReservedeActie({
+      type: 'search',
+      payload: { api: 'sales_navigator', filters: { company: [{ keywords: 'x' }] } },
+    });
+  }
+
+  function zoekAntwoord(status: number, body: unknown, delayMs?: number) {
+    fake.antwoord('POST', '/api/v1/linkedin/search', {
+      status,
+      body,
+      ...(delayMs ? { delayMs } : {}),
+    });
+  }
+
+  it('400 invalid_parameters → "failed", verbruik teruggeboekt, geen uitgevoerd_op', async () => {
+    zoekAntwoord(400, { status: 400, type: 'errors/invalid_parameters', title: 'Invalid parameters' });
+    const actie = await zoekActieMetReservering();
+    const uitkomst = await voerActieUit(basisContext(), actie);
+    assert.equal(uitkomst.status, 'failed');
+    assert.equal(uitkomst.teruggeboekt, true);
+    assert.match(uitkomst.reden!, /niet verbruikt/);
+    assert.equal(await telGebruikOpDag(db, accountId, 'search', DAG), 0);
+    const opgeslagen = await vindActie(db, actie.id);
+    assert.equal(opgeslagen?.status, 'failed');
+    assert.ok(opgeslagen?.teruggeboektOp);
+    assert.equal(opgeslagen?.uitgevoerdOp, null);
+  });
+
+  it('400 target_audience_too_small → "failed", telt wél mee', async () => {
+    zoekAntwoord(400, { status: 400, type: 'errors/target_audience_too_small' });
+    const actie = await zoekActieMetReservering();
+    const uitkomst = await voerActieUit(basisContext(), actie);
+    assert.equal(uitkomst.status, 'failed');
+    assert.notEqual(uitkomst.teruggeboekt, true);
+    assert.equal(await telGebruikOpDag(db, accountId, 'search', DAG), 1);
+    assert.equal((await vindActie(db, actie.id))?.teruggeboektOp, null);
+  });
+
+  it('400 met onbekend type → telt mee', async () => {
+    zoekAntwoord(400, { status: 400, type: 'errors/iets_nieuws' });
+    const actie = await zoekActieMetReservering();
+    await voerActieUit(basisContext(), actie);
+    assert.equal(await telGebruikOpDag(db, accountId, 'search', DAG), 1);
+  });
+
+  it('429 → telt mee en account in afkoeling', async () => {
+    zoekAntwoord(429, { status: 429 });
+    const actie = await zoekActieMetReservering();
+    const uitkomst = await voerActieUit(basisContext(), actie);
+    assert.equal(uitkomst.status, 'queued');
+    assert.equal(await telGebruikOpDag(db, accountId, 'search', DAG), 1);
+    assert.ok((await vindAccount(db, accountId))?.afkoelingTot);
+  });
+
+  it('time-out → telt mee', async () => {
+    zoekAntwoord(200, { items: [] }, 400);
+    const actie = await zoekActieMetReservering();
+    await voerActieUit(basisContext(), actie);
+    assert.equal(await telGebruikOpDag(db, accountId, 'search', DAG), 1);
+  });
+
+  it('422 → telt mee', async () => {
+    zoekAntwoord(422, { status: 422, type: 'errors/limit_exceeded' });
+    const actie = await zoekActieMetReservering();
+    await voerActieUit(basisContext(), actie);
+    assert.equal(await telGebruikOpDag(db, accountId, 'search', DAG), 1);
+  });
+
+  it('vierde terugboeking op één dag → telt wél mee, reden zegt het', async () => {
+    zoekAntwoord(400, { status: 400, type: 'errors/invalid_parameters' });
+    const max = limieten.terugboeken.max_per_dag_per_type;
+    for (let i = 0; i < max; i++) {
+      const uit = await voerActieUit(basisContext(), await zoekActieMetReservering());
+      assert.equal(uit.teruggeboekt, true);
+    }
+    const laatste = await voerActieUit(basisContext(), await zoekActieMetReservering());
+    assert.equal(laatste.status, 'failed');
+    assert.notEqual(laatste.teruggeboekt, true);
+    assert.match(laatste.reden!, /telt mee/);
+    assert.equal(await telGebruikOpDag(db, accountId, 'search', DAG), 1);
+  });
+
+  it('bericht zonder ontvanger (eigen payloadfout) → verbruik teruggeboekt', async () => {
+    await verhoogGebruik(db, accountId, 'message', DAG, 1);
+    const actie = await maakReservedeActie({ type: 'message', payload: { tekst: 'Hoi' } });
+    const uitkomst = await voerActieUit(basisContext(), actie);
+    assert.equal(uitkomst.status, 'failed');
+    assert.equal(uitkomst.teruggeboekt, true);
+    assert.equal(await telGebruikOpDag(db, accountId, 'message', DAG), 0);
   });
 });

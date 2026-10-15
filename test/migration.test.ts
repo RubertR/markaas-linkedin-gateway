@@ -36,6 +36,7 @@ const ALLE_MIGRATIES = [
   '0008_klantprofielen.sql',
   '0009_klantprofiel_berichten.sql',
   '0010_jsonb_strings_herstellen.sql',
+  '0011_terugboeken.sql',
 ];
 
 describe('0001_init.sql', () => {
@@ -345,6 +346,7 @@ describe('0004_onboarding.sql', () => {
         '0008_klantprofielen.sql',
         '0009_klantprofiel_berichten.sql',
         '0010_jsonb_strings_herstellen.sql',
+        '0011_terugboeken.sql',
       ]);
       const rijen = await db.query<{ slug: string; abonnement_vereist: boolean }>(
         'select slug, abonnement_vereist from clients order by slug',
@@ -567,6 +569,7 @@ describe('0007_toestemming_momentopname.sql', () => {
         '0008_klantprofielen.sql',
         '0009_klantprofiel_berichten.sql',
         '0010_jsonb_strings_herstellen.sql',
+        '0011_terugboeken.sql',
       ]);
       const [r] = await db.query<Record<string, unknown>>(
         'select client_id, klantnaam, account_eigenaar_naam, unipile_account_id from account_consents',
@@ -643,7 +646,7 @@ describe('0010_jsonb_strings_herstellen.sql', () => {
            ('gateway', 'los', 'e2', to_jsonb('geen json'::text))`,
       );
 
-      assert.deepEqual(await draaiMigraties(db, MIGRATIE_MAP), ['0010_jsonb_strings_herstellen.sql']);
+      assert.deepEqual(await draaiMigraties(db, MIGRATIE_MAP), ['0010_jsonb_strings_herstellen.sql', '0011_terugboeken.sql']);
 
       const acties = await db.query<{ id: string; chat: string | null; provider: string | null; msg: string | null }>(
         `select id, payload ->> 'chatId' as chat, payload ->> 'providerId' as provider,
@@ -661,6 +664,22 @@ describe('0010_jsonb_strings_herstellen.sql', () => {
         { extern_id: 'e1', soort: 'object', chat: 'C-1' },
         { extern_id: 'e2', soort: 'string', chat: null },
       ]);
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe('0011_terugboeken.sql', () => {
+  it('voegt actions.teruggeboekt_op toe, leeg voor bestaande acties', async () => {
+    const { db, close } = await verseDatabaseMetMigraties();
+    try {
+      const kolommen = await db.query<{ data_type: string }>(
+        `select data_type from information_schema.columns
+          where table_name = 'actions' and column_name = 'teruggeboekt_op'`,
+      );
+      assert.equal(kolommen.length, 1);
+      assert.match(kolommen[0]!.data_type, /timestamp with time zone/);
     } finally {
       await close();
     }

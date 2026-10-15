@@ -24,6 +24,8 @@ export interface Actie {
   afgewezenDoor: string | null;
   geplandOp: Date | null;
   uitgevoerdOp: Date | null;
+  /** Gezet als het verbruik is teruggeboekt (SPEC §5.1). */
+  teruggeboektOp: Date | null;
   unipileResponse: Record<string, unknown> | null;
   aangemaaktOp: Date;
 }
@@ -40,6 +42,7 @@ interface ActieRij {
   afgewezen_door: string | null;
   gepland_op: string | Date | null;
   uitgevoerd_op: string | Date | null;
+  teruggeboekt_op: string | Date | null;
   unipile_response: Record<string, unknown> | string | null;
   aangemaakt_op: string | Date;
 }
@@ -72,6 +75,7 @@ function map(rij: ActieRij): Actie {
     afgewezenDoor: rij.afgewezen_door,
     geplandOp: alsDatumOfNull(rij.gepland_op),
     uitgevoerdOp: alsDatumOfNull(rij.uitgevoerd_op),
+    teruggeboektOp: alsDatumOfNull(rij.teruggeboekt_op),
     unipileResponse: alsJson(rij.unipile_response),
     aangemaaktOp: alsDatum(rij.aangemaakt_op),
   };
@@ -79,7 +83,7 @@ function map(rij: ActieRij): Actie {
 
 const KOLOMMEN = `id, account_id, type, payload, status, reden,
     goedgekeurd_door, goedgekeurd_op, afgewezen_door, gepland_op, uitgevoerd_op,
-    unipile_response, aangemaakt_op`;
+    teruggeboekt_op, unipile_response, aangemaakt_op`;
 
 const VEREIST_GOEDKEURING: ReadonlySet<ActieType> = new Set(['invite', 'message', 'inmail']);
 const EINDSTATUSSEN: ReadonlySet<ActieStatus> = new Set(['done', 'failed', 'rejected']);

@@ -197,3 +197,55 @@ export function codeUit422Body(raw: string): string | undefined {
   }
   return undefined;
 }
+
+/**
+ * 400-fouttypes waarmee Unipile een aanvraag zelf afwijst, vóórdat er iets
+ * naar LinkedIn gaat (schema POST /api/v1/linkedin/search, docs/unipile-notities.md).
+ * Alleen deze types boeken budget terug (SPEC §5.1). `errors/target_audience_too_small`
+ * hoort er bewust NIET bij: dan heeft LinkedIn de zoekopdracht uitgevoerd.
+ */
+export const VALIDATIE_400_VOOR_LINKEDIN: ReadonlySet<string> = new Set([
+  'errors/invalid_parameters',
+  'errors/malformed_request',
+  'errors/missing_parameters',
+  'errors/limit_too_high',
+  'errors/invalid_url',
+  'errors/too_many_characters',
+  'errors/unescaped_characters',
+  'errors/content_too_large',
+]);
+
+/** Leest het veld `type` uit een Unipile-foutbody; undefined als het er niet is. */
+export function foutTypeUitBody(raw: string): string | undefined {
+  try {
+    const obj = JSON.parse(raw) as unknown;
+    if (obj && typeof obj === 'object' && typeof (obj as { type?: unknown }).type === 'string') {
+      return (obj as { type: string }).type;
+    }
+  } catch {
+    /* geen JSON */
+  }
+  return undefined;
+}
+
+/**
+ * HTTP 400 met een validatietype uit VALIDATIE_400_VOOR_LINKEDIN: Unipile heeft
+ * de aanvraag geweigerd vóór LinkedIn. De worker boekt het budget terug.
+ */
+export class UnipileValidatieFout extends UnipileFout {
+  readonly foutType: string;
+  readonly detail: string | undefined;
+
+  constructor(foutType: string, endpoint: string, detail?: string) {
+    const extra = detail ? `: ${detail.slice(0, 200)}` : '';
+    super(
+      'validatie',
+      `Unipile weigerde de aanvraag vóór LinkedIn (${foutType}${extra}) op ${endpoint}. Pas de aanvraag aan en probeer opnieuw.`,
+      endpoint,
+      400,
+    );
+    this.name = 'UnipileValidatieFout';
+    this.foutType = foutType;
+    this.detail = detail;
+  }
+}

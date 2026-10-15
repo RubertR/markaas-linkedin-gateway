@@ -53,6 +53,11 @@
     }
   },
 
+  "terugboeken": {
+    "$toelichting": "SPEC §5.1: een actie die Unipile weigert vóór LinkedIn (400-validatiefout, eigen payloadfout) kost geen budget. Per account en actietype hoogstens zoveel terugboekingen per lokale dag; daarna telt een weigering wel mee, zodat een skill niet in een lus foute aanvragen blijft sturen. 0 = nooit terugboeken.",
+    "max_per_dag_per_type": 3
+  },
+
   "unipile_usage_signaal": {
     "$toelichting": "Unipile geeft in het invite-antwoord soms een usage-percentage terug bij 50/75/90/95%. Bij deze drempel of hoger direct opbouw_factor omlaag.",
     "afremmen_bij_percentage": 75,

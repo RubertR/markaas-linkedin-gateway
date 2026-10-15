@@ -105,6 +105,68 @@ Normen: zie `docs/limieten.md`. Normen staan in configuratie, niet in code.
 **Opbouw:** nieuw of stil account start op 0.5; elke week +0.2 zolang acceptatie van
 verzoeken ≥ 30%; maximaal 1.0.
 
+### 5.1 Terugboeken als de aanvraag LinkedIn niet heeft bereikt
+
+*Vastgesteld 15 okt 2026.* Aanleiding: op 15 okt 2026 kostte een
+zoekopdracht met een verkeerd filterformaat de enige zoekrun van de dag. Unipile weigerde
+de aanvraag met HTTP 400 en er ging niets naar LinkedIn. Daarna moest de teller in
+`usage` met de hand worden teruggezet.
+
+De reservering blijft vooraf en atomair (controle 3 en 4 hierboven), zodat twee acties
+die tegelijk aankomen nooit samen over de grens gaan. Nieuw is dat de reservering wordt
+**teruggeboekt** als vaststaat dat de aanvraag LinkedIn niet heeft bereikt.
+
+**Terugboeken wel.** Dit zijn weigeringen van Unipile zelf, vóór het contact met LinkedIn:
+- HTTP 400 met type `errors/invalid_parameters`, `errors/malformed_request`,
+  `errors/missing_parameters`, `errors/limit_too_high`, `errors/invalid_url`,
+  `errors/too_many_characters`, `errors/unescaped_characters` of
+  `errors/content_too_large`.
+- Een fout in onze eigen payload, gevonden vóór de Unipile-aanroep (bijv. een
+  berichttekst die niet klopt).
+- Later, na het besluit over §11: een geweigerde of verlopen Access Token van de gateway
+  zelf, herkend aan het fouttype en niet alleen aan de HTTP-status. Tot dat besluit valt
+  een 401/403 onder "terugboeken niet".
+
+**Terugboeken niet.** Hier kan de aanvraag LinkedIn wél hebben bereikt, of telt de uitkomst
+als signaal:
+- HTTP 429 (afkoeling, §5 controle 6).
+- Een time-out of 5xx/504: onbekend of LinkedIn de aanvraag kreeg.
+- Elke 422 (`already_invited_recently`, `limit_exceeded` enz.): dat is een antwoord van
+  LinkedIn.
+- HTTP 400 `errors/target_audience_too_small`: LinkedIn heeft de zoekopdracht uitgevoerd.
+- Fouten over de sessie of het account (`disconnected_account`, `expired_credentials`,
+  `account_restricted` enz.).
+- **Elk onbekend fouttype.** Bij twijfel telt de actie mee.
+
+**Regels.**
+1. Terugboeken gebeurt in dezelfde transactie als de statuswijziging van de actie naar
+   `failed`. Het verlaagt de `usage`-rij van dezelfde dag waarop gereserveerd is (lokale dag
+   van het account) met 1, en nooit onder 0.
+2. De actie krijgt `teruggeboekt_op` (kolom, migratie 0011). De reden bevat het fouttype
+   van Unipile en de zin "… is niet verbruikt", zodat het terug te vinden is op de
+   goedkeuringspagina en in `get_results`.
+3. Een teruggeboekte actie krijgt geen `uitgevoerd_op`, dus de MCP-pauze (§7) gaat niet
+   van deze actie uit. Een gecorrigeerde aanvraag kan zo direct opnieuw.
+4. **Grens tegen herhaling:** per account en actietype mogen hoogstens
+   `terugboeken.max_per_dag_per_type` acties per dag worden teruggeboekt (voorstel: 3,
+   in `config/limits.json`). Daarna telt een weigering wel mee. Dat voorkomt dat een skill
+   in een lus foute aanvragen blijft sturen.
+5. De NL-melding richting de skill zegt het expliciet. Voorbeeld voor `search_people`:
+   "Unipile weigerde de zoekopdracht vóór LinkedIn (errors/invalid_parameters: …); je
+   zoekrun is niet verbruikt. Pas de filters aan en probeer opnieuw."
+6. Dit geldt voor alle actietypes, zowel via de planner als via de synchrone MCP-tools.
+
+**Tests** (`test/fake-unipile/`). Elk geval hieronder moet een test krijgen:
+- 400 `invalid_parameters` op `search` → `usage` ongewijzigd, actie `failed` met
+  `teruggeboekt_op`.
+- 400 `target_audience_too_small` → telt mee.
+- 429 → telt mee en het account gaat in afkoeling.
+- Time-out → telt mee.
+- 422 → telt mee.
+- Onbekend 400-type → telt mee.
+- Vierde teruggeboekte weigering op één dag → telt mee.
+- Twee gelijktijdige acties waarvan er één wordt teruggeboekt → de grens blijft kloppen.
+
 ## 5a. Openstaande verzoeken
 
 `accounts.openstaande_verzoeken` voedt de grens "openstaand < 500" voor invites (controle 3).
@@ -371,6 +433,13 @@ welke sequentie het verzoek komt zonder in de database te duiken.
 - ~~Supabase als database, of een beheerde Postgres bij de host?~~ Beslist in fase 2:
   **Supabase, Frankfurt (`eu-central-1`)**.
 - Unipile-API-versie: de proefomgeving (30 sep 2026) is **v1** (DSN `api68.unipile.com:19841`, account-ID's zonder `acc_`). Vaststellen of v1 de basis blijft of dat we naar v2 migreren.
+- **401/403 van Unipile (gevonden 15 okt 2026).** `src/unipile/client.ts` behandelt elke
+  401/403 als een ongeldige API-sleutel van de gateway en stopt dan alles. Volgens de
+  Unipile-documentatie van `POST /api/v1/linkedin/search` betekent 401 echter meestal een
+  account- of sessieprobleem (`errors/disconnected_account`, `errors/expired_credentials`
+  …). 403 kan ook `errors/account_restricted` of `errors/feature_not_subscribed` zijn.
+  Voorstel: classificeren op het `type` in de body, niet alleen op de status, en alleen een
+  sleutelfout stoppen. Nodig voor §5.1, los te besluiten.
 - Apart Unipile-account voor productie vóór fase 4? Nu delen ontwikkeling en productie
   één Unipile-account en DSN, en verschillen ze alleen in hun Access Token. Besluiten
   voordat de eerste klantaccounts overgaan.

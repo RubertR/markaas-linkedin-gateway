@@ -10,6 +10,7 @@ import {
   UnipileGatewayAuthFout,
   UnipileTijdelijkeFout,
   UnipileTimeoutFout,
+  UnipileValidatieFout,
 } from './errors.ts';
 
 const GEHEIME_SLEUTEL = 'geheime-sleutel-mag-nooit-lekken';
@@ -654,4 +655,74 @@ describe('UnipileClient — startGesprek (InMail via multipart)', () => {
       );
     });
   }
+});
+
+describe('UnipileClient — 400 en terugboeken (SPEC §5.1)', () => {
+  const zoek = { accountId: 'acc-1', api: 'sales_navigator' as const, keywords: 'x' };
+
+  it('400 errors/invalid_parameters → UnipileValidatieFout met type en NL-melding', async () => {
+    fake.antwoord('POST', '/api/v1/linkedin/search', {
+      status: 400,
+      body: { status: 400, type: 'errors/invalid_parameters', title: 'Invalid parameters' },
+    });
+    await assert.rejects(maakClient().zoekPersonen(zoek), (err: unknown) => {
+      assert.ok(err instanceof UnipileValidatieFout);
+      assert.equal(err.foutType, 'errors/invalid_parameters');
+      assert.equal(err.status, 400);
+      assert.match(err.message, /vóór LinkedIn/);
+      return true;
+    });
+  });
+
+  for (const type of [
+    'errors/malformed_request',
+    'errors/missing_parameters',
+    'errors/limit_too_high',
+    'errors/invalid_url',
+    'errors/too_many_characters',
+    'errors/unescaped_characters',
+    'errors/content_too_large',
+  ]) {
+    it(`400 ${type} → UnipileValidatieFout`, async () => {
+      fake.antwoord('POST', '/api/v1/linkedin/search', { status: 400, body: { status: 400, type } });
+      await assert.rejects(maakClient().zoekPersonen(zoek), UnipileValidatieFout);
+    });
+  }
+
+  it('400 errors/target_audience_too_small → gewone UnipileFout (LinkedIn heeft gezocht)', async () => {
+    fake.antwoord('POST', '/api/v1/linkedin/search', {
+      status: 400,
+      body: { status: 400, type: 'errors/target_audience_too_small' },
+    });
+    await assert.rejects(maakClient().zoekPersonen(zoek), (err: unknown) => {
+      assert.ok(!(err instanceof UnipileValidatieFout));
+      assert.equal((err as { status?: number }).status, 400);
+      return true;
+    });
+  });
+
+  it('400 met onbekend type of zonder JSON → gewone UnipileFout (bij twijfel telt het)', async () => {
+    fake.antwoord('POST', '/api/v1/linkedin/search', {
+      status: 400,
+      body: { status: 400, type: 'errors/iets_nieuws' },
+    });
+    await assert.rejects(maakClient().zoekPersonen(zoek), (err: unknown) => {
+      assert.ok(!(err instanceof UnipileValidatieFout));
+      return true;
+    });
+    fake.reset();
+    fake.antwoord('POST', '/api/v1/linkedin/search', { status: 400, body: 'Bad Request' });
+    await assert.rejects(maakClient().zoekPersonen(zoek), (err: unknown) => {
+      assert.ok(!(err instanceof UnipileValidatieFout));
+      return true;
+    });
+  });
+
+  it('422 blijft Unipile422Fout, ook met een validatie-achtig type', async () => {
+    fake.antwoord('POST', '/api/v1/linkedin/search', {
+      status: 422,
+      body: { status: 422, type: 'errors/invalid_parameters' },
+    });
+    await assert.rejects(maakClient().zoekPersonen(zoek), Unipile422Fout);
+  });
 });
